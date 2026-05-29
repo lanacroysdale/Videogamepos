@@ -1,0 +1,168 @@
+---
+export const prerender = false;
+import AppLayout from "../../layouts/AppLayout.astro";
+
+const supabase = Astro.locals.supabase;
+const profile = Astro.locals.profile;
+const isManager = !!profile && ["owner", "manager"].includes(profile.role);
+const { data: customers } = await supabase
+  .from("customers").select("*").is("merged_into", null).order("last_name").order("first_name");
+const posData = { customers: customers ?? [], isManager };
+---
+
+<AppLayout title="Customers" active="customers">
+  <div slot="actions"><button id="add-cust" class="btn btn-primary btn-sm">＋ Add customer</button></div>
+
+  <div class="pos-panel" style="margin-bottom:1rem;">
+    <div style="display:flex;gap:0.6rem;flex-wrap:wrap;align-items:center;">
+      <div class="search" style="flex:1;min-width:220px;"><span class="mag">🔎</span><input id="cust-q" type="search" placeholder="Search name, email, phone…" autocomplete="off" /></div>
+      {isManager && <button id="merge-toggle" class="btn btn-ghost btn-sm">🔗 Merge mode</button>}
+    </div>
+    <div id="merge-bar" class="notice" hidden style="margin-top:0.7rem;display:flex;gap:0.8rem;align-items:center;flex-wrap:wrap;"></div>
+  </div>
+
+  <!-- Edit / add panel -->
+  <div id="edit-panel" class="pos-panel" hidden style="margin-bottom:1rem;">
+    <h2 id="edit-title">Edit customer</h2>
+    <input type="hidden" id="c-id" />
+    <div class="cust-grid">
+      <label>First name *<input id="c-first" /></label>
+      <label>Last name<input id="c-last" /></label>
+      <label>Email<input id="c-email" type="email" /></label>
+      <label>Phone<input id="c-phone" /></label>
+      <label>Membership<select id="c-member"><option>standard</option><option>member</option><option>vip</option></select></label>
+      <label>Store credit $<input id="c-credit" type="number" min="0" step="0.01" /></label>
+      <label>Points<input id="c-points" type="number" min="0" /></label>
+      <label class="chk2"><input id="c-email-sub" type="checkbox" /> Email subscribed</label>
+      <label class="chk2"><input id="c-text-sub" type="checkbox" /> Text subscribed</label>
+      <label style="grid-column:1/-1;">Notes<input id="c-notes" /></label>
+    </div>
+    <div style="margin-top:0.8rem;display:flex;gap:0.6rem;">
+      <button id="c-save" class="btn btn-primary btn-sm">Save</button>
+      <button id="c-cancel" class="btn btn-ghost btn-sm">Cancel</button>
+    </div>
+  </div>
+
+  <div class="pos-panel">
+    <table class="tbl">
+      <thead><tr><th>Name</th><th>Contact</th><th>Member</th><th class="num">Credit</th><th class="num">Points</th><th>Subs</th></tr></thead>
+      <tbody id="cust-body"></tbody>
+    </table>
+  </div>
+
+  <script type="application/json" id="pos-data" set:html={JSON.stringify(posData)}></script>
+</AppLayout>
+
+<style>
+  .cust-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:0.7rem; }
+  .cust-grid label { display:grid; gap:0.3rem; font-size:0.85rem; font-weight:600; }
+  .chk2 { flex-direction:row !important; align-items:center; gap:0.4rem !important; }
+  #cust-body tr { cursor:pointer; }
+  #cust-body tr.sel { outline:2px solid var(--cyan); }
+</style>
+
+<script>
+  const data = JSON.parse(document.getElementById("pos-data")!.textContent!);
+  let customers: any[] = data.customers;
+  const isManager: boolean = data.isManager;
+  const $ = (id: string) => document.getElementById(id)!;
+  const money = (c: number) => (c / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
+  const esc = (s: string) => String(s ?? "").replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m] as string));
+  let q = "";
+  let mergeMode = false;
+  let mergeSel: string[] = [];
+
+  function visible() {
+    const s = q.toLowerCase();
+    return customers.filter((c) => !s || `${c.first_name} ${c.last_name} ${c.email ?? ""} ${c.phone ?? ""}`.toLowerCase().includes(s));
+  }
+  function render() {
+    $("cust-body").innerHTML = visible().map((c) => `
+      <tr data-id="${c.id}" class="${mergeSel.includes(c.id) ? "sel" : ""}">
+        <td><strong>${esc(c.first_name)} ${esc(c.last_name)}</strong></td>
+        <td>${esc(c.email || "")}<span style="display:block;color:var(--muted-2);font-size:0.8rem;">${esc(c.phone || "")}</span></td>
+        <td>${c.membership !== "standard" ? `<span class="pill ${c.membership === "vip" ? "magenta" : "cyan"}">${c.membership}</span>` : '<span class="muted">standard</span>'}</td>
+        <td class="num">${money(c.store_credit_cents)}</td>
+        <td class="num">${c.points}</td>
+        <td>${c.email_subscribed ? "✉️" : ""}${c.text_subscribed ? "💬" : ""}</td>
+      </tr>`).join("") || `<tr><td colspan="6" class="empty">No customers match.</td></tr>`;
+    $("cust-body").querySelectorAll<HTMLElement>("tr[data-id]").forEach((tr) => tr.addEventListener("click", () => onRow(tr.dataset.id!)));
+  }
+
+  function onRow(id: string) {
+    if (mergeMode) {
+      if (mergeSel.includes(id)) mergeSel = mergeSel.filter((x) => x !== id);
+      else if (mergeSel.length < 2) mergeSel.push(id);
+      renderMergeBar(); render();
+    } else openEdit(customers.find((c) => c.id === id));
+  }
+
+  function openEdit(c: any) {
+    ($("edit-panel") as HTMLElement).hidden = false;
+    $("edit-title").textContent = c ? "Edit customer" : "Add customer";
+    ($("c-id") as HTMLInputElement).value = c?.id ?? "";
+    ($("c-first") as HTMLInputElement).value = c?.first_name ?? "";
+    ($("c-last") as HTMLInputElement).value = c?.last_name ?? "";
+    ($("c-email") as HTMLInputElement).value = c?.email ?? "";
+    ($("c-phone") as HTMLInputElement).value = c?.phone ?? "";
+    ($("c-member") as HTMLSelectElement).value = c?.membership ?? "standard";
+    ($("c-credit") as HTMLInputElement).value = ((c?.store_credit_cents ?? 0) / 100).toFixed(2);
+    ($("c-points") as HTMLInputElement).value = String(c?.points ?? 0);
+    ($("c-email-sub") as HTMLInputElement).checked = !!c?.email_subscribed;
+    ($("c-text-sub") as HTMLInputElement).checked = !!c?.text_subscribed;
+    ($("c-notes") as HTMLInputElement).value = c?.notes ?? "";
+    ($("edit-panel") as HTMLElement).scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  $("add-cust").addEventListener("click", () => openEdit(null));
+  $("c-cancel").addEventListener("click", () => { ($("edit-panel") as HTMLElement).hidden = true; });
+
+  $("c-save").addEventListener("click", async () => {
+    const id = ($("c-id") as HTMLInputElement).value;
+    const body: any = {
+      action: id ? "update" : "create", id: id || undefined,
+      first_name: ($("c-first") as HTMLInputElement).value,
+      last_name: ($("c-last") as HTMLInputElement).value,
+      email: ($("c-email") as HTMLInputElement).value,
+      phone: ($("c-phone") as HTMLInputElement).value,
+      membership: ($("c-member") as HTMLSelectElement).value,
+      storeCreditCents: Math.round(parseFloat(($("c-credit") as HTMLInputElement).value) * 100) || 0,
+      points: parseInt(($("c-points") as HTMLInputElement).value) || 0,
+      emailSubscribed: ($("c-email-sub") as HTMLInputElement).checked,
+      textSubscribed: ($("c-text-sub") as HTMLInputElement).checked,
+      notes: ($("c-notes") as HTMLInputElement).value,
+    };
+    if (!body.first_name.trim()) { alert("First name is required"); return; }
+    const r = await fetch("/api/pos/customer", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json();
+    if (!r.ok || !j.ok) { alert(j.error || "Failed"); return; }
+    location.reload();
+  });
+
+  // Merge mode
+  document.getElementById("merge-toggle")?.addEventListener("click", () => {
+    mergeMode = !mergeMode; mergeSel = [];
+    (document.getElementById("merge-toggle") as HTMLElement).classList.toggle("btn-magenta", mergeMode);
+    renderMergeBar(); render();
+  });
+  function renderMergeBar() {
+    const bar = $("merge-bar");
+    if (!mergeMode) { bar.hidden = true; return; }
+    bar.hidden = false;
+    const names = mergeSel.map((id) => { const c = customers.find((x) => x.id === id); return `${c.first_name} ${c.last_name}`; });
+    if (mergeSel.length < 2) { bar.innerHTML = `Merge mode: pick the <strong>duplicate</strong> then the <strong>account to keep</strong>. Selected: ${names.join(", ") || "none"}`; return; }
+    bar.innerHTML = `Merge <strong>${esc(names[0])}</strong> → into <strong>${esc(names[1])}</strong> (history + credit move to the kept account). <button id="do-merge" class="btn btn-magenta btn-sm">Confirm merge</button> <button id="merge-clear" class="link-btn">clear</button>`;
+    document.getElementById("do-merge")!.addEventListener("click", doMerge);
+    document.getElementById("merge-clear")!.addEventListener("click", () => { mergeSel = []; renderMergeBar(); render(); });
+  }
+  async function doMerge() {
+    const [src, dst] = mergeSel;
+    const r = await fetch("/api/pos/merge-customers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ src, dst }) });
+    const j = await r.json();
+    if (!r.ok || !j.ok) { alert(j.error || "Failed"); return; }
+    location.reload();
+  }
+
+  $("cust-q").addEventListener("input", (e) => { q = (e.target as HTMLInputElement).value; render(); });
+  render();
+</script>

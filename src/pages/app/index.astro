@@ -13,7 +13,7 @@ const denied = Astro.url.searchParams.get("denied");
 // Open transactions (drafts). Cashiers see only their own.
 let openQuery = supabase
   .from("transactions")
-  .select("id, human_id, total_cents, created_at, type, customer:customers(first_name,last_name), employee:profiles(full_name), transaction_items(id)")
+  .select("id, human_id, total_cents, created_at, type, customer:customers(first_name,last_name), employee:profiles!employee_id(full_name), transaction_items(id)")
   .eq("status", "open")
   .order("created_at", { ascending: false });
 if (isCashier) openQuery = openQuery.eq("employee_id", user.id);
@@ -33,11 +33,17 @@ const todayTotal = (todayTx ?? []).reduce((s, t) => s + (t.total_cents ?? 0), 0)
 const { data: recent } = await supabase
   .from("customers")
   .select("*")
+  .is("merged_into", null)
   .order("created_at", { ascending: false })
   .limit(6);
 const { count: custCount } = await supabase
   .from("customers")
-  .select("*", { count: "exact", head: true });
+  .select("*", { count: "exact", head: true })
+  .is("merged_into", null);
+
+const { data: myOpen } = await supabase
+  .from("time_entries").select("id, clock_in").eq("employee_id", user.id).is("clock_out", null).maybeSingle();
+const clockedInSince = myOpen ? new Date(myOpen.clock_in).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : null;
 
 const firstName = (profile?.full_name ?? "there").split(" ")[0];
 ---
@@ -47,8 +53,8 @@ const firstName = (profile?.full_name ?? "there").split(" ")[0];
     <a href="/app/checkout" class="btn btn-primary btn-sm">＋ Quick sale</a>
   </div>
 
-  {denied === "reports" && (
-    <div class="notice">Reports are available to managers and owners only.</div>
+  {denied && (
+    <div class="notice">{denied === "pricing" ? "Pricing tools are" : "Reports are"} available to managers and owners only.</div>
   )}
 
   <p class="muted" style="margin-bottom:1.25rem;">Welcome back, {firstName}. Here's what's happening today.</p>
@@ -113,9 +119,18 @@ const firstName = (profile?.full_name ?? "there").split(" ")[0];
 
       <div class="pos-panel">
         <h2>Quick actions</h2>
+        <div class="clock-line" style="display:flex;align-items:center;gap:0.8rem;margin-bottom:0.8rem;">
+          <span id="clock-status" class="muted" style="flex:1;font-size:0.9rem;">
+            {clockedInSince ? `⏱ Clocked in since ${clockedInSince}` : "⏱ You're clocked out"}
+          </span>
+          <button id="clock-btn" class={`btn btn-sm ${myOpen ? "btn-magenta" : "btn-primary"}`}>
+            {myOpen ? "Clock out" : "Clock in"}
+          </button>
+        </div>
         <div style="display:flex;flex-wrap:wrap;gap:0.6rem;">
           <a href="/app/checkout" class="btn btn-primary btn-sm">🧾 New sale</a>
           <a href="/app/trade-in" class="btn btn-ghost btn-sm">🔁 Trade-in / buy</a>
+          <a href="/app/returns" class="btn btn-ghost btn-sm">↩️ Return</a>
           {!isCashier && <a href="/app/reports" class="btn btn-ghost btn-sm">📊 Reports</a>}
         </div>
       </div>
@@ -147,5 +162,16 @@ const firstName = (profile?.full_name ?? "there").split(" ")[0];
           <span class="meta" style="color:var(--muted-2);font-size:.8rem;">${money(c.store_credit_cents)} credit</span>
         </a>`).join("");
     }, 180);
+  });
+
+  // Clock in/out
+  document.getElementById("clock-btn")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget as HTMLButtonElement;
+    btn.disabled = true;
+    const res = await fetch("/api/pos/clock", { method: "POST" });
+    const data = await res.json();
+    btn.disabled = false;
+    if (!res.ok || !data.ok) { alert(data.error || "Failed"); return; }
+    location.reload();
   });
 </script>

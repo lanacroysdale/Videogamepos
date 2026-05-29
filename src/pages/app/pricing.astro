@@ -1,0 +1,113 @@
+---
+export const prerender = false;
+import AppLayout from "../../layouts/AppLayout.astro";
+import { fmt } from "../../lib/money";
+
+const supabase = Astro.locals.supabase;
+const { data: pending } = await supabase
+  .from("price_changes")
+  .select("id, old_cents, suggested_cents, source, created_at, variant:product_variants(condition, sku, product:products(title, platform))")
+  .eq("status", "pending")
+  .order("created_at", { ascending: false });
+
+const { data: recent } = await supabase
+  .from("price_changes")
+  .select("id, old_cents, suggested_cents, status, reviewed_at, variant:product_variants(condition, product:products(title))")
+  .in("status", ["approved", "reverted"])
+  .order("reviewed_at", { ascending: false })
+  .limit(8);
+
+const pct = (oldC: number, newC: number) => (oldC ? Math.round(((newC - oldC) / oldC) * 100) : 0);
+---
+
+<AppLayout title="Pricing" active="pricing">
+  <div slot="actions"><button id="sync-btn" class="btn btn-primary btn-sm">⟳ Run PriceCharting sync</button></div>
+
+  <p class="muted" style="margin-bottom:1rem;">
+    Review automatic price changes before they go live. Approving updates the item's price;
+    reverting keeps the current price. Connect a real feed by setting
+    <code>PRICECHARTING_API_TOKEN</code>; until then sync proposes simulated market moves.
+  </p>
+  <p id="sync-msg" class="notice" hidden></p>
+
+  <div class="pos-panel">
+    <h2>Pending changes <span class="sub">({pending?.length ?? 0})</span></h2>
+    {(!pending || pending.length === 0) && <p class="empty">No pending changes. Run a sync to check for updates.</p>}
+    {pending && pending.length > 0 && (
+      <table class="tbl">
+        <thead><tr><th>Item</th><th>Source</th><th class="num">Current</th><th class="num">Suggested</th><th class="num">Change</th><th></th></tr></thead>
+        <tbody id="pc-body">
+          {pending.map((p: any) => {
+            const change = pct(p.old_cents, p.suggested_cents);
+            return (
+              <tr data-pc={p.id}>
+                <td><strong>{p.variant?.product?.title ?? "—"}</strong><span class="plat" style="display:block;color:var(--muted-2);font-size:0.8rem;">{p.variant?.product?.platform} · {p.variant?.condition}</span></td>
+                <td><span class="pill muted" style="font-size:0.7rem;">{p.source}</span></td>
+                <td class="num">{fmt(p.old_cents)}</td>
+                <td class="num"><strong>{fmt(p.suggested_cents)}</strong></td>
+                <td class="num" style={`color:${change >= 0 ? "var(--green)" : "#ff9aa2"};font-weight:700;`}>{change >= 0 ? "+" : ""}{change}%</td>
+                <td style="white-space:nowrap;">
+                  <button class="btn btn-primary btn-sm" data-approve={p.id}>Approve</button>
+                  <button class="btn btn-ghost btn-sm" data-revert={p.id}>Revert</button>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    )}
+  </div>
+
+  {recent && recent.length > 0 && (
+    <div class="pos-panel" style="margin-top:1rem;">
+      <h2>Recently reviewed</h2>
+      <table class="tbl">
+        <thead><tr><th>Item</th><th class="num">From → To</th><th>Decision</th><th>When</th></tr></thead>
+        <tbody>
+          {recent.map((p: any) => (
+            <tr>
+              <td>{p.variant?.product?.title ?? "—"} · {p.variant?.condition}</td>
+              <td class="num">{fmt(p.old_cents)} → {fmt(p.suggested_cents)}</td>
+              <td><span class={`pill ${p.status === "approved" ? "green" : "magenta"}`}>{p.status}</span></td>
+              <td class="muted">{p.reviewed_at ? new Date(p.reviewed_at).toLocaleString() : ""}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )}
+</AppLayout>
+
+<script>
+  const $ = (id: string) => document.getElementById(id)!;
+  async function api(body: any) {
+    const r = await fetch("/api/pos/pricing", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error(j.error || "Failed");
+    return j;
+  }
+
+  $("sync-btn").addEventListener("click", async () => {
+    const btn = $("sync-btn") as HTMLButtonElement;
+    btn.disabled = true; btn.textContent = "Syncing…";
+    try {
+      const j = await api({ action: "sync" });
+      const msg = $("sync-msg"); msg.hidden = false;
+      msg.textContent = j.proposed > 0
+        ? `Found ${j.proposed} new price change${j.proposed === 1 ? "" : "s"}${j.simulated ? " (simulated)" : ""}. Reloading…`
+        : "No new changes proposed.";
+      if (j.proposed > 0) setTimeout(() => location.reload(), 900);
+    } catch (e: any) { alert(e.message); }
+    finally { btn.disabled = false; btn.textContent = "⟳ Run PriceCharting sync"; }
+  });
+
+  function bind() {
+    document.querySelectorAll<HTMLElement>("[data-approve]").forEach((b) => b.addEventListener("click", async () => {
+      try { await api({ action: "approve", id: b.dataset.approve }); b.closest("tr")!.remove(); } catch (e: any) { alert(e.message); }
+    }));
+    document.querySelectorAll<HTMLElement>("[data-revert]").forEach((b) => b.addEventListener("click", async () => {
+      try { await api({ action: "revert", id: b.dataset.revert }); b.closest("tr")!.remove(); } catch (e: any) { alert(e.message); }
+    }));
+  }
+  bind();
+</script>

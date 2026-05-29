@@ -1,0 +1,115 @@
+---
+export const prerender = false;
+import AppLayout from "../../layouts/AppLayout.astro";
+import { fmt } from "../../lib/money";
+
+const supabase = Astro.locals.supabase;
+const { data: repairs } = await supabase
+  .from("repairs")
+  .select("id, ticket, device_type, serial, location, issue, status, price_cents, customer_name, phone, created_at, customer:customers(first_name,last_name)")
+  .order("created_at", { ascending: false });
+
+const STATUSES = ["in_queue", "in_progress", "completed", "picked_up", "cancelled"];
+const label = (s: string) => s.replace("_", " ");
+const pillClass = (s: string) =>
+  s === "completed" ? "green" : s === "in_progress" ? "cyan" : s === "picked_up" ? "muted" : s === "cancelled" ? "magenta" : "";
+---
+
+<AppLayout title="Repairs" active="repairs">
+  <div slot="actions"><button id="toggle-new" class="btn btn-primary btn-sm">＋ New ticket</button></div>
+
+  <div id="new-panel" class="pos-panel" hidden style="margin-bottom:1rem;">
+    <h2>New repair ticket</h2>
+    <div class="rep-grid">
+      <label>Device type *<input id="r-device" placeholder="e.g. Nintendo Switch" /></label>
+      <label>Customer name<input id="r-name" placeholder="Walk-in name" /></label>
+      <label>Phone<input id="r-phone" placeholder="(503) 555-0000" /></label>
+      <label>Serial #<input id="r-serial" /></label>
+      <label>Location / bin<input id="r-loc" placeholder="Bin A3" /></label>
+      <label>Est. price $<input id="r-price" type="number" min="0" step="0.01" value="0" /></label>
+      <label style="grid-column:1/-1;">Issue<input id="r-issue" placeholder="What needs fixing?" /></label>
+    </div>
+    <button id="r-save" class="btn btn-primary btn-sm" style="margin-top:0.7rem;">Create ticket</button>
+  </div>
+
+  <div class="pos-panel">
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.8rem;">
+      <button class="chip filt active" data-filt="">All</button>
+      {STATUSES.map((s) => <button class="chip filt" data-filt={s}>{label(s)}</button>)}
+    </div>
+    <table class="tbl">
+      <thead><tr><th>#</th><th>Device</th><th>Customer</th><th>Issue</th><th class="num">Price</th><th>Status</th></tr></thead>
+      <tbody id="rep-body">
+        {(repairs ?? []).map((r: any) => (
+          <tr data-status={r.status}>
+            <td>#{r.ticket}</td>
+            <td><strong>{r.device_type}</strong>{r.serial && <span class="plat" style="display:block;color:var(--muted-2);font-size:0.8rem;">SN {r.serial} · {r.location}</span>}</td>
+            <td>{r.customer ? `${r.customer.first_name} ${r.customer.last_name}` : (r.customer_name ?? "—")}<span style="display:block;color:var(--muted-2);font-size:0.8rem;">{r.phone ?? ""}</span></td>
+            <td>{r.issue}</td>
+            <td class="num">{fmt(r.price_cents)}</td>
+            <td>
+              <select data-rep={r.id} data-pill class={`pill ${pillClass(r.status)}`}>
+                {STATUSES.map((s) => <option value={s} selected={s === r.status}>{label(s)}</option>)}
+              </select>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+    {(repairs ?? []).length === 0 && <p class="empty">No repair tickets yet.</p>}
+  </div>
+</AppLayout>
+
+<style>
+  .rep-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:0.7rem; }
+  .rep-grid label { display:grid; gap:0.3rem; font-size:0.85rem; font-weight:600; }
+  .chip.filt { cursor:pointer; text-transform:capitalize; }
+  .chip.filt.active { border-color:var(--cyan); color:var(--cyan); }
+  select[data-pill] { background:rgba(255,255,255,.04); }
+</style>
+
+<script>
+  const $ = (id: string) => document.getElementById(id)!;
+
+  $("toggle-new").addEventListener("click", () => { ($("new-panel") as HTMLElement).hidden = !($("new-panel") as HTMLElement).hidden; });
+
+  $("r-save").addEventListener("click", async () => {
+    const body = {
+      device_type: ($("r-device") as HTMLInputElement).value,
+      customer_name: ($("r-name") as HTMLInputElement).value,
+      phone: ($("r-phone") as HTMLInputElement).value,
+      serial: ($("r-serial") as HTMLInputElement).value,
+      location: ($("r-loc") as HTMLInputElement).value,
+      issue: ($("r-issue") as HTMLInputElement).value,
+      priceCents: Math.round(parseFloat(($("r-price") as HTMLInputElement).value) * 100) || 0,
+    };
+    if (!body.device_type.trim()) { alert("Device type is required"); return; }
+    const r = await fetch("/api/pos/repairs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json();
+    if (!r.ok || !j.ok) { alert(j.error || "Failed"); return; }
+    location.reload();
+  });
+
+  // Status filter chips
+  document.querySelectorAll<HTMLElement>(".chip.filt").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      document.querySelectorAll(".chip.filt").forEach((c) => c.classList.remove("active"));
+      chip.classList.add("active");
+      const f = chip.dataset.filt;
+      document.querySelectorAll<HTMLElement>("#rep-body tr").forEach((tr) => { tr.style.display = !f || tr.dataset.status === f ? "" : "none"; });
+    });
+  });
+
+  // Inline status update
+  document.querySelectorAll<HTMLSelectElement>("select[data-rep]").forEach((sel) => {
+    sel.addEventListener("change", async () => {
+      const id = sel.dataset.rep!;
+      const status = sel.value;
+      const r = await fetch("/api/pos/repairs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "updateStatus", id, status }) });
+      const j = await r.json();
+      if (!r.ok || !j.ok) { alert(j.error || "Failed"); return; }
+      sel.className = "pill " + ({ completed: "green", in_progress: "cyan", picked_up: "muted", cancelled: "magenta" }[status] || "");
+      sel.closest("tr")!.dataset.status = status;
+    });
+  });
+</script>

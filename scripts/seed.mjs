@@ -57,9 +57,14 @@ async function main() {
   const employees = [ownerId, managerId, cashierId];
 
   console.log("→ Clearing operational tables");
-  for (const t of ["transaction_items", "transactions", "product_variants", "products", "categories", "customers", "trade_margins"]) {
+  for (const t of ["transaction_items", "transactions", "price_changes", "product_barcodes", "time_entries", "shifts", "repairs", "product_variants", "products", "categories", "customers", "trade_margins"]) {
     await clearTable(t);
   }
+
+  console.log("→ Employee card codes");
+  await sb.from("profiles").update({ card_code: "1001" }).eq("id", ownerId);
+  await sb.from("profiles").update({ card_code: "1002" }).eq("id", managerId);
+  await sb.from("profiles").update({ card_code: "1003" }).eq("id", cashierId);
 
   console.log("→ Categories");
   const { data: cats, error: catErr } = await sb
@@ -262,6 +267,57 @@ async function main() {
     if (error) throw error;
     await sb.from("transaction_items").insert(items.map((it) => ({ ...it, transaction_id: txn.id })));
   }
+
+  const sellable = variantPool.filter((v) => v.variant_id);
+
+  console.log("→ Extra barcodes (multi-barcode demo)");
+  await sb.from("product_barcodes").insert([
+    { variant_id: sellable[0].variant_id, barcode: "TGT-100200300", label: "Target SKU" },
+    { variant_id: sellable[0].variant_id, barcode: "WMT-400500600", label: "Walmart SKU" },
+    { variant_id: sellable[1].variant_id, barcode: "ANNIV-778899", label: "Anniversary edition" },
+  ]);
+
+  console.log("→ Repairs");
+  const R = (customer_id, customer_name, phone, device_type, serial, location, issue, status, price_cents, employee_id) =>
+    ({ customer_id, customer_name, phone, device_type, serial, location, issue, status, price_cents, employee_id });
+  await sb.from("repairs").insert([
+    R(customers[0].id, null, customers[0].phone, "Nintendo Switch", "XKW10293", "Bin A3", "Won't charge — dock/port issue", "in_queue", 4999, managerId),
+    R(customers[2].id, null, customers[2].phone, "PlayStation 2", "PS2-558210", "Bench 1", "Disc read errors — laser cleaning", "in_progress", 3999, cashierId),
+    R(null, "Walk-in (Chris)", "503-555-0190", "Game Boy Color", null, "Bin B1", "Screen lines — needs new LCD", "completed", 5999, ownerId),
+    R(customers[4].id, null, customers[4].phone, "Xbox 360 Controller", "XB360-99281", "Bin A1", "Stick drift — hall-effect swap", "picked_up", 2499, managerId),
+  ]);
+
+  console.log("→ Shifts + time clock");
+  const day0 = new Date(); day0.setHours(0, 0, 0, 0);
+  const shiftAt = (dayOffset, startH, endH, emp) => {
+    const s = new Date(day0); s.setDate(s.getDate() + dayOffset); s.setHours(startH);
+    const e = new Date(day0); e.setDate(e.getDate() + dayOffset); e.setHours(endH);
+    return { employee_id: emp, starts_at: s.toISOString(), ends_at: e.toISOString(), note: null };
+  };
+  await sb.from("shifts").insert([
+    shiftAt(0, 10, 18, cashierId), shiftAt(0, 12, 20, managerId),
+    shiftAt(1, 10, 18, ownerId), shiftAt(1, 12, 20, cashierId),
+    shiftAt(2, 10, 16, managerId), shiftAt(2, 14, 20, cashierId),
+    shiftAt(-1, 10, 18, ownerId),
+  ]);
+
+  const nowD = new Date();
+  const at = (dayOffset, h, m) => { const d = new Date(day0); d.setDate(d.getDate() + dayOffset); d.setHours(h, m); return d.toISOString(); };
+  await sb.from("time_entries").insert([
+    { employee_id: cashierId, clock_in: at(0, 9, 2), clock_out: null },               // currently clocked in
+    { employee_id: ownerId, clock_in: at(-1, 10, 0), clock_out: at(-1, 18, 15) },
+    { employee_id: managerId, clock_in: at(0, 8, 0), clock_out: at(0, 12, 30) },
+  ]);
+  void nowD;
+
+  console.log("→ Pending price changes (PriceCharting review demo)");
+  const factors = [1.12, 0.92, 1.2, 0.85];
+  await sb.from("price_changes").insert(
+    sellable.slice(0, 4).map((v, i) => ({
+      variant_id: v.variant_id, old_cents: v.price_cents,
+      suggested_cents: Math.round(v.price_cents * factors[i] / 100) * 100, source: "pricecharting", status: "pending",
+    })),
+  );
 
   console.log(`\n✅ Seed complete: ${completedCount} completed sales, ${drafts.length} open drafts, ${customers.length} customers, ${productDefs.length} products.`);
   console.log("   Logins (password for all: password123):");

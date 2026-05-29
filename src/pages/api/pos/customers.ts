@@ -16,6 +16,7 @@ export const GET: APIRoute = async ({ locals, url }) => {
   const { data, error } = await locals.supabase
     .from("customers")
     .select("id, first_name, last_name, email, phone, store_credit_cents, points, membership")
+    .is("merged_into", null)
     .or(`first_name.ilike.${like},last_name.ilike.${like},email.ilike.${like},phone.ilike.${like}`)
     .order("last_name", { ascending: true })
     .limit(8);

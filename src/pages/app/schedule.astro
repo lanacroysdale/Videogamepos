@@ -1,0 +1,149 @@
+---
+export const prerender = false;
+import AppLayout from "../../layouts/AppLayout.astro";
+
+const supabase = Astro.locals.supabase;
+const user = Astro.locals.user!;
+const profile = Astro.locals.profile;
+const isManager = !!profile && ["owner", "manager"].includes(profile.role);
+
+const { data: roster } = await supabase.from("profiles").select("id, full_name, role").order("full_name");
+
+const weekStart = new Date();
+weekStart.setHours(0, 0, 0, 0);
+weekStart.setDate(weekStart.getDate() - weekStart.getDay()); // Sunday
+const weekEnd = new Date(weekStart);
+weekEnd.setDate(weekEnd.getDate() + 7);
+
+const { data: shifts } = await supabase
+  .from("shifts")
+  .select("id, starts_at, ends_at, note, employee:profiles(full_name)")
+  .gte("starts_at", weekStart.toISOString())
+  .lt("starts_at", weekEnd.toISOString())
+  .order("starts_at");
+
+const { data: myOpen } = await supabase
+  .from("time_entries").select("id, clock_in").eq("employee_id", user.id).is("clock_out", null).maybeSingle();
+const { data: myEntries } = await supabase
+  .from("time_entries").select("clock_in, clock_out").eq("employee_id", user.id).order("clock_in", { ascending: false }).limit(6);
+
+// Group shifts by day.
+const days: { date: Date; label: string; shifts: any[] }[] = [];
+for (let i = 0; i < 7; i++) {
+  const d = new Date(weekStart);
+  d.setDate(d.getDate() + i);
+  days.push({ date: d, label: d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }), shifts: [] });
+}
+for (const s of shifts ?? []) {
+  const idx = Math.floor((new Date(s.starts_at).getTime() - weekStart.getTime()) / 86400000);
+  if (days[idx]) days[idx].shifts.push(s);
+}
+const t = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+const todayIso = new Date().toISOString().slice(0, 10);
+---
+
+<AppLayout title="Schedule" active="schedule">
+  <div class="pos-grid two" style="margin-bottom:1rem;align-items:start;">
+    <!-- Clock -->
+    <div class="pos-panel">
+      <h2>Time clock</h2>
+      <p id="clock-status" class="muted" style="margin-bottom:0.8rem;">
+        {myOpen ? `Clocked in since ${t(myOpen.clock_in)}` : "You are clocked out."}
+      </p>
+      <button id="clock-btn" class={`btn ${myOpen ? "btn-magenta" : "btn-primary"}`} data-open={myOpen ? "1" : "0"}>
+        {myOpen ? "Clock out" : "Clock in"}
+      </button>
+      <div style="margin-top:1rem;">
+        <p class="sub">Recent</p>
+        <ul style="list-style:none;padding:0;margin:0.4rem 0 0;display:grid;gap:0.3rem;font-size:0.88rem;">
+          {(myEntries ?? []).map((e: any) => (
+            <li class="muted">{new Date(e.clock_in).toLocaleDateString("en-US", { month: "short", day: "numeric" })}: {t(e.clock_in)} – {e.clock_out ? t(e.clock_out) : "now"}</li>
+          ))}
+          {(myEntries ?? []).length === 0 && <li class="empty">No time entries yet.</li>}
+        </ul>
+      </div>
+    </div>
+
+    <!-- Manager: assign shift -->
+    {isManager && (
+      <div class="pos-panel">
+        <h2>Assign a shift</h2>
+        <div class="sh-grid">
+          <label>Employee<select id="sh-emp">{roster?.map((r: any) => <option value={r.id}>{r.full_name}</option>)}</select></label>
+          <label>Date<input id="sh-date" type="date" value={todayIso} /></label>
+          <label>Start<input id="sh-start" type="time" value="10:00" /></label>
+          <label>End<input id="sh-end" type="time" value="18:00" /></label>
+        </div>
+        <button id="sh-save" class="btn btn-primary btn-sm" style="margin-top:0.7rem;">Add shift</button>
+      </div>
+    )}
+  </div>
+
+  <!-- Week schedule -->
+  <div class="pos-panel">
+    <h2>This week</h2>
+    <div class="week">
+      {days.map((d) => (
+        <div class="day">
+          <div class="day-h">{d.label}</div>
+          {d.shifts.length === 0 && <div class="empty" style="font-size:0.82rem;">—</div>}
+          {d.shifts.map((s: any) => (
+            <div class="shift" data-shift={s.id}>
+              <strong>{s.employee?.full_name ?? "—"}</strong>
+              <span class="plat" style="display:block;color:var(--muted-2);font-size:0.8rem;">{t(s.starts_at)} – {t(s.ends_at)}</span>
+              {isManager && <button class="link-btn" data-del={s.id} title="Remove">✕</button>}
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  </div>
+</AppLayout>
+
+<style>
+  .sh-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:0.6rem; }
+  .sh-grid label { display:grid; gap:0.3rem; font-size:0.85rem; font-weight:600; }
+  .week { display:grid; grid-template-columns:repeat(7,1fr); gap:0.5rem; }
+  @media (max-width:760px){ .week { grid-template-columns:1fr 1fr; } }
+  .day-h { font-size:0.78rem; font-weight:700; color:var(--muted-2); text-transform:uppercase; letter-spacing:0.04em; margin-bottom:0.4rem; }
+  .day { border:1px solid var(--border); border-radius:10px; padding:0.5rem; min-height:80px; }
+  .shift { position:relative; background:rgba(44,230,224,.08); border:1px solid rgba(44,230,224,.25); border-radius:8px; padding:0.4rem 0.5rem; margin-bottom:0.4rem; font-size:0.85rem; }
+  .shift .link-btn { position:absolute; top:0.3rem; right:0.4rem; }
+</style>
+
+<script>
+  const $ = (id: string) => document.getElementById(id)!;
+
+  $("clock-btn").addEventListener("click", async () => {
+    const btn = $("clock-btn") as HTMLButtonElement;
+    btn.disabled = true;
+    const r = await fetch("/api/pos/clock", { method: "POST" });
+    const j = await r.json();
+    btn.disabled = false;
+    if (!r.ok || !j.ok) { alert(j.error || "Failed"); return; }
+    location.reload();
+  });
+
+  const shSave = document.getElementById("sh-save");
+  shSave?.addEventListener("click", async () => {
+    const emp = ($("sh-emp") as HTMLSelectElement).value;
+    const date = ($("sh-date") as HTMLInputElement).value;
+    const start = ($("sh-start") as HTMLInputElement).value;
+    const end = ($("sh-end") as HTMLInputElement).value;
+    if (!date || !start || !end) { alert("Fill in date, start and end"); return; }
+    const r = await fetch("/api/pos/shifts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "create", employeeId: emp, startsAt: `${date}T${start}`, endsAt: `${date}T${end}` }) });
+    const j = await r.json();
+    if (!r.ok || !j.ok) { alert(j.error || "Failed"); return; }
+    location.reload();
+  });
+
+  document.querySelectorAll<HTMLElement>("[data-del]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("Remove this shift?")) return;
+      const r = await fetch("/api/pos/shifts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "delete", id: btn.dataset.del }) });
+      const j = await r.json();
+      if (!r.ok || !j.ok) { alert(j.error || "Failed"); return; }
+      btn.closest(".shift")!.remove();
+    });
+  });
+</script>

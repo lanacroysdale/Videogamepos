@@ -67,6 +67,60 @@ export interface TradeMargin {
   sort_order: number;
 }
 
+export interface ProductBarcode {
+  id: string;
+  variant_id: string;
+  barcode: string;
+  label: string | null;
+  created_at: string;
+}
+
+export interface Repair {
+  id: string;
+  ticket: number;
+  customer_id: string | null;
+  customer_name: string | null;
+  phone: string | null;
+  device_type: string;
+  serial: string | null;
+  location: string | null;
+  issue: string | null;
+  status: "in_queue" | "in_progress" | "completed" | "picked_up" | "cancelled";
+  price_cents: number;
+  employee_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Shift {
+  id: string;
+  employee_id: string;
+  starts_at: string;
+  ends_at: string;
+  note: string | null;
+  created_at: string;
+}
+
+export interface TimeEntry {
+  id: string;
+  employee_id: string;
+  clock_in: string;
+  clock_out: string | null;
+  created_at: string;
+}
+
+export interface PriceChange {
+  id: string;
+  variant_id: string;
+  old_cents: number;
+  suggested_cents: number;
+  source: string;
+  status: "pending" | "approved" | "reverted";
+  created_at: string;
+  reviewed_at: string | null;
+  reviewed_by: string | null;
+}
+
 export interface Transaction {
   id: string;
   human_id: number;

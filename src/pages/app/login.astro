@@ -48,11 +48,25 @@ if (Astro.request.method === "POST") {
           <button class="btn btn-primary btn-block" type="submit">Sign in →</button>
         </form>
 
+        <div class="card-login">
+          <div class="or"><span>or quick login</span></div>
+          <label class="field" style="margin-bottom:0.6rem;">
+            <span>Employee card / badge code</span>
+            <input id="card-code" inputmode="numeric" autocomplete="off" placeholder="Tap card or enter code (e.g. 1001)" />
+          </label>
+          <div style="display:flex;gap:0.6rem;">
+            <button id="card-signin" type="button" class="btn btn-ghost btn-block">🎴 Sign in with card</button>
+            <button id="nfc-scan" type="button" class="btn btn-ghost" hidden title="Tap an NFC card">📡 NFC</button>
+          </div>
+          <p id="card-msg" class="form-err" hidden style="margin-top:0.6rem;"></p>
+        </div>
+
         <div class="demo-creds">
           <strong>Demo logins</strong> (password <code>password123</code>):<br />
           <code>owner@timelag.test</code> · owner<br />
           <code>manager@timelag.test</code> · manager<br />
-          <code>cashier@timelag.test</code> · cashier (no Reports access)
+          <code>cashier@timelag.test</code> · cashier (no Reports access)<br />
+          Card codes: <code>1001</code> owner · <code>1002</code> manager · <code>1003</code> cashier
         </div>
       </div>
     </div>
@@ -60,6 +74,43 @@ if (Astro.request.method === "POST") {
     <style>
       .field { display: grid; gap: 0.4rem; }
       .field label { font-weight: 600; font-size: 0.9rem; }
+      .card-login { margin-top: 1.25rem; }
+      .or { display: flex; align-items: center; gap: 0.6rem; color: var(--muted-2); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 0.9rem; }
+      .or::before, .or::after { content: ""; flex: 1; height: 1px; background: var(--border-strong); }
     </style>
+
+    <script>
+      const codeInput = document.getElementById("card-code") as HTMLInputElement;
+      const msg = document.getElementById("card-msg") as HTMLElement;
+      async function cardLogin(code: string) {
+        if (!code) return;
+        msg.hidden = true;
+        const r = await fetch("/api/pos/card-login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ card_code: code }) });
+        const j = await r.json();
+        if (r.ok && j.ok) { window.location.href = "/app"; return; }
+        msg.textContent = j.error || "Card login failed"; msg.hidden = false;
+      }
+      document.getElementById("card-signin")!.addEventListener("click", () => cardLogin(codeInput.value.trim()));
+      codeInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); cardLogin(codeInput.value.trim()); } });
+
+      // Web NFC (Chrome on Android) — tap a programmed card/tag holding the code.
+      if ("NDEFReader" in window) {
+        const nfcBtn = document.getElementById("nfc-scan") as HTMLButtonElement;
+        nfcBtn.hidden = false;
+        nfcBtn.addEventListener("click", async () => {
+          try {
+            const reader = new (window as any).NDEFReader();
+            await reader.scan();
+            msg.hidden = true;
+            reader.onreading = (ev: any) => {
+              for (const rec of ev.message.records) {
+                const code = new TextDecoder().decode(rec.data).trim();
+                if (code) cardLogin(code);
+              }
+            };
+          } catch (err: any) { msg.textContent = "NFC unavailable: " + err.message; msg.hidden = false; }
+        });
+      }
+    </script>
   </body>
 </html>

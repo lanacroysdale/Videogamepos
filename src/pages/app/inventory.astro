@@ -1,0 +1,233 @@
+---
+export const prerender = false;
+
+import AppLayout from "../../layouts/AppLayout.astro";
+
+const supabase = Astro.locals.supabase;
+const { data: categories } = await supabase.from("categories").select("id, name").order("sort_order");
+const { data: products } = await supabase
+  .from("products")
+  .select("id, title, platform, franchise, category_id, category:categories(name,color), product_variants(id, condition, completeness, sku, barcode, price_cents, quantity, product_barcodes(id, barcode, label))")
+  .order("title");
+
+const items = (products ?? []).map((p: any) => ({
+  id: p.id,
+  title: p.title,
+  platform: p.platform ?? "",
+  franchise: p.franchise ?? "",
+  categoryId: p.category_id,
+  categoryName: p.category?.name ?? "",
+  categoryColor: p.category?.color ?? "#2ce6e0",
+  variants: (p.product_variants ?? []).map((v: any) => ({
+    id: v.id,
+    condition: v.condition,
+    completeness: v.completeness,
+    sku: v.sku,
+    priceCents: v.price_cents,
+    quantity: v.quantity,
+    barcodes: [
+      ...(v.barcode ? [{ id: "primary:" + v.id, barcode: v.barcode, label: "Primary", primary: true }] : []),
+      ...(v.product_barcodes ?? []).map((b: any) => ({ id: b.id, barcode: b.barcode, label: b.label, primary: false })),
+    ],
+  })),
+}));
+const posData = { items, categories: categories ?? [] };
+---
+
+<AppLayout title="Inventory" active="inventory">
+  <div slot="actions"><button id="toggle-add" class="btn btn-primary btn-sm">＋ Add product</button></div>
+
+  <div id="add-panel" class="pos-panel" hidden style="margin-bottom:1rem;">
+    <h2>Add a product</h2>
+    <div class="add-grid">
+      <label>Title<input id="np-title" placeholder="e.g. Donkey Kong 64" /></label>
+      <label>Platform<input id="np-platform" placeholder="Nintendo 64" /></label>
+      <label>Category<select id="np-cat">{categories?.map((c) => <option value={c.id}>{c.name}</option>)}</select></label>
+      <label>Condition<input id="np-cond" value="Complete" /></label>
+      <label>Price $<input id="np-price" type="number" min="0" step="0.01" value="0" /></label>
+      <label>Qty<input id="np-qty" type="number" min="0" value="1" /></label>
+      <label>Barcode (optional)<input id="np-barcode" /></label>
+    </div>
+    <button id="np-save" class="btn btn-primary btn-sm" style="margin-top:0.7rem;">Save product</button>
+  </div>
+
+  <div class="pos-panel">
+    <div class="inv-toolbar">
+      <div class="search" style="flex:1;min-width:220px;">
+        <span class="mag" aria-hidden="true">🔎</span>
+        <input id="inv-search" type="search" placeholder="Search title, platform, SKU, or barcode…" autocomplete="off" />
+      </div>
+      <select id="inv-cat"><option value="">All categories</option>{categories?.map((c) => <option value={c.id}>{c.name}</option>)}</select>
+      <select id="inv-sort">
+        <option value="title">Sort: Title</option>
+        <option value="price">Sort: Price</option>
+        <option value="qty">Sort: Quantity</option>
+      </select>
+      <label class="chk"><input id="inv-instock" type="checkbox" checked /> In-stock first</label>
+    </div>
+    <div id="inv-list" style="margin-top:0.8rem;"></div>
+  </div>
+
+  <script type="application/json" id="pos-data" set:html={JSON.stringify(posData)}></script>
+</AppLayout>
+
+<style>
+  .inv-toolbar { display:flex; flex-wrap:wrap; gap:0.6rem; align-items:center; }
+  .chk { display:flex; align-items:center; gap:0.4rem; font-size:0.9rem; color:var(--muted); white-space:nowrap; }
+  .add-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:0.7rem; }
+  .add-grid label { display:grid; gap:0.3rem; font-size:0.85rem; font-weight:600; }
+  .prod-block { border:1px solid var(--border); border-radius:12px; margin-bottom:0.7rem; overflow:hidden; }
+  .prod-head { display:flex; align-items:center; gap:0.6rem; padding:0.6rem 0.9rem; background:rgba(255,255,255,.03); }
+  .prod-head .dot { width:10px;height:10px;border-radius:3px; }
+  .prod-head .plat { color:var(--muted-2); font-size:0.85rem; }
+  .prod-head .tot { margin-left:auto; font-size:0.8rem; color:var(--muted); }
+  .var-row { display:grid; grid-template-columns:1.4fr 1fr 0.9fr 0.8fr auto; gap:0.6rem; align-items:center; padding:0.5rem 0.9rem; border-top:1px solid var(--border); font-size:0.9rem; }
+  .var-row input { padding:0.35rem 0.5rem; width:100%; }
+  .var-row .saved { color:var(--green); font-size:0.75rem; }
+  .bc-panel { padding:0.6rem 0.9rem 0.9rem; border-top:1px dashed var(--border); background:rgba(0,0,0,.15); }
+  .bc-chip { display:inline-flex; align-items:center; gap:0.4rem; padding:0.25rem 0.6rem; margin:0.2rem 0.3rem 0.2rem 0; border:1px solid var(--border-strong); border-radius:999px; font-size:0.8rem; font-family:var(--font-mono); }
+  .bc-chip button { background:none;border:none;color:var(--magenta);cursor:pointer; }
+  @media (max-width:720px){ .var-row{ grid-template-columns:1fr 1fr; } }
+</style>
+
+<script>
+  const data = JSON.parse(document.getElementById("pos-data")!.textContent!);
+  let items: any[] = data.items;
+  const $ = (id: string) => document.getElementById(id)!;
+  const money = (c: number) => (c / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
+  const esc = (s: string) => String(s ?? "").replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m] as string));
+  const state = { q: "", cat: "", sort: "title", inStockFirst: true };
+
+  async function api(body: any) {
+    const r = await fetch("/api/pos/inventory", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error(j.error || "Failed");
+    return j;
+  }
+
+  function totalQty(p: any) { return p.variants.reduce((s: number, v: any) => s + v.quantity, 0); }
+  function maxPrice(p: any) { return Math.max(0, ...p.variants.map((v: any) => v.priceCents)); }
+
+  function visible() {
+    const q = state.q.toLowerCase();
+    let list = items.filter((p) => {
+      if (state.cat && p.categoryId !== state.cat) return false;
+      if (!q) return true;
+      const hay = `${p.title} ${p.platform} ${p.franchise} ` +
+        p.variants.map((v: any) => `${v.condition} ${v.sku ?? ""} ${v.barcodes.map((b: any) => b.barcode).join(" ")}`).join(" ");
+      return hay.toLowerCase().includes(q);
+    });
+    list.sort((a, b) =>
+      state.sort === "price" ? maxPrice(b) - maxPrice(a)
+      : state.sort === "qty" ? totalQty(b) - totalQty(a)
+      : a.title.localeCompare(b.title));
+    if (state.inStockFirst) list.sort((a, b) => (totalQty(b) > 0 ? 1 : 0) - (totalQty(a) > 0 ? 1 : 0));
+    return list;
+  }
+
+  function render() {
+    const list = visible();
+    $("inv-list").innerHTML = list.length ? list.map((p) => `
+      <div class="prod-block" data-p="${p.id}">
+        <div class="prod-head">
+          <span class="dot" style="background:${p.categoryColor}"></span>
+          <strong>${esc(p.title)}</strong>
+          <span class="plat">${esc(p.platform)}${p.franchise ? " · " + esc(p.franchise) : ""} · ${esc(p.categoryName)}</span>
+          <span class="tot">${totalQty(p)} in stock</span>
+        </div>
+        ${p.variants.map((v: any) => `
+          <div class="var-row" data-v="${v.id}">
+            <span><strong>${esc(v.condition)}</strong>${v.completeness ? ` <span class="plat">${esc(v.completeness)}</span>` : ""}<br><span class="plat" style="font-family:var(--font-mono);">${esc(v.sku ?? "—")}</span></span>
+            <label class="plat">Price <input type="number" min="0" step="0.01" value="${(v.priceCents/100).toFixed(2)}" data-field="price"></label>
+            <label class="plat">Qty <input type="number" min="0" value="${v.quantity}" data-field="qty"></label>
+            <span class="saved" data-saved></span>
+            <button class="btn btn-ghost btn-sm" data-bc>${v.barcodes.length} barcode${v.barcodes.length === 1 ? "" : "s"}</button>
+          </div>
+          <div class="bc-panel" data-bcpanel="${v.id}" hidden>
+            <div data-bclist>${v.barcodes.map((b: any) => bcChip(b)).join("")}</div>
+            <div style="margin-top:0.5rem;display:flex;gap:0.4rem;flex-wrap:wrap;">
+              <input data-bcnew placeholder="New barcode" style="width:11rem;padding:0.35rem 0.5rem;">
+              <input data-bclabel placeholder="Label (e.g. Target)" style="width:9rem;padding:0.35rem 0.5rem;">
+              <button class="btn btn-ghost btn-sm" data-bcadd>Add barcode</button>
+            </div>
+          </div>`).join("")}
+      </div>`).join("") : `<p class="empty">No products match.</p>`;
+    attach();
+  }
+
+  function bcChip(b: any) {
+    return `<span class="bc-chip">${esc(b.barcode)}${b.label ? ` · ${esc(b.label)}` : ""}${b.primary ? "" : ` <button data-bcdel="${b.id}" title="Remove">✕</button>`}</span>`;
+  }
+
+  function attach() {
+    document.querySelectorAll<HTMLElement>(".var-row").forEach((row) => {
+      const vid = row.dataset.v!;
+      const prod = items.find((p) => p.variants.some((v: any) => v.id === vid));
+      const v = prod.variants.find((x: any) => x.id === vid);
+      const saved = row.querySelector<HTMLElement>("[data-saved]")!;
+      row.querySelectorAll<HTMLInputElement>("input[data-field]").forEach((inp) => {
+        inp.addEventListener("change", async () => {
+          try {
+            if (inp.dataset.field === "price") { const c = Math.max(0, Math.round(parseFloat(inp.value) * 100) || 0); await api({ action: "updateVariant", id: vid, priceCents: c }); v.priceCents = c; }
+            else { const q = Math.max(0, Math.round(parseInt(inp.value)) || 0); await api({ action: "updateVariant", id: vid, quantity: q }); v.quantity = q; }
+            saved.textContent = "✓ saved"; setTimeout(() => (saved.textContent = ""), 1500);
+            prod && (row.closest(".prod-block")!.querySelector(".tot")!.textContent = `${totalQty(prod)} in stock`);
+          } catch (e: any) { saved.textContent = "✕ " + e.message; }
+        });
+      });
+      row.querySelector("[data-bc]")!.addEventListener("click", () => {
+        const panel = document.querySelector<HTMLElement>(`[data-bcpanel="${vid}"]`)!;
+        panel.hidden = !panel.hidden;
+      });
+    });
+
+    document.querySelectorAll<HTMLElement>("[data-bcpanel]").forEach((panel) => {
+      const vid = panel.dataset.bcpanel!;
+      const prod = items.find((p) => p.variants.some((v: any) => v.id === vid));
+      const v = prod.variants.find((x: any) => x.id === vid);
+      const list = panel.querySelector<HTMLElement>("[data-bclist]")!;
+      const redraw = () => { list.innerHTML = v.barcodes.map((b: any) => bcChip(b)).join(""); bindDel(); };
+      const bindDel = () => list.querySelectorAll<HTMLElement>("[data-bcdel]").forEach((btn) => btn.addEventListener("click", async () => {
+        try { await api({ action: "removeBarcode", id: btn.dataset.bcdel }); v.barcodes = v.barcodes.filter((b: any) => b.id !== btn.dataset.bcdel); redraw(); } catch (e: any) { alert(e.message); }
+      }));
+      bindDel();
+      panel.querySelector("[data-bcadd]")!.addEventListener("click", async () => {
+        const code = panel.querySelector<HTMLInputElement>("[data-bcnew]")!.value.trim();
+        const label = panel.querySelector<HTMLInputElement>("[data-bclabel]")!.value.trim();
+        if (!code) return;
+        try { const j = await api({ action: "addBarcode", variantId: vid, barcode: code, label }); v.barcodes.push({ id: j.barcode.id, barcode: j.barcode.barcode, label: j.barcode.label, primary: false }); redraw(); panel.querySelector<HTMLInputElement>("[data-bcnew]")!.value = ""; panel.querySelector<HTMLInputElement>("[data-bclabel]")!.value = ""; } catch (e: any) { alert(e.message); }
+      });
+    });
+  }
+
+  $("inv-search").addEventListener("input", (e) => { state.q = (e.target as HTMLInputElement).value; render(); });
+  $("inv-cat").addEventListener("change", (e) => { state.cat = (e.target as HTMLSelectElement).value; render(); });
+  $("inv-sort").addEventListener("change", (e) => { state.sort = (e.target as HTMLSelectElement).value; render(); });
+  $("inv-instock").addEventListener("change", (e) => { state.inStockFirst = (e.target as HTMLInputElement).checked; render(); });
+
+  $("toggle-add").addEventListener("click", () => { ($("add-panel") as HTMLElement).hidden = !($("add-panel") as HTMLElement).hidden; });
+  $("np-save").addEventListener("click", async () => {
+    const body = {
+      action: "addProduct",
+      title: ($("np-title") as HTMLInputElement).value,
+      platform: ($("np-platform") as HTMLInputElement).value,
+      categoryId: ($("np-cat") as HTMLSelectElement).value,
+      condition: ($("np-cond") as HTMLInputElement).value,
+      priceCents: Math.round(parseFloat(($("np-price") as HTMLInputElement).value) * 100) || 0,
+      quantity: parseInt(($("np-qty") as HTMLInputElement).value) || 0,
+      barcode: ($("np-barcode") as HTMLInputElement).value || null,
+    };
+    if (!body.title || !body.categoryId) { alert("Title and category required"); return; }
+    try {
+      const j = await api(body);
+      const cat = data.categories.find((c: any) => c.id === body.categoryId);
+      items.push({ id: j.productId, title: body.title, platform: body.platform, franchise: "", categoryId: body.categoryId, categoryName: cat?.name ?? "", categoryColor: "#2ce6e0",
+        variants: [{ id: j.variantId, condition: body.condition, completeness: null, sku: null, priceCents: body.priceCents, quantity: body.quantity, barcodes: body.barcode ? [{ id: "primary:" + j.variantId, barcode: body.barcode, label: "Primary", primary: true }] : [] }] });
+      ($("add-panel") as HTMLElement).hidden = true;
+      ($("np-title") as HTMLInputElement).value = "";
+      render();
+    } catch (e: any) { alert(e.message); }
+  });
+
+  render();
+</script>

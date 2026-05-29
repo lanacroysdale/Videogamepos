@@ -1,8 +1,20 @@
 import { createServerClient, parseCookieHeader } from "@supabase/ssr";
+import { createClient } from "@supabase/supabase-js";
 import type { AstroCookies } from "astro";
 
 const SUPABASE_URL = import.meta.env.PUBLIC_SUPABASE_URL;
 const SUPABASE_ANON_KEY = import.meta.env.PUBLIC_SUPABASE_ANON_KEY;
+const SERVICE_ROLE_KEY = import.meta.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+/**
+ * Service-role client that bypasses RLS. Server-only — never import where it
+ * could reach the browser. Used for admin tasks (card-login, return lookup).
+ */
+export function createSupabaseAdminClient() {
+  return createClient(SUPABASE_URL, SERVICE_ROLE_KEY ?? "", {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+}
 
 /**
  * Create a request-scoped Supabase client wired to Astro's cookies, so the

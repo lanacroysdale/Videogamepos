@@ -4,7 +4,9 @@ import "../styles/app.css";
 
 interface Props {
   title: string;
-  active?: "dashboard" | "checkout" | "tradein" | "reports";
+  active?:
+    | "dashboard" | "checkout" | "tradein" | "inventory" | "returns"
+    | "repairs" | "schedule" | "customers" | "reports" | "pricing";
 }
 const { title, active } = Astro.props;
 
@@ -15,7 +17,17 @@ const nav = [
   { key: "dashboard", label: "Dashboard", href: "/app", icon: "🏠" },
   { key: "checkout", label: "Checkout", href: "/app/checkout", icon: "🧾" },
   { key: "tradein", label: "Trade-In", href: "/app/trade-in", icon: "🔁" },
-  ...(isManager ? [{ key: "reports", label: "Reports", href: "/app/reports", icon: "📊" }] : []),
+  { key: "returns", label: "Returns", href: "/app/returns", icon: "↩️" },
+  { key: "inventory", label: "Inventory", href: "/app/inventory", icon: "📦" },
+  { key: "repairs", label: "Repairs", href: "/app/repairs", icon: "🛠️" },
+  { key: "customers", label: "Customers", href: "/app/customers", icon: "🧑" },
+  { key: "schedule", label: "Schedule", href: "/app/schedule", icon: "📅" },
+  ...(isManager
+    ? [
+        { key: "reports", label: "Reports", href: "/app/reports", icon: "📊" },
+        { key: "pricing", label: "Pricing", href: "/app/pricing", icon: "🏷️" },
+      ]
+    : []),
 ];
 ---
 

@@ -1,0 +1,124 @@
+---
+export const prerender = false;
+import AppLayout from "../../layouts/AppLayout.astro";
+const isManager = !!Astro.locals.profile && ["owner", "manager"].includes(Astro.locals.profile.role);
+---
+
+<AppLayout title="Returns / Refunds" active="returns">
+  <p class="muted" style="margin-bottom:1rem;">Look up the original sale by its transaction number, pick the items coming back, and choose how to refund.</p>
+
+  <div class="pos-panel" style="margin-bottom:1rem;">
+    <div style="display:flex;gap:0.6rem;flex-wrap:wrap;align-items:flex-end;">
+      <label style="flex:1;min-width:200px;">
+        <span class="sub">Transaction #</span>
+        <div class="search" style="margin-top:0.3rem;"><span class="mag">#</span><input id="ret-ticket" type="number" placeholder="e.g. 42" /></div>
+      </label>
+      <button id="ret-lookup" class="btn btn-primary">Look up</button>
+    </div>
+    <p id="ret-msg" class="muted" style="margin-top:0.6rem;"></p>
+  </div>
+
+  <div id="ret-detail" class="pos-panel" hidden>
+    <h2>Original sale <span id="ret-num" class="sub"></span></h2>
+    <p id="ret-meta" class="muted" style="margin-bottom:0.8rem;"></p>
+    <div id="ret-warn" class="notice" hidden></div>
+
+    <table class="tbl">
+      <thead><tr><th></th><th>Item</th><th class="num">Paid</th><th class="num">Refund $</th></tr></thead>
+      <tbody id="ret-items"></tbody>
+    </table>
+
+    <div style="display:flex;gap:1.5rem;align-items:center;flex-wrap:wrap;margin-top:1rem;">
+      <div style="display:flex;gap:0.6rem;">
+        <label class="pay-opt"><input type="radio" name="rmethod" value="cash" checked /> Refund cash</label>
+        <label class="pay-opt"><input type="radio" name="rmethod" value="credit" /> Store credit</label>
+      </div>
+      <div style="margin-left:auto;font-size:1.2rem;font-weight:800;">Refund total: <span id="ret-total">$0.00</span></div>
+    </div>
+    <button id="ret-process" class="btn btn-primary btn-block" style="margin-top:1rem;">Process refund →</button>
+    <div id="ret-receipt" class="receipt" hidden style="margin-top:1rem;padding:1rem;border:1px solid rgba(128,255,114,.4);background:rgba(128,255,114,.08);border-radius:12px;text-align:center;"></div>
+  </div>
+
+  <script type="application/json" id="ismgr" set:html={JSON.stringify(isManager)}></script>
+</AppLayout>
+
+<style>
+  .pay-opt { display:flex; align-items:center; gap:0.4rem; padding:0.5rem 0.8rem; border:1px solid var(--border-strong); border-radius:10px; cursor:pointer; font-weight:600; }
+</style>
+
+<script>
+  const isManager = JSON.parse(document.getElementById("ismgr")!.textContent!);
+  const $ = (id: string) => document.getElementById(id)!;
+  const money = (c: number) => (c / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
+  const esc = (s: string) => String(s ?? "").replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m] as string));
+  let current: any = null;
+
+  function recalc() {
+    let total = 0;
+    document.querySelectorAll<HTMLElement>("#ret-items tr").forEach((tr) => {
+      const cb = tr.querySelector<HTMLInputElement>("[data-pick]")!;
+      const amt = tr.querySelector<HTMLInputElement>("[data-amt]")!;
+      if (cb.checked) total += Math.round(parseFloat(amt.value) * 100) || 0;
+    });
+    $("ret-total").textContent = money(total);
+  }
+
+  $("ret-lookup").addEventListener("click", async () => {
+    const ticket = ($("ret-ticket") as HTMLInputElement).value.trim();
+    if (!ticket) return;
+    $("ret-msg").textContent = "Looking up…";
+    const r = await fetch(`/api/pos/return?ticket=${encodeURIComponent(ticket)}`);
+    const j = await r.json();
+    if (!r.ok || !j.ok) { $("ret-msg").textContent = j.error || "Not found"; ($("ret-detail") as HTMLElement).hidden = true; return; }
+    $("ret-msg").textContent = "";
+    current = j.transaction;
+    ($("ret-detail") as HTMLElement).hidden = false;
+    ($("ret-receipt") as HTMLElement).hidden = true;
+    $("ret-num").textContent = `#${current.human_id}`;
+    const cust = current.customer ? `${current.customer.first_name} ${current.customer.last_name}` : "Walk-in";
+    const date = current.completed_at ? new Date(current.completed_at).toLocaleDateString() : "—";
+    $("ret-meta").textContent = `${cust} · ${date} · total ${money(current.total_cents)} · ${current.type}`;
+    const warn = $("ret-warn");
+    if (j.pastWindow) {
+      warn.hidden = false;
+      warn.textContent = isManager
+        ? `⚠ Past the ${j.windowDays}-day return window — you're approving this as a manager.`
+        : `⚠ Past the ${j.windowDays}-day return window — a manager must process this return.`;
+    } else warn.hidden = true;
+
+    const sellItems = (current.transaction_items || []).filter((it: any) => it.kind === "sale" || it.kind === "service");
+    $("ret-items").innerHTML = sellItems.map((it: any, i: number) => {
+      const net = it.unit_price_cents * it.qty - it.discount_cents;
+      return `<tr data-cat="${it.category_id || ""}" data-desc="${esc(it.description)}">
+        <td><input type="checkbox" data-pick id="pick${i}"></td>
+        <td><label for="pick${i}">${esc(it.description)}${it.qty > 1 ? ` ×${it.qty}` : ""}</label></td>
+        <td class="num">${money(net)}</td>
+        <td class="num"><input type="number" min="0" step="0.01" data-amt value="${(net/100).toFixed(2)}" style="width:6rem;text-align:right;"></td>
+      </tr>`;
+    }).join("") || `<tr><td colspan="4" class="empty">No returnable items on this sale.</td></tr>`;
+
+    $("ret-items").querySelectorAll("input").forEach((el) => el.addEventListener("input", recalc));
+    recalc();
+  });
+
+  $("ret-process").addEventListener("click", async () => {
+    if (!current) return;
+    const items: any[] = [];
+    document.querySelectorAll<HTMLElement>("#ret-items tr").forEach((tr) => {
+      const cb = tr.querySelector<HTMLInputElement>("[data-pick]");
+      if (cb?.checked) items.push({ description: tr.dataset.desc, categoryId: tr.dataset.cat || null, amountCents: Math.round(parseFloat(tr.querySelector<HTMLInputElement>("[data-amt]")!.value) * 100) || 0 });
+    });
+    if (!items.length) { alert("Pick at least one item to return."); return; }
+    const method = (document.querySelector('input[name="rmethod"]:checked') as HTMLInputElement).value;
+    const btn = $("ret-process") as HTMLButtonElement; btn.disabled = true; btn.textContent = "Processing…";
+    try {
+      const r = await fetch("/api/pos/return", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ originalId: current.id, items, method }) });
+      const j = await r.json();
+      if (!r.ok || !j.ok) throw new Error(j.error || "Failed");
+      const rc = $("ret-receipt"); rc.hidden = false;
+      rc.innerHTML = `<h3 style="color:var(--green);">✓ Refund #${j.humanId} processed</h3><p>Refunded ${money(j.refund)} as ${j.method === "credit" ? "store credit" : "cash"}.</p>`;
+      rc.scrollIntoView({ behavior: "smooth", block: "center" });
+    } catch (e: any) { alert(e.message); }
+    finally { btn.disabled = false; btn.textContent = "Process refund →"; }
+  });
+</script>

@@ -15,6 +15,7 @@ declare global {
     readonly PUBLIC_SUPABASE_URL: string;
     readonly PUBLIC_SUPABASE_ANON_KEY: string;
     readonly SUPABASE_SERVICE_ROLE_KEY?: string;
+    readonly PRICECHARTING_API_TOKEN?: string;
     readonly RESEND_API_KEY?: string;
     readonly CONTACT_TO_EMAIL?: string;
     readonly CONTACT_FROM?: string;

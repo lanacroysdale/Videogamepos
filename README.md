@@ -17,11 +17,17 @@ and deployed on [Vercel](https://vercel.com), per the project's infrastructure p
 
 **Point-of-sale app** (`/app`, employee login required — see the [POS app](#point-of-sale-app-app) section)
 
-- **Dashboard** — customer type-ahead search, recent customers, open transactions, quick actions.
-- **Checkout** — category tiles, searchable catalog, cart with per-item & whole-cart discounts, cash/card tender, change due, stock decrement.
+- **Dashboard** — customer type-ahead search, recent customers, open transactions, clock in/out, quick actions.
+- **Checkout** — category tiles, searchable catalog (+ barcode auto-add), cart with per-item & whole-cart discounts, cash/card tender, change due, stock decrement.
 - **Trade-In / Buy** — cash/credit offers from customizable margins, dynamic total redistribution, and PriceCharting/eBay/GameStop reference links.
-- **Reports** (managers/owners only) — busy-hours chart, sales by employee and category, date ranges.
-- Backed by **Supabase** (Postgres + Auth) with Row Level Security and role-based access control.
+- **Returns / refunds** — look up a sale by number, refund items to cash or store credit, manager approval past the return window.
+- **Inventory** — search/sort/filter, one row per title with condition rows, inline price/quantity edits, **multiple barcodes** per item, add product.
+- **Repairs** — create tickets (device, serial, customer, location, issue), track status.
+- **Customers** — edit details/store credit/subscriptions; **merge** duplicate accounts (managers).
+- **Schedule** — weekly shifts (managers assign) + time clock for everyone.
+- **Reports** & **Pricing** (managers/owners only) — analytics charts; PriceCharting price-change review (approve/revert).
+- **Card / NFC quick login** plus email+password.
+- Backed by **Supabase** (Postgres + Auth) with Row Level Security and **per-employee** access control (cashiers see only their own transactions; reports/pricing are manager-only).
 
 ## Edit the content
 
@@ -87,11 +93,14 @@ The local Supabase keys are already in `.env`. Other DB scripts: `npm run db:sto
 
 ### Demo logins (password `password123`)
 
-| Email | Role | Can see Reports? |
-| --- | --- | --- |
-| `owner@timelag.test` | owner | ✅ |
-| `manager@timelag.test` | manager | ✅ |
-| `cashier@timelag.test` | cashier | ❌ |
+| Email | Card code | Role | Reports/Pricing? |
+| --- | --- | --- | --- |
+| `owner@timelag.test` | `1001` | owner | ✅ |
+| `manager@timelag.test` | `1002` | manager | ✅ |
+| `cashier@timelag.test` | `1003` | cashier | ❌ |
+
+Card codes work with the **Sign in with card** option on the login screen (and via
+Web NFC on supported devices).
 
 ### Going to production (cloud Supabase)
 
@@ -129,12 +138,13 @@ src/
   pages/
     index.astro, sell.astro, 404.astro
     api/contact.ts
-    api/pos/      customers.ts, checkout.ts, trade-in.ts
-    app/          login.astro, logout.ts, index.astro (dashboard),
-                  checkout.astro, trade-in.astro, reports.astro
+    api/pos/      customers, checkout, trade-in, return, inventory, repairs,
+                  clock, shifts, pricing, customer, merge-customers, card-login
+    app/          login, logout, index (dashboard), checkout, trade-in, returns,
+                  inventory, repairs, customers, schedule, reports, pricing
   styles/       global.css (marketing), app.css (POS)
   consts.ts     ← marketing-site content / config you edit
-supabase/       migrations/ (schema)
+supabase/       migrations/ (schema — two migrations)
 scripts/        seed.mjs (demo data)
 public/         favicon.svg, og-default.svg, robots.txt
 ```
@@ -144,9 +154,13 @@ public/         favicon.svg, og-default.svg, robots.txt
 - `public/og-default.svg` is the social-share image. For best compatibility across
   every platform, export a **1200×630 PNG** version and point `image` in
   `src/layouts/Layout.astro` at it.
-- The POS app is an early but real foundation (4 screens on Supabase). Natural next
-  steps from the planning docs: full inventory management, returns/refunds, repairs,
-  shift scheduling/clock-in, PriceCharting price syncing, and barcode-scanner hardware.
+- **PriceCharting sync** simulates market moves until you set `PRICECHARTING_API_TOKEN`
+  (then wire the real lookup in `src/pages/api/pos/pricing.ts`). The manager review
+  workflow (approve/revert) is fully built.
+- **Card/NFC login** maps a card code → employee. Web NFC works on supported devices
+  (Chrome/Android); elsewhere staff type/scan the code.
+- Remaining ideas from the planning docs: kiosk → open-order sync, shift-swap/time-off
+  requests, CSV import, opening/closing checklists, and barcode-scanner hardware.
 =======
 "# Videogamepos" 
 >>>>>>> 9f02dc81dc4b7d133fac83de8973f951e9c2cb32
