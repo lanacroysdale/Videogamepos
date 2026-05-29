@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Time Lag Gaming — Website
 
 Marketing site for **Time Lag Gaming** (Portland, OR). Built with [Astro](https://astro.build)
@@ -146,3 +147,6 @@ public/         favicon.svg, og-default.svg, robots.txt
 - The POS app is an early but real foundation (4 screens on Supabase). Natural next
   steps from the planning docs: full inventory management, returns/refunds, repairs,
   shift scheduling/clock-in, PriceCharting price syncing, and barcode-scanner hardware.
+=======
+"# Videogamepos" 
+>>>>>>> 9f02dc81dc4b7d133fac83de8973f951e9c2cb32
