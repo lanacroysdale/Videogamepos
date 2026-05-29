@@ -1,0 +1,65 @@
+---
+export const prerender = false;
+
+import "../../styles/global.css";
+import "../../styles/app.css";
+
+let error = "";
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+  const email = String(form.get("email") ?? "").trim();
+  const password = String(form.get("password") ?? "");
+  const { error: err } = await Astro.locals.supabase.auth.signInWithPassword({ email, password });
+  if (err) {
+    error = err.message;
+  } else {
+    return Astro.redirect("/app");
+  }
+}
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>Sign in · Time Lag POS</title>
+  </head>
+  <body class="app-body">
+    <div class="login-wrap">
+      <div class="login-card panel" style="padding: 1.75rem;">
+        <a href="/" class="app-brand" style="padding-left:0;">🎮 Time&nbsp;Lag <span>POS</span></a>
+        <h1>Employee sign in</h1>
+        <p class="muted" style="margin-bottom:1.25rem;">Log in to the point-of-sale system.</p>
+
+        {error && <div class="form-err">{error}</div>}
+
+        <form method="POST">
+          <div class="field" style="margin-bottom:1rem;">
+            <label for="email">Email</label>
+            <input id="email" name="email" type="email" required autocomplete="username" value="owner@timelag.test" />
+          </div>
+          <div class="field" style="margin-bottom:1.25rem;">
+            <label for="password">Password</label>
+            <input id="password" name="password" type="password" required autocomplete="current-password" value="password123" />
+          </div>
+          <button class="btn btn-primary btn-block" type="submit">Sign in →</button>
+        </form>
+
+        <div class="demo-creds">
+          <strong>Demo logins</strong> (password <code>password123</code>):<br />
+          <code>owner@timelag.test</code> · owner<br />
+          <code>manager@timelag.test</code> · manager<br />
+          <code>cashier@timelag.test</code> · cashier (no Reports access)
+        </div>
+      </div>
+    </div>
+
+    <style>
+      .field { display: grid; gap: 0.4rem; }
+      .field label { font-weight: 600; font-size: 0.9rem; }
+    </style>
+  </body>
+</html>

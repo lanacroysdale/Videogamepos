@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#100c26"/>
+      <stop offset="1" stop-color="#0a0913"/>
+    </linearGradient>
+    <linearGradient id="txt" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#2ce6e0"/>
+      <stop offset="1" stop-color="#ff49d0"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <circle cx="1050" cy="90" r="320" fill="#8b5cf6" opacity="0.18"/>
+  <circle cx="120" cy="560" r="260" fill="#2ce6e0" opacity="0.12"/>
+
+  <g transform="translate(90,150)">
+    <rect x="0" y="40" width="120" height="62" rx="31" fill="none" stroke="url(#txt)" stroke-width="8"/>
+    <path d="M28 58v26M15 71h26" stroke="#2ce6e0" stroke-width="8" stroke-linecap="round"/>
+    <circle cx="86" cy="64" r="7" fill="#ff49d0"/>
+    <circle cx="100" cy="78" r="7" fill="#80ff72"/>
+  </g>
+
+  <text x="92" y="330" font-family="Consolas,Menlo,monospace" font-size="34" letter-spacing="6" fill="#a8a3c9">PORTLAND, OR · BUY · SELL · TRADE</text>
+  <text x="88" y="430" font-family="Arial,Helvetica,sans-serif" font-size="96" font-weight="800" fill="#ecebff">Time Lag Gaming</text>
+  <text x="92" y="500" font-family="Arial,Helvetica,sans-serif" font-size="40" fill="url(#txt)">Retro &amp; modern games — turn yours into cash or credit</text>
+</svg>

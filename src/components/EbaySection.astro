@@ -1,0 +1,141 @@
+---
+import { EBAY } from "../consts";
+---
+
+<section class="section" id="ebay">
+  <div class="container">
+    <div class="ebay-panel panel">
+      <div class="ebay-copy">
+        <span class="eyebrow">Shop online</span>
+        <h2>Browse our eBay store</h2>
+        <p class="lead">
+          Can&rsquo;t make it to Portland? Thousands of buyers trust our eBay
+          listings for graded retro titles, complete-in-box classics, consoles,
+          and hard-to-find accessories — all shipped fast with buyer protection.
+        </p>
+
+        <div class="ebay-cta">
+          <a href={EBAY.storeUrl} class="btn btn-magenta" target="_blank" rel="noopener">
+            Visit our eBay store ↗
+          </a>
+          <a href={EBAY.sellerSearchUrl} class="btn btn-ghost" target="_blank" rel="noopener">
+            See all listings
+          </a>
+        </div>
+
+        <div class="chips" aria-label="Popular categories on eBay">
+          {
+            EBAY.categories.map((cat) => (
+              <a
+                class="chip"
+                href={EBAY.storeUrl}
+                target="_blank"
+                rel="noopener"
+              >
+                {cat}
+              </a>
+            ))
+          }
+        </div>
+      </div>
+
+      <div class="ebay-art" aria-hidden="true">
+        <div class="store-card">
+          <div class="store-head">
+            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+            <span class="store-url">ebay.com/str/…</span>
+          </div>
+          <div class="store-body">
+            <div class="tile"></div>
+            <div class="tile"></div>
+            <div class="tile"></div>
+            <div class="tile"></div>
+            <div class="tile"></div>
+            <div class="tile"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .ebay-panel {
+    display: grid;
+    gap: clamp(1.5rem, 1rem + 3vw, 3rem);
+    align-items: center;
+    padding: clamp(1.5rem, 1rem + 3vw, 3rem);
+  }
+  @media (min-width: 900px) {
+    .ebay-panel {
+      grid-template-columns: 1.1fr 0.9fr;
+    }
+  }
+
+  .ebay-cta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.8rem;
+    margin-top: 1.6rem;
+  }
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+    margin-top: 1.6rem;
+  }
+
+  .ebay-art {
+    display: grid;
+    place-items: center;
+  }
+  .store-card {
+    width: min(100%, 380px);
+    border-radius: 16px;
+    overflow: hidden;
+    border: 1px solid var(--border-strong);
+    background: var(--bg-2);
+    box-shadow: var(--shadow);
+  }
+  .store-head {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.7rem 0.9rem;
+    background: rgba(255, 255, 255, 0.04);
+    border-bottom: 1px solid var(--border);
+  }
+  .store-head .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--muted-2);
+  }
+  .store-head .dot:nth-child(1) { background: #ff5f57; }
+  .store-head .dot:nth-child(2) { background: #febc2e; }
+  .store-head .dot:nth-child(3) { background: #28c840; }
+  .store-url {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+  .store-body {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.6rem;
+    padding: 0.9rem;
+  }
+  .tile {
+    aspect-ratio: 3 / 4;
+    border-radius: 8px;
+    background: linear-gradient(160deg, rgba(44, 230, 224, 0.18), rgba(139, 92, 246, 0.18));
+    border: 1px solid var(--border);
+  }
+  .tile:nth-child(2n) {
+    background: linear-gradient(160deg, rgba(255, 73, 208, 0.18), rgba(139, 92, 246, 0.18));
+  }
+  .tile:nth-child(3n) {
+    background: linear-gradient(160deg, rgba(128, 255, 114, 0.16), rgba(44, 230, 224, 0.16));
+  }
+</style>

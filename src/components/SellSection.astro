@@ -1,0 +1,48 @@
+---
+import { SITE } from "../consts";
+import Steps from "./Steps.astro";
+import ContactForm from "./ContactForm.astro";
+---
+
+<section class="section" id="contact">
+  <div class="container sell-grid">
+    <div class="sell-intro">
+      <span class="eyebrow">Sell or trade</span>
+      <h2>Sell your games to {SITE.owner}</h2>
+      <p class="lead">
+        Clearing out a closet or trading up? Send over what you have and we&rsquo;ll
+        get you a fair offer — cash or store credit. Here&rsquo;s how it works:
+      </p>
+      <Steps />
+      <p class="reach">
+        Prefer to talk it through? Email
+        <a href={`mailto:${SITE.email}`}>{SITE.email}</a> or call
+        <a href={SITE.phoneHref}>{SITE.phoneDisplay}</a>.
+      </p>
+    </div>
+
+    <div class="sell-form">
+      <ContactForm />
+    </div>
+  </div>
+</section>
+
+<style>
+  .sell-grid {
+    display: grid;
+    gap: clamp(2rem, 1rem + 4vw, 3.5rem);
+    align-items: start;
+  }
+  @media (min-width: 940px) {
+    .sell-grid {
+      grid-template-columns: 1fr 1fr;
+    }
+  }
+  .sell-intro .lead {
+    margin-bottom: 1.5rem;
+  }
+  .reach {
+    margin-top: 1.25rem;
+    font-size: 0.95rem;
+  }
+</style>

@@ -1,0 +1,206 @@
+---
+export const prerender = false;
+
+import AppLayout from "../../layouts/AppLayout.astro";
+import { fmt, fullName } from "../../lib/money";
+
+const supabase = Astro.locals.supabase;
+const { data: margins } = await supabase.from("trade_margins").select("*").order("sort_order");
+const { data: categories } = await supabase.from("categories").select("id,name").order("sort_order");
+
+const customerId = Astro.url.searchParams.get("customer");
+let customer = null;
+if (customerId) {
+  const { data } = await supabase.from("customers").select("*").eq("id", customerId).maybeSingle();
+  customer = data;
+}
+
+const posData = { margins: margins ?? [], categories: categories ?? [], customer };
+---
+
+<AppLayout title="Trade-In / Buy" active="tradein">
+  <p class="muted" style="margin-bottom:1rem;">
+    Add what the customer is selling and the resale value. Offers come from your
+    margin settings; competitor links open price references for each item.
+  </p>
+
+  {customer && (
+    <div class="cust-bar" style="display:flex;justify-content:space-between;padding:0.6rem 0.8rem;margin-bottom:1rem;background:rgba(44,230,224,.08);border:1px solid rgba(44,230,224,.3);border-radius:10px;">
+      <span>🧑 <strong>{fullName(customer)}</strong> · {customer.membership}</span>
+      <span class="muted">{fmt(customer.store_credit_cents)} store credit</span>
+    </div>
+  )}
+
+  <div class="pos-panel">
+    <table class="tbl" id="ti-table">
+      <thead>
+        <tr>
+          <th style="width:30%">Item</th>
+          <th>Category</th>
+          <th class="num">Resale $</th>
+          <th class="num">Cash offer</th>
+          <th class="num">Credit offer</th>
+          <th>Compare</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="ti-body"></tbody>
+    </table>
+    <button id="add-row" class="btn btn-ghost btn-sm" style="margin-top:0.8rem;">＋ Add item</button>
+  </div>
+
+  <div class="pos-grid two" style="margin-top:1rem;">
+    <div class="pos-panel">
+      <h2>Offer</h2>
+      <div class="cart-totals">
+        <div class="row"><span>Total resale value</span><span id="sum-resale">$0.00</span></div>
+        <div class="row"><span>Cash offer (by margin)</span><span id="sum-cash">$0.00</span></div>
+        <div class="row"><span>Store-credit offer</span><span id="sum-credit">$0.00</span></div>
+        <div class="row" style="margin-top:0.6rem;">
+          <span>Override total cash $ <small class="muted">(redistributes)</small></span>
+          <input id="target-cash" type="number" min="0" step="0.01" placeholder="auto" style="width:7rem;text-align:right;" />
+        </div>
+      </div>
+    </div>
+
+    <div class="pos-panel">
+      <h2>Pay out as</h2>
+      <div style="display:flex;gap:0.6rem;margin-bottom:1rem;">
+        <label class="pay-opt"><input type="radio" name="payout" value="cash" checked /> Cash <span id="lbl-cash" class="muted"></span></label>
+        <label class="pay-opt"><input type="radio" name="payout" value="credit" /> Store credit <span id="lbl-credit" class="muted"></span></label>
+      </div>
+      <button id="save-ti" class="btn btn-primary btn-block">Save buy ticket →</button>
+      <div id="ti-receipt" class="receipt" hidden style="margin-top:1rem;padding:1rem;border:1px solid rgba(128,255,114,.4);background:rgba(128,255,114,.08);border-radius:12px;text-align:center;"></div>
+    </div>
+  </div>
+
+  <p class="muted" style="margin-top:1rem;font-size:0.85rem;">
+    Margins: {margins?.map((m) => `${m.label}: ${m.cash_percent}% cash / ${m.credit_percent}% credit`).join(" · ")}
+  </p>
+
+  <script type="application/json" id="pos-data" set:html={JSON.stringify(posData)}></script>
+</AppLayout>
+
+<style>
+  .pay-opt { display:flex; align-items:center; gap:0.4rem; padding:0.6rem 0.9rem; border:1px solid var(--border-strong); border-radius:10px; cursor:pointer; font-weight:600; }
+  .ti-links a { font-size:0.78rem; margin-right:0.5rem; white-space:nowrap; }
+  #ti-table input, #ti-table select { padding:0.4rem 0.5rem; }
+</style>
+
+<script>
+  type Row = { key: string; description: string; categoryId: string | null; resaleCents: number };
+  const data = JSON.parse(document.getElementById("pos-data")!.textContent!);
+  const margins: any[] = data.margins;
+  const categories: any[] = data.categories;
+  const customer: any = data.customer;
+  const $ = (id: string) => document.getElementById(id)!;
+  const money = (c: number) => (c / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
+  const esc = (s: string) => String(s).replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m] as string));
+
+  let rows: Row[] = [];
+
+  function marginFor(cents: number) {
+    return margins.find((m) => cents >= m.min_cents && (m.max_cents == null || cents < m.max_cents)) ?? margins[margins.length - 1] ?? { cash_percent: 35, credit_percent: 45 };
+  }
+  function links(desc: string) {
+    const q = encodeURIComponent(desc || "");
+    return `<span class="ti-links">
+      <a href="https://www.pricecharting.com/search-products?q=${q}&type=prices" target="_blank" rel="noopener">PriceCharting↗</a>
+      <a href="https://www.ebay.com/sch/i.html?_nkw=${q}&LH_Sold=1&LH_Complete=1" target="_blank" rel="noopener">eBay sold↗</a>
+      <a href="https://www.gamestop.com/search/?q=${q}" target="_blank" rel="noopener">GameStop↗</a>
+    </span>`;
+  }
+
+  // Returns per-row {cash, credit} honoring an optional override total cash.
+  function computeOffers() {
+    const base = rows.map((r) => {
+      const m = marginFor(r.resaleCents);
+      return { cash: Math.round(r.resaleCents * m.cash_percent / 100), credit: Math.round(r.resaleCents * m.credit_percent / 100) };
+    });
+    const sumAutoCash = base.reduce((s, b) => s + b.cash, 0);
+    const target = Math.round((parseFloat(($("target-cash") as HTMLInputElement).value) || 0) * 100);
+    if (target > 0 && sumAutoCash > 0) {
+      const f = target / sumAutoCash;
+      return base.map((b) => ({ cash: Math.round(b.cash * f), credit: Math.round(b.credit * f) }));
+    }
+    return base;
+  }
+
+  function render() {
+    if (rows.length === 0) addRow();
+    const offers = computeOffers();
+    $("ti-body").innerHTML = rows.map((r, idx) => `
+      <tr data-key="${r.key}">
+        <td><input data-desc value="${esc(r.description)}" placeholder="e.g. Super Mario 64 (N64)" style="width:100%"></td>
+        <td><select data-cat>
+          <option value="">—</option>
+          ${categories.map((c) => `<option value="${c.id}" ${r.categoryId === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}
+        </select></td>
+        <td class="num"><input data-resale type="number" min="0" step="0.01" value="${(r.resaleCents/100).toFixed(2)}" style="width:6rem;text-align:right;"></td>
+        <td class="num" style="color:var(--green);font-weight:700;">${money(offers[idx].cash)}</td>
+        <td class="num" style="color:var(--cyan);font-weight:700;">${money(offers[idx].credit)}</td>
+        <td>${links(r.description)}</td>
+        <td><button class="link-btn" data-remove>✕</button></td>
+      </tr>`).join("");
+
+    $("ti-body").querySelectorAll<HTMLElement>("tr").forEach((tr) => {
+      const r = rows.find((x) => x.key === tr.dataset.key)!;
+      tr.querySelector<HTMLInputElement>("[data-desc]")!.addEventListener("input", (e) => { r.description = (e.target as HTMLInputElement).value; });
+      tr.querySelector<HTMLInputElement>("[data-desc]")!.addEventListener("change", render);
+      tr.querySelector<HTMLSelectElement>("[data-cat]")!.addEventListener("change", (e) => { r.categoryId = (e.target as HTMLSelectElement).value || null; });
+      tr.querySelector<HTMLInputElement>("[data-resale]")!.addEventListener("input", (e) => { r.resaleCents = Math.max(0, Math.round(parseFloat((e.target as HTMLInputElement).value) * 100) || 0); recalc(); });
+      tr.querySelector("[data-remove]")!.addEventListener("click", () => { rows = rows.filter((x) => x.key !== r.key); render(); });
+    });
+    recalc();
+  }
+
+  function recalc() {
+    const offers = computeOffers();
+    const sumResale = rows.reduce((s, r) => s + r.resaleCents, 0);
+    const sumCash = offers.reduce((s, o) => s + o.cash, 0);
+    const sumCredit = offers.reduce((s, o) => s + o.credit, 0);
+    $("sum-resale").textContent = money(sumResale);
+    $("sum-cash").textContent = money(sumCash);
+    $("sum-credit").textContent = money(sumCredit);
+    $("lbl-cash").textContent = money(sumCash);
+    $("lbl-credit").textContent = money(sumCredit);
+    // refresh the per-row offer cells without rebuilding inputs
+    Array.from($("ti-body").children).forEach((tr, idx) => {
+      const tds = (tr as HTMLElement).querySelectorAll("td");
+      if (tds[3]) tds[3].textContent = money(offers[idx].cash);
+      if (tds[4]) tds[4].textContent = money(offers[idx].credit);
+    });
+  }
+
+  function addRow() { rows.push({ key: crypto.randomUUID(), description: "", categoryId: null, resaleCents: 0 }); }
+  $("add-row").addEventListener("click", () => { addRow(); render(); });
+  ($("target-cash") as HTMLInputElement).addEventListener("input", recalc);
+
+  $("save-ti").addEventListener("click", async () => {
+    const valid = rows.filter((r) => r.description.trim() && r.resaleCents > 0);
+    if (!valid.length) { alert("Add at least one item with a description and resale value."); return; }
+    const offers = computeOffers();
+    const payoutType = (document.querySelector('input[name="payout"]:checked') as HTMLInputElement).value;
+    const items = rows.map((r, idx) => ({
+      description: r.description, categoryId: r.categoryId, resaleCents: r.resaleCents,
+      payoutCents: payoutType === "credit" ? offers[idx].credit : offers[idx].cash,
+    })).filter((it) => it.description.trim() && it.resaleCents > 0);
+
+    const btn = $("save-ti") as HTMLButtonElement;
+    btn.disabled = true; btn.textContent = "Saving…";
+    try {
+      const res = await fetch("/api/pos/trade-in", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ customerId: customer?.id ?? null, payoutType, items }),
+      });
+      const j = await res.json();
+      if (!res.ok || !j.ok) throw new Error(j.error || "Failed");
+      const rc = $("ti-receipt"); rc.hidden = false;
+      rc.innerHTML = `<h3 style="color:var(--green);">✓ Buy ticket #${j.humanId} saved</h3><p>Paying ${money(j.payout)} as ${payoutType}. Saved as an open transaction for review.</p>`;
+      rows = []; render(); rc.scrollIntoView({ behavior: "smooth", block: "center" });
+    } catch (err: any) { alert("Could not save: " + err.message); }
+    finally { btn.disabled = false; btn.textContent = "Save buy ticket →"; }
+  });
+
+  render();
+</script>

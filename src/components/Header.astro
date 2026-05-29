@@ -1,0 +1,208 @@
+---
+import { NAV, SITE } from "../consts";
+---
+
+<header class="site-header">
+  <div class="container bar">
+    <a href="/" class="brand" aria-label={`${SITE.name} home`}>
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="28" height="28" fill="none">
+          <rect x="1" y="9" width="30" height="16" rx="8" stroke="currentColor" stroke-width="2" />
+          <path d="M8 14v6M5 17h6" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          <circle cx="22" cy="15.5" r="1.8" fill="currentColor" />
+          <circle cx="25.5" cy="19" r="1.8" fill="currentColor" />
+        </svg>
+      </span>
+      <span class="brand-text">Time&nbsp;Lag<span class="brand-text-2"> Gaming</span></span>
+    </a>
+
+    <button
+      class="nav-toggle"
+      type="button"
+      aria-expanded="false"
+      aria-controls="primary-nav"
+      aria-label="Toggle navigation menu"
+    >
+      <span></span><span></span><span></span>
+    </button>
+
+    <nav id="primary-nav" class="nav" aria-label="Primary">
+      <ul>
+        {
+          NAV.map((item) => (
+            <li>
+              <a href={item.href}>{item.label}</a>
+            </li>
+          ))
+        }
+      </ul>
+      <a href="/sell" class="btn btn-primary nav-cta">Sell Your Games</a>
+    </nav>
+  </div>
+</header>
+
+<style>
+  .site-header {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    backdrop-filter: blur(12px);
+    background: color-mix(in srgb, var(--bg) 78%, transparent);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    height: 68px;
+  }
+
+  .brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    font-size: 0.98rem;
+  }
+  .brand:hover {
+    text-decoration: none;
+  }
+  .brand-mark {
+    color: var(--cyan);
+    display: grid;
+    place-items: center;
+    filter: drop-shadow(0 0 8px rgba(44, 230, 224, 0.5));
+  }
+  .brand-text-2 {
+    color: var(--muted);
+  }
+
+  .nav {
+    display: flex;
+    align-items: center;
+    gap: 1.75rem;
+  }
+  .nav ul {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    list-style: none;
+    padding: 0;
+  }
+  .nav a {
+    color: var(--muted);
+    font-weight: 600;
+    font-size: 0.95rem;
+    transition: color 0.15s ease;
+  }
+  .nav a:hover {
+    color: var(--text);
+    text-decoration: none;
+  }
+  .nav-cta {
+    padding: 0.6rem 1.1rem;
+    font-size: 0.9rem;
+  }
+
+  .nav-toggle {
+    display: none;
+    flex-direction: column;
+    gap: 5px;
+    width: 44px;
+    height: 44px;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border-strong);
+    border-radius: 10px;
+    cursor: pointer;
+  }
+  .nav-toggle span {
+    display: block;
+    width: 20px;
+    height: 2px;
+    background: var(--text);
+    border-radius: 2px;
+    transition: transform 0.2s ease, opacity 0.2s ease;
+  }
+
+  @media (max-width: 860px) {
+    .nav-toggle {
+      display: flex;
+    }
+    .nav {
+      position: absolute;
+      inset: 68px 0 auto 0;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0.25rem;
+      padding: 1rem clamp(1.1rem, 0.6rem + 2vw, 2rem) 1.5rem;
+      background: color-mix(in srgb, var(--bg) 96%, transparent);
+      border-bottom: 1px solid var(--border);
+      box-shadow: var(--shadow);
+      transform-origin: top;
+      display: none;
+    }
+    .nav[data-open="true"] {
+      display: flex;
+    }
+    .nav ul {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0;
+    }
+    .nav li a {
+      display: block;
+      padding: 0.85rem 0.25rem;
+      border-bottom: 1px solid var(--border);
+      font-size: 1.05rem;
+    }
+    .nav-cta {
+      margin-top: 0.85rem;
+      padding: 0.85rem 1.1rem;
+      font-size: 1rem;
+    }
+    .nav-toggle[aria-expanded="true"] span:nth-child(1) {
+      transform: translateY(7px) rotate(45deg);
+    }
+    .nav-toggle[aria-expanded="true"] span:nth-child(2) {
+      opacity: 0;
+    }
+    .nav-toggle[aria-expanded="true"] span:nth-child(3) {
+      transform: translateY(-7px) rotate(-45deg);
+    }
+  }
+</style>
+
+<script>
+  const toggle = document.querySelector<HTMLButtonElement>(".nav-toggle");
+  const nav = document.getElementById("primary-nav");
+
+  if (toggle && nav) {
+    const setOpen = (open: boolean) => {
+      toggle.setAttribute("aria-expanded", String(open));
+      nav.dataset.open = String(open);
+    };
+
+    toggle.addEventListener("click", () => {
+      setOpen(toggle.getAttribute("aria-expanded") !== "true");
+    });
+
+    // Close the menu after tapping a link.
+    nav.querySelectorAll("a").forEach((link) => {
+      link.addEventListener("click", () => setOpen(false));
+    });
+
+    // Reset state when resizing back up to desktop.
+    const mq = window.matchMedia("(min-width: 861px)");
+    mq.addEventListener("change", (e) => {
+      if (e.matches) setOpen(false);
+    });
+  }
+</script>

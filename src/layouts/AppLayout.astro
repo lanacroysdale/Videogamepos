@@ -1,0 +1,65 @@
+---
+import "../styles/global.css";
+import "../styles/app.css";
+
+interface Props {
+  title: string;
+  active?: "dashboard" | "checkout" | "tradein" | "reports";
+}
+const { title, active } = Astro.props;
+
+const profile = Astro.locals.profile;
+const isManager = !!profile && ["owner", "manager"].includes(profile.role);
+
+const nav = [
+  { key: "dashboard", label: "Dashboard", href: "/app", icon: "🏠" },
+  { key: "checkout", label: "Checkout", href: "/app/checkout", icon: "🧾" },
+  { key: "tradein", label: "Trade-In", href: "/app/trade-in", icon: "🔁" },
+  ...(isManager ? [{ key: "reports", label: "Reports", href: "/app/reports", icon: "📊" }] : []),
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>{title} · Time Lag POS</title>
+  </head>
+  <body class="app-body">
+    <div class="app-shell">
+      <aside class="app-side">
+        <a href="/app" class="app-brand">🎮 Time&nbsp;Lag <span>POS</span></a>
+        <nav class="app-nav">
+          {
+            nav.map((item) => (
+              <a href={item.href} class={active === item.key ? "active" : ""}>
+                <span class="ico" aria-hidden="true">{item.icon}</span>
+                <span class="label">{item.label}</span>
+              </a>
+            ))
+          }
+        </nav>
+        <div class="app-user">
+          <div class="who">{profile?.full_name ?? "—"}</div>
+          <div class="role">{profile?.role ?? ""}</div>
+          <form method="POST" action="/app/logout">
+            <button class="btn btn-ghost btn-sm" type="submit">Log out</button>
+          </form>
+        </div>
+      </aside>
+
+      <main class="app-main">
+        <header class="app-top">
+          <h1>{title}</h1>
+          <div class="top-actions"><slot name="actions" /></div>
+        </header>
+        <div class="app-content">
+          <slot />
+        </div>
+      </main>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,49 @@
+---
+import Layout from "../layouts/Layout.astro";
+---
+
+<Layout title="Page not found">
+  <section class="section notfound">
+    <div class="container">
+      <p class="code">404</p>
+      <h1>Game over — page not found</h1>
+      <p class="lead">
+        Looks like this level doesn&rsquo;t exist. Let&rsquo;s get you back to the start.
+      </p>
+      <div class="cta">
+        <a href="/" class="btn btn-primary">Back to home</a>
+        <a href="/sell" class="btn btn-ghost">Sell your games</a>
+      </div>
+    </div>
+  </section>
+</Layout>
+
+<style>
+  .notfound {
+    text-align: center;
+    min-height: 56vh;
+    display: grid;
+    place-content: center;
+  }
+  .code {
+    font-family: var(--font-mono);
+    font-size: clamp(3rem, 2rem + 8vw, 7rem);
+    font-weight: 800;
+    line-height: 1;
+    background: linear-gradient(120deg, var(--cyan), var(--magenta));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    margin-bottom: 0.5rem;
+  }
+  .notfound .lead {
+    margin: 0.75rem auto 1.75rem;
+    max-width: 44ch;
+  }
+  .cta {
+    display: flex;
+    gap: 0.8rem;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+</style>

@@ -1,0 +1,173 @@
+---
+import { SITE } from "../consts";
+---
+
+<section class="hero">
+  <div class="container hero-grid">
+    <div class="hero-copy">
+      <span class="eyebrow">{SITE.location} · Buy · Sell · Trade</span>
+      <h1>
+        Your local home for
+        <span class="grad"> retro &amp; modern games</span>.
+      </h1>
+      <p class="lead">
+        Time Lag Gaming buys, sells, and trades video games, consoles, and
+        accessories — from NES classics to the latest releases. Got games
+        collecting dust? Turn them into cash or store credit.
+      </p>
+      <div class="hero-cta">
+        <a href="/#contact" class="btn btn-primary">Sell your games →</a>
+        <a href="/#ebay" class="btn btn-ghost">Shop our eBay store</a>
+      </div>
+      <ul class="hero-trust">
+        <li>✅ Fair, data-backed offers</li>
+        <li>🎮 Every platform, every era</li>
+        <li>⚡ Cash or store credit</li>
+      </ul>
+    </div>
+
+    <div class="hero-art" aria-hidden="true">
+      <div class="screen">
+        <div class="screen-scan"></div>
+        <div class="cart cart-1">★ NES</div>
+        <div class="cart cart-2">◆ SNES</div>
+        <div class="cart cart-3">● N64</div>
+        <div class="press">▶ INSERT&nbsp;CART</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .hero {
+    padding-block: clamp(3rem, 2rem + 5vw, 6rem);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .hero-grid {
+    display: grid;
+    gap: clamp(2rem, 1rem + 4vw, 4rem);
+    align-items: center;
+  }
+  @media (min-width: 900px) {
+    .hero-grid {
+      grid-template-columns: 1.15fr 0.85fr;
+    }
+  }
+
+  .grad {
+    background: linear-gradient(120deg, var(--cyan), var(--magenta) 80%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  .hero-copy h1 {
+    margin-bottom: 1.1rem;
+  }
+  .hero-cta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.8rem;
+    margin-top: 1.8rem;
+  }
+  .hero-trust {
+    list-style: none;
+    padding: 0;
+    margin-top: 1.8rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem 1.4rem;
+    color: var(--muted);
+    font-size: 0.92rem;
+    font-weight: 600;
+  }
+
+  /* Decorative arcade "screen" */
+  .hero-art {
+    display: grid;
+    place-items: center;
+  }
+  .screen {
+    position: relative;
+    width: min(100%, 360px);
+    aspect-ratio: 4 / 3;
+    border-radius: 20px;
+    background: radial-gradient(120% 120% at 30% 0%, #221b4d, #0c0a1f 70%);
+    border: 1px solid var(--border-strong);
+    box-shadow: var(--shadow), inset 0 0 60px rgba(139, 92, 246, 0.25);
+    overflow: hidden;
+  }
+  .screen-scan {
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      rgba(255, 255, 255, 0.04) 0 2px,
+      transparent 2px 4px
+    );
+    mix-blend-mode: overlay;
+  }
+  .cart {
+    position: absolute;
+    padding: 0.55rem 0.95rem;
+    border-radius: 10px;
+    font-family: var(--font-mono);
+    font-weight: 700;
+    font-size: 0.95rem;
+    color: var(--text);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.02));
+    border: 1px solid var(--border-strong);
+    box-shadow: var(--shadow);
+    animation: float 6s ease-in-out infinite;
+  }
+  .cart-1 {
+    top: 18%;
+    left: 12%;
+    color: var(--cyan);
+    border-color: rgba(44, 230, 224, 0.5);
+  }
+  .cart-2 {
+    top: 42%;
+    right: 10%;
+    color: var(--magenta);
+    border-color: rgba(255, 73, 208, 0.5);
+    animation-delay: -2s;
+  }
+  .cart-3 {
+    bottom: 16%;
+    left: 22%;
+    color: var(--green);
+    border-color: rgba(128, 255, 114, 0.5);
+    animation-delay: -4s;
+  }
+  .press {
+    position: absolute;
+    bottom: 8%;
+    right: 8%;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.12em;
+    color: var(--yellow);
+    text-shadow: 0 0 10px rgba(255, 210, 63, 0.6);
+    animation: blink 1.6s steps(1) infinite;
+  }
+
+  @keyframes float {
+    0%, 100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-8px);
+    }
+  }
+  @keyframes blink {
+    0%, 60% {
+      opacity: 1;
+    }
+    61%, 100% {
+      opacity: 0.2;
+    }
+  }
+</style>

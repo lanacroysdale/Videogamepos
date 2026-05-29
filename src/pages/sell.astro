@@ -1,0 +1,137 @@
+---
+import Layout from "../layouts/Layout.astro";
+import Steps from "../components/Steps.astro";
+import ContactForm from "../components/ContactForm.astro";
+import { SITE } from "../consts";
+
+const faqs = [
+  {
+    q: "What do you buy?",
+    a: "Video games, consoles, controllers, and accessories across every platform — retro to current-gen. Loose carts, complete-in-box, bundles, and full collections all welcome.",
+  },
+  {
+    q: "How do I get an offer?",
+    a: `Fill out the form below (or bring your items into the shop). ${SITE.owner} reviews what you have against real market data and replies with a fair offer, usually within a day.`,
+  },
+  {
+    q: "Cash or store credit?",
+    a: "Your choice. Take cash on the spot, or choose store credit for a little extra value toward your next pickup.",
+  },
+  {
+    q: "Do I need photos?",
+    a: `Photos aren't required, but they help us make the most accurate offer. Add a link in the form or email pictures to ${SITE.email}.`,
+  },
+];
+---
+
+<Layout
+  title="Sell Your Games"
+  description={`Sell or trade your video games, consoles, and accessories to ${SITE.name} in ${SITE.location}. Get a fair offer in cash or store credit.`}
+>
+  <section class="section--tight sell-hero">
+    <div class="container">
+      <span class="eyebrow">Sell · Trade · Cash out</span>
+      <h1>Turn your games into <span class="grad">cash or credit</span></h1>
+      <p class="lead">
+        Got games gathering dust? {SITE.owner} will give you a fair, honest offer
+        on your collection — big or small, retro or brand new.
+      </p>
+    </div>
+  </section>
+
+  <section class="section--tight">
+    <div class="container">
+      <Steps />
+    </div>
+  </section>
+
+  <section class="section--tight" id="contact">
+    <div class="container narrow">
+      <div class="section-head center">
+        <span class="eyebrow">Tell us what you&rsquo;ve got</span>
+        <h2>Request your offer</h2>
+      </div>
+      <ContactForm />
+    </div>
+  </section>
+
+  <section class="section" id="faq">
+    <div class="container narrow">
+      <div class="section-head center">
+        <span class="eyebrow">Good to know</span>
+        <h2>Frequently asked</h2>
+      </div>
+      <div class="faq">
+        {
+          faqs.map((f) => (
+            <details class="faq-item">
+              <summary>{f.q}</summary>
+              <p>{f.a}</p>
+            </details>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+</Layout>
+
+<style>
+  .sell-hero {
+    padding-top: clamp(2.5rem, 2rem + 3vw, 4.5rem);
+  }
+  .sell-hero h1 {
+    margin: 0.6rem 0 1rem;
+    max-width: 16ch;
+  }
+  .sell-hero .lead {
+    max-width: 52ch;
+  }
+  .grad {
+    background: linear-gradient(120deg, var(--cyan), var(--magenta) 80%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  .narrow {
+    max-width: 760px;
+  }
+
+  .faq {
+    display: grid;
+    gap: 0.75rem;
+  }
+  .faq-item {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: rgba(255, 255, 255, 0.03);
+    padding: 0 1.1rem;
+  }
+  .faq-item summary {
+    cursor: pointer;
+    font-weight: 700;
+    padding: 1rem 0;
+    list-style: none;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+  }
+  .faq-item summary::-webkit-details-marker {
+    display: none;
+  }
+  .faq-item summary::after {
+    content: "+";
+    color: var(--cyan);
+    font-size: 1.4rem;
+    font-weight: 700;
+    transition: transform 0.2s ease;
+  }
+  .faq-item[open] summary::after {
+    transform: rotate(45deg);
+  }
+  .faq-item p {
+    padding-bottom: 1.1rem;
+    margin: 0;
+  }
+</style>

@@ -1,0 +1,306 @@
+---
+import { CONDITIONS, SITE } from "../consts";
+
+// The no-JS fallback returns the visitor to this page with ?sent=1 / ?error=1.
+const redirectTo = Astro.url.pathname;
+const sent = Astro.url.searchParams.get("sent") === "1";
+const errored = Astro.url.searchParams.get("error") === "1";
+---
+
+<div class="form-card panel" id="contact-form">
+  {sent && (
+    <div class="form-banner success" role="status">
+      🎉 Thanks! Your message is on its way to {SITE.owner}. We&rsquo;ll be in touch soon.
+    </div>
+  )}
+  {errored && (
+    <div class="form-banner error" role="alert">
+      Something went wrong sending your message. Please email{" "}
+      <a href={`mailto:${SITE.email}`}>{SITE.email}</a> and we&rsquo;ll sort it out.
+    </div>
+  )}
+
+  <form
+    data-contact-form
+    action="/api/contact"
+    method="POST"
+    novalidate
+  >
+    <input type="hidden" name="_redirect" value={redirectTo} />
+
+    {/* Honeypot — hidden from people, catches bots. Leave it empty. */}
+    <div class="hp" aria-hidden="true">
+      <label>Company<input type="text" name="company" tabindex="-1" autocomplete="off" /></label>
+    </div>
+
+    <div class="row">
+      <div class="field">
+        <label for="cf-name">Your name <span class="req">*</span></label>
+        <input id="cf-name" name="name" type="text" required autocomplete="name" placeholder="Jane Gamer" />
+      </div>
+      <div class="field">
+        <label for="cf-email">Email <span class="req">*</span></label>
+        <input id="cf-email" name="email" type="email" required autocomplete="email" placeholder="you@email.com" />
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="field">
+        <label for="cf-phone">Phone <span class="opt">(optional)</span></label>
+        <input id="cf-phone" name="phone" type="tel" autocomplete="tel" placeholder="(555) 123-4567" />
+      </div>
+      <div class="field">
+        <label for="cf-condition">Overall condition</label>
+        <select id="cf-condition" name="condition">
+          {CONDITIONS.map((c) => <option value={c}>{c}</option>)}
+        </select>
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="cf-items">What are you selling? <span class="req">*</span></label>
+      <textarea
+        id="cf-items"
+        name="items"
+        rows="5"
+        required
+        placeholder="List the games, consoles, and accessories you'd like to sell — titles, platforms, and rough quantities all help. e.g. 'Super Mario 64 (N64, cart only), PS2 slim w/ 2 controllers, ~30 mixed GameCube games.'"
+      ></textarea>
+    </div>
+
+    <div class="field">
+      <label for="cf-photos">Links to photos <span class="opt">(optional)</span></label>
+      <input id="cf-photos" name="photos" type="text" placeholder="Paste an album/Drive link — or just email photos to us" />
+      <p class="hint">Photos help us make the best offer. You can also email pictures to {SITE.email}.</p>
+    </div>
+
+    <p class="form-status" role="status" aria-live="polite"></p>
+
+    <button type="submit" class="btn btn-primary btn-block submit">
+      Get my offer →
+    </button>
+    <p class="fineprint">
+      We&rsquo;ll only use your details to respond about buying your games. No spam, ever.
+    </p>
+  </form>
+
+  <div class="form-success" hidden>
+    <div class="check" aria-hidden="true">✓</div>
+    <h3>Message sent!</h3>
+    <p>Thanks for reaching out — {SITE.owner} will review what you&rsquo;ve got and get back to you soon with an offer.</p>
+  </div>
+</div>
+
+<style>
+  .form-card {
+    padding: clamp(1.25rem, 1rem + 1.5vw, 2rem);
+  }
+
+  .hp {
+    position: absolute;
+    left: -9999px;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+  }
+
+  .row {
+    display: grid;
+    gap: 1rem;
+  }
+  @media (min-width: 560px) {
+    .row {
+      grid-template-columns: 1fr 1fr;
+    }
+  }
+
+  .field {
+    display: grid;
+    gap: 0.4rem;
+    margin-bottom: 1rem;
+  }
+  .field label {
+    font-weight: 600;
+    font-size: 0.92rem;
+  }
+  .req {
+    color: var(--magenta);
+  }
+  .opt {
+    color: var(--muted-2);
+    font-weight: 500;
+  }
+
+  input,
+  textarea,
+  select {
+    width: 100%;
+    padding: 0.75rem 0.9rem;
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid var(--border-strong);
+    border-radius: 10px;
+    color: var(--text);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--muted-2);
+  }
+  input:focus,
+  textarea:focus,
+  select:focus {
+    outline: none;
+    border-color: var(--cyan);
+    box-shadow: 0 0 0 3px rgba(44, 230, 224, 0.18);
+  }
+  textarea {
+    resize: vertical;
+    min-height: 120px;
+  }
+  select {
+    appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+      linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+    background-position: calc(100% - 18px) 1.15rem, calc(100% - 13px) 1.15rem;
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
+  }
+
+  .hint,
+  .fineprint {
+    font-size: 0.82rem;
+    color: var(--muted-2);
+    margin: 0;
+  }
+  .fineprint {
+    text-align: center;
+    margin-top: 0.8rem;
+  }
+
+  .submit {
+    margin-top: 0.4rem;
+  }
+  .submit[aria-busy="true"] {
+    opacity: 0.7;
+    cursor: progress;
+  }
+
+  .form-status:empty {
+    display: none;
+  }
+  .form-status {
+    margin: 0.25rem 0 0.75rem;
+    font-weight: 600;
+    font-size: 0.9rem;
+  }
+  .form-status[data-state="error"] {
+    color: #ff9aa2;
+  }
+
+  .form-banner {
+    border-radius: 12px;
+    padding: 0.9rem 1.1rem;
+    margin-bottom: 1.25rem;
+    font-weight: 600;
+    border: 1px solid var(--border-strong);
+  }
+  .form-banner.success {
+    background: rgba(128, 255, 114, 0.1);
+    border-color: rgba(128, 255, 114, 0.4);
+  }
+  .form-banner.error {
+    background: rgba(255, 73, 208, 0.1);
+    border-color: rgba(255, 73, 208, 0.4);
+  }
+
+  .form-success {
+    text-align: center;
+    padding: 1rem 0.5rem;
+  }
+  .form-success .check {
+    width: 64px;
+    height: 64px;
+    margin: 0 auto 1rem;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    font-size: 2rem;
+    font-weight: 800;
+    color: var(--accent-ink);
+    background: linear-gradient(135deg, var(--green), var(--cyan));
+    box-shadow: var(--glow-cyan);
+  }
+  .form-success h3 {
+    margin-bottom: 0.5rem;
+  }
+</style>
+
+<script>
+  document.querySelectorAll<HTMLFormElement>("form[data-contact-form]").forEach((form) => {
+    const card = form.closest(".form-card");
+    const status = form.querySelector<HTMLParagraphElement>(".form-status");
+    const submit = form.querySelector<HTMLButtonElement>(".submit");
+    const success = card?.querySelector<HTMLElement>(".form-success");
+
+    const setStatus = (msg: string, state: "error" | "info" = "info") => {
+      if (!status) return;
+      status.textContent = msg;
+      status.dataset.state = state;
+    };
+
+    form.addEventListener("submit", async (event) => {
+      // Bot trap: if the honeypot is filled, pretend success and bail.
+      const honey = form.querySelector<HTMLInputElement>('input[name="company"]');
+      if (honey?.value) {
+        event.preventDefault();
+        return;
+      }
+
+      if (!form.checkValidity()) {
+        // Let the browser show its native validation UI.
+        return;
+      }
+
+      event.preventDefault();
+      setStatus("");
+      submit?.setAttribute("aria-busy", "true");
+      submit?.setAttribute("disabled", "true");
+      const original = submit?.textContent ?? "";
+      if (submit) submit.textContent = "Sending…";
+
+      try {
+        const res = await fetch(form.action, {
+          method: "POST",
+          headers: { Accept: "application/json", "X-Requested-With": "fetch" },
+          body: new FormData(form),
+        });
+        const data = await res.json().catch(() => ({}));
+
+        if (res.ok && data.ok) {
+          if (success && form) {
+            form.hidden = true;
+            success.hidden = false;
+            success.scrollIntoView({ behavior: "smooth", block: "center" });
+          } else {
+            setStatus("Thanks! Your message has been sent.");
+          }
+          return;
+        }
+        setStatus(
+          data.error ||
+            "Sorry, we couldn't send that. Please try again or email us directly.",
+          "error",
+        );
+      } catch {
+        setStatus(
+          "Network error — please check your connection and try again.",
+          "error",
+        );
+      } finally {
+        submit?.removeAttribute("aria-busy");
+        submit?.removeAttribute("disabled");
+        if (submit) submit.textContent = original;
+      }
+    });
+  });
+</script>

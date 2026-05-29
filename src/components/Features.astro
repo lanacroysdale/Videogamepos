@@ -1,0 +1,57 @@
+---
+const features = [
+  {
+    icon: "💵",
+    title: "Fair, honest offers",
+    body: "Offers backed by real market data and what items actually sell for — no lowballing.",
+  },
+  {
+    icon: "🕹️",
+    title: "Every platform, every era",
+    body: "Retro to current-gen: NES, SNES, N64, PlayStation, Xbox, Nintendo Switch, handhelds, and accessories.",
+  },
+  {
+    icon: "🔁",
+    title: "Cash or store credit",
+    body: "Take cash on the spot or boost your offer with store credit toward your next pickup.",
+  },
+  {
+    icon: "📍",
+    title: "Local & friendly",
+    body: "A Portland shop run by gamers. Bring your collection in or reach out online — Adam will take care of you.",
+  },
+];
+---
+
+<section class="section" id="why">
+  <div class="container">
+    <div class="section-head center">
+      <span class="eyebrow">Why Time Lag</span>
+      <h2>Trade in with people who get it</h2>
+      <p class="lead">
+        We make selling your games simple, fair, and fast.
+      </p>
+    </div>
+
+    <div class="grid cols-2 cols-4">
+      {
+        features.map((f) => (
+          <article class="card card--hover">
+            <span class="badge" aria-hidden="true">{f.icon}</span>
+            <h3>{f.title}</h3>
+            <p>{f.body}</p>
+          </article>
+        ))
+      }
+    </div>
+  </div>
+</section>
+
+<style>
+  .card h3 {
+    margin: 0.9rem 0 0.4rem;
+  }
+  .card p {
+    font-size: 0.95rem;
+  }
+</style>

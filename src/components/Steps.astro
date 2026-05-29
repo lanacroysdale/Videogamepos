@@ -1,0 +1,73 @@
+---
+import { SITE } from "../consts";
+
+const steps = [
+  {
+    n: "01",
+    title: "Tell us what you've got",
+    body: "Fill out the form with your games, consoles, and accessories — or just bring them into the shop.",
+  },
+  {
+    n: "02",
+    title: `${SITE.owner} makes you an offer`,
+    body: "We check real market and sales data to give you a fair, honest offer — usually within a day.",
+  },
+  {
+    n: "03",
+    title: "Get paid your way",
+    body: "Accept and walk away with cash, or take store credit and put it toward your next find.",
+  },
+];
+---
+
+<ol class="steps">
+  {
+    steps.map((s) => (
+      <li class="step">
+        <span class="step-n">{s.n}</span>
+        <div>
+          <h3>{s.title}</h3>
+          <p>{s.body}</p>
+        </div>
+      </li>
+    ))
+  }
+</ol>
+
+<style>
+  .steps {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    gap: 1rem;
+  }
+  .step {
+    display: flex;
+    gap: 1rem;
+    align-items: flex-start;
+    padding: 1.1rem 1.2rem;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+  .step-n {
+    font-family: var(--font-mono);
+    font-weight: 800;
+    font-size: 1.05rem;
+    color: var(--cyan);
+    background: rgba(44, 230, 224, 0.1);
+    border: 1px solid rgba(44, 230, 224, 0.3);
+    border-radius: 10px;
+    padding: 0.35rem 0.6rem;
+    flex: none;
+  }
+  .step h3 {
+    font-size: 1.05rem;
+    margin-bottom: 0.25rem;
+  }
+  .step p {
+    font-size: 0.93rem;
+    margin: 0;
+  }
+</style>

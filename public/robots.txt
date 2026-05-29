@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+
+# TODO: update the host below once your real domain is live.
+Sitemap: https://timelaggaming.com/sitemap-index.xml

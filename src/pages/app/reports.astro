@@ -1,0 +1,115 @@
+---
+export const prerender = false;
+
+import AppLayout from "../../layouts/AppLayout.astro";
+import { fmt } from "../../lib/money";
+
+const supabase = Astro.locals.supabase;
+
+const days = [7, 14, 30].includes(Number(Astro.url.searchParams.get("days")))
+  ? Number(Astro.url.searchParams.get("days"))
+  : 14;
+const start = new Date();
+start.setDate(start.getDate() - days);
+start.setHours(0, 0, 0, 0);
+const startDate = start.toISOString().slice(0, 10);
+
+const { data: rows } = await supabase
+  .from("sales_report_items")
+  .select("transaction_id, hour_of_day, employee_name, category_name, net_cents")
+  .gte("sale_date", startDate);
+
+const items = rows ?? [];
+const totalNet = items.reduce((s, r) => s + (r.net_cents ?? 0), 0);
+const txnCount = new Set(items.map((r) => r.transaction_id)).size;
+const avgSale = txnCount ? Math.round(totalNet / txnCount) : 0;
+
+// Busy hours (store hours 10:00–20:00).
+const HOURS = Array.from({ length: 11 }, (_, i) => i + 10);
+const byHour = new Map<number, number>(HOURS.map((h) => [h, 0]));
+for (const r of items) if (byHour.has(r.hour_of_day)) byHour.set(r.hour_of_day, byHour.get(r.hour_of_day)! + r.net_cents);
+const maxHour = Math.max(1, ...byHour.values());
+
+function rollup(key: "employee_name" | "category_name") {
+  const m = new Map<string, number>();
+  for (const r of items) {
+    const k = (r as any)[key] ?? "—";
+    m.set(k, (m.get(k) ?? 0) + r.net_cents);
+  }
+  return [...m.entries()].sort((a, b) => b[1] - a[1]);
+}
+const byEmployee = rollup("employee_name");
+const byCategory = rollup("category_name");
+const maxEmp = Math.max(1, ...byEmployee.map((e) => e[1]));
+const maxCat = Math.max(1, ...byCategory.map((e) => e[1]));
+
+const hourLabel = (h: number) => (h === 12 ? "12p" : h < 12 ? `${h}a` : `${h - 12}p`);
+const ranges = [7, 14, 30];
+---
+
+<AppLayout title="Reports" active="reports">
+  <div slot="actions">
+    <div style="display:flex;gap:0.4rem;">
+      {ranges.map((d) => (
+        <a href={`/app/reports?days=${d}`} class={`chip ${d === days ? "" : ""}`} style={d === days ? "border-color:var(--cyan);color:var(--cyan);" : ""}>
+          {d}d
+        </a>
+      ))}
+    </div>
+  </div>
+
+  <p class="muted" style="margin-bottom:1.25rem;">Completed sales over the last {days} days.</p>
+
+  <div class="pos-grid cards" style="margin-bottom:1.25rem;">
+    <div class="pos-panel stat"><span class="n">{fmt(totalNet)}</span><span class="l">Net sales</span></div>
+    <div class="pos-panel stat"><span class="n">{txnCount}</span><span class="l">Transactions</span></div>
+    <div class="pos-panel stat"><span class="n">{fmt(avgSale)}</span><span class="l">Avg. sale</span></div>
+    <div class="pos-panel stat"><span class="n">{items.length}</span><span class="l">Line items sold</span></div>
+  </div>
+
+  <div class="pos-panel" style="margin-bottom:1rem;">
+    <h2>Busiest hours <span class="sub">— sales by hour of day</span></h2>
+    {totalNet === 0 ? (
+      <p class="empty">No sales in this period.</p>
+    ) : (
+      <div class="bars">
+        {HOURS.map((h) => {
+          const v = byHour.get(h)!;
+          return (
+            <div class="bar-col">
+              <span class="val">{v ? "$" + Math.round(v / 100) : ""}</span>
+              <div class="bar" style={`height:${Math.round((v / maxHour) * 100)}%`}></div>
+              <span class="lab">{hourLabel(h)}</span>
+            </div>
+          );
+        })}
+      </div>
+    )}
+  </div>
+
+  <div class="pos-grid two">
+    <div class="pos-panel">
+      <h2>Sales by employee</h2>
+      {byEmployee.length === 0 && <p class="empty">No data.</p>}
+      {byEmployee.map(([name, val]) => (
+        <div class="hbar-row">
+          <span>{name}</span>
+          <div class="hbar-track"><div class="hbar-fill" style={`width:${Math.round((val / maxEmp) * 100)}%`}></div></div>
+          <span class="num">{fmt(val)}</span>
+        </div>
+      ))}
+    </div>
+
+    <div class="pos-panel">
+      <h2>Sales by category</h2>
+      {byCategory.length === 0 && <p class="empty">No data.</p>}
+      {byCategory.map(([name, val]) => (
+        <div class="hbar-row">
+          <span>{name}</span>
+          <div class="hbar-track"><div class="hbar-fill" style={`width:${Math.round((val / maxCat) * 100)}%`}></div></div>
+          <span class="num">{fmt(val)}</span>
+        </div>
+      ))}
+    </div>
+  </div>
+</AppLayout>

@@ -1,0 +1,151 @@
+---
+export const prerender = false;
+
+import AppLayout from "../../layouts/AppLayout.astro";
+import { fmt, fullName } from "../../lib/money";
+
+const supabase = Astro.locals.supabase;
+const user = Astro.locals.user!;
+const profile = Astro.locals.profile;
+const isCashier = profile?.role === "cashier";
+const denied = Astro.url.searchParams.get("denied");
+
+// Open transactions (drafts). Cashiers see only their own.
+let openQuery = supabase
+  .from("transactions")
+  .select("id, human_id, total_cents, created_at, type, customer:customers(first_name,last_name), employee:profiles(full_name), transaction_items(id)")
+  .eq("status", "open")
+  .order("created_at", { ascending: false });
+if (isCashier) openQuery = openQuery.eq("employee_id", user.id);
+const { data: openTx } = await openQuery;
+
+// Today's completed sales.
+const startOfToday = new Date();
+startOfToday.setHours(0, 0, 0, 0);
+const { data: todayTx } = await supabase
+  .from("transactions")
+  .select("total_cents")
+  .eq("status", "completed")
+  .gte("completed_at", startOfToday.toISOString());
+const todayTotal = (todayTx ?? []).reduce((s, t) => s + (t.total_cents ?? 0), 0);
+
+// Recent customers + total count.
+const { data: recent } = await supabase
+  .from("customers")
+  .select("*")
+  .order("created_at", { ascending: false })
+  .limit(6);
+const { count: custCount } = await supabase
+  .from("customers")
+  .select("*", { count: "exact", head: true });
+
+const firstName = (profile?.full_name ?? "there").split(" ")[0];
+---
+
+<AppLayout title="Dashboard" active="dashboard">
+  <div slot="actions">
+    <a href="/app/checkout" class="btn btn-primary btn-sm">＋ Quick sale</a>
+  </div>
+
+  {denied === "reports" && (
+    <div class="notice">Reports are available to managers and owners only.</div>
+  )}
+
+  <p class="muted" style="margin-bottom:1.25rem;">Welcome back, {firstName}. Here's what's happening today.</p>
+
+  <!-- Quick stats -->
+  <div class="pos-grid cards" style="margin-bottom:1.25rem;">
+    <div class="pos-panel stat"><span class="n">{fmt(todayTotal)}</span><span class="l">Sales today</span></div>
+    <div class="pos-panel stat"><span class="n">{todayTx?.length ?? 0}</span><span class="l">Transactions today</span></div>
+    <div class="pos-panel stat"><span class="n">{openTx?.length ?? 0}</span><span class="l">Open transactions</span></div>
+    <div class="pos-panel stat"><span class="n">{custCount ?? 0}</span><span class="l">Customers</span></div>
+  </div>
+
+  <div class="pos-grid two">
+    <!-- Customer search -->
+    <div class="pos-panel">
+      <h2>Find a customer</h2>
+      <div class="search">
+        <span class="mag" aria-hidden="true">🔎</span>
+        <input id="cust-search" type="search" placeholder="Search name, email, or phone…" autocomplete="off" />
+      </div>
+      <div class="results" id="cust-results">
+        <p class="sub" style="margin-top:0.6rem;">Recent customers</p>
+        {recent?.map((c) => (
+          <a class="result-row" href={`/app/checkout?customer=${c.id}`}>
+            <span>
+              <strong>{fullName(c)}</strong>
+              <span class="meta" style="display:block;color:var(--muted-2);font-size:0.82rem;">
+                {c.email ?? c.phone ?? "—"}
+              </span>
+            </span>
+            <span style="text-align:right;">
+              {c.membership !== "standard" && <span class={`pill ${c.membership === "vip" ? "magenta" : "cyan"}`}>{c.membership}</span>}
+              <span class="meta" style="display:block;color:var(--muted-2);font-size:0.8rem;">{fmt(c.store_credit_cents)} credit</span>
+            </span>
+          </a>
+        ))}
+      </div>
+    </div>
+
+    <!-- Open transactions + quick actions -->
+    <div style="display:flex;flex-direction:column;gap:1rem;">
+      <div class="pos-panel">
+        <h2>Open transactions</h2>
+        {(!openTx || openTx.length === 0) && <p class="empty">No suspended orders. Nice and tidy.</p>}
+        {openTx && openTx.length > 0 && (
+          <table class="tbl">
+            <thead><tr><th>#</th><th>Customer</th><th>Items</th><th class="num">Total</th></tr></thead>
+            <tbody>
+              {openTx.map((t: any) => (
+                <tr>
+                  <td>#{t.human_id}</td>
+                  <td>{t.customer ? fullName(t.customer) : <span class="muted">Walk-in</span>}{" "}
+                    {t.type === "trade_in" && <span class="pill cyan">trade-in</span>}</td>
+                  <td>{t.transaction_items?.length ?? 0}</td>
+                  <td class="num">{fmt(t.total_cents)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div class="pos-panel">
+        <h2>Quick actions</h2>
+        <div style="display:flex;flex-wrap:wrap;gap:0.6rem;">
+          <a href="/app/checkout" class="btn btn-primary btn-sm">🧾 New sale</a>
+          <a href="/app/trade-in" class="btn btn-ghost btn-sm">🔁 Trade-in / buy</a>
+          {!isCashier && <a href="/app/reports" class="btn btn-ghost btn-sm">📊 Reports</a>}
+        </div>
+      </div>
+    </div>
+  </div>
+</AppLayout>
+
+<script>
+  const input = document.getElementById("cust-search") as HTMLInputElement;
+  const results = document.getElementById("cust-results") as HTMLElement;
+  const recentHtml = results.innerHTML;
+  let timer: ReturnType<typeof setTimeout>;
+
+  const money = (c: number) => (c / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
+  const esc = (s: string) => s.replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[m] as string);
+
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    const q = input.value.trim();
+    if (!q) { results.innerHTML = recentHtml; return; }
+    timer = setTimeout(async () => {
+      const res = await fetch(`/api/pos/customers?q=${encodeURIComponent(q)}`);
+      const { results: rows = [] } = await res.json();
+      if (!rows.length) { results.innerHTML = `<p class="empty">No customers match “${esc(q)}”.</p>`; return; }
+      results.innerHTML = rows.map((c: any) => `
+        <a class="result-row" href="/app/checkout?customer=${c.id}">
+          <span><strong>${esc(c.first_name)} ${esc(c.last_name)}</strong>
+            <span class="meta" style="display:block;color:var(--muted-2);font-size:.82rem;">${esc(c.email || c.phone || "—")}</span></span>
+          <span class="meta" style="color:var(--muted-2);font-size:.8rem;">${money(c.store_credit_cents)} credit</span>
+        </a>`).join("");
+    }, 180);
+  });
+</script>
