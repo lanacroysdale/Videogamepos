@@ -1,19 +1,15 @@
 ---
-import { NAV, SITE } from "../consts";
+import { NAV, SITE, FIND_US_HREF } from "../consts";
+import Logo from "./Logo.astro";
 ---
 
 <header class="site-header">
   <div class="container bar">
     <a href="/" class="brand" aria-label={`${SITE.name} home`}>
-      <span class="brand-mark" aria-hidden="true">
-        <svg viewBox="0 0 32 32" width="28" height="28" fill="none">
-          <rect x="1" y="9" width="30" height="16" rx="8" stroke="currentColor" stroke-width="2" />
-          <path d="M8 14v6M5 17h6" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-          <circle cx="22" cy="15.5" r="1.8" fill="currentColor" />
-          <circle cx="25.5" cy="19" r="1.8" fill="currentColor" />
-        </svg>
+      <Logo size={38} />
+      <span class="brand-text">
+        TIMELAG<span class="brand-text-2"> VIDEO GAMES</span>
       </span>
-      <span class="brand-text">Time&nbsp;Lag<span class="brand-text-2"> Gaming</span></span>
     </a>
 
     <button
@@ -36,7 +32,15 @@ import { NAV, SITE } from "../consts";
           ))
         }
       </ul>
-      <a href="/sell" class="btn btn-primary nav-cta">Sell Your Games</a>
+      <a href={FIND_US_HREF} class="tl-btn tl-btn--dark find-us">
+        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+          <path
+            fill="currentColor"
+            d="M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7Zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5Z"
+          ></path>
+        </svg>
+        Find Us
+      </a>
     </nav>
   </div>
 </header>
@@ -46,9 +50,9 @@ import { NAV, SITE } from "../consts";
     position: sticky;
     top: 0;
     z-index: 50;
-    backdrop-filter: blur(12px);
-    background: color-mix(in srgb, var(--bg) 78%, transparent);
-    border-bottom: 1px solid var(--border);
+    background: linear-gradient(100deg, var(--orange-hd-1) 0%, var(--orange-hd-2) 100%);
+    border-bottom: 1px solid rgba(60, 30, 12, 0.25);
+    box-shadow: 0 10px 30px -22px rgba(0, 0, 0, 0.9);
   }
 
   .bar {
@@ -56,97 +60,111 @@ import { NAV, SITE } from "../consts";
     align-items: center;
     justify-content: space-between;
     gap: 1rem;
-    height: 68px;
+    height: 96px;
   }
 
   .brand {
     display: inline-flex;
     align-items: center;
-    gap: 0.6rem;
-    color: var(--text);
-    font-family: var(--font-mono);
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    font-size: 0.98rem;
+    gap: 0.7rem;
+    color: #1d120a;
   }
   .brand:hover {
     text-decoration: none;
   }
-  .brand-mark {
-    color: var(--cyan);
-    display: grid;
-    place-items: center;
-    filter: drop-shadow(0 0 8px rgba(44, 230, 224, 0.5));
+  .brand-text {
+    font-family: var(--font-cond);
+    font-weight: 700;
+    font-style: italic;
+    letter-spacing: 0.01em;
+    text-transform: uppercase;
+    font-size: 1.5rem;
+    line-height: 1;
   }
   .brand-text-2 {
-    color: var(--muted);
+    color: #3c2414;
+    font-weight: 600;
   }
 
   .nav {
     display: flex;
     align-items: center;
-    gap: 1.75rem;
+    gap: 2rem;
   }
   .nav ul {
     display: flex;
     align-items: center;
-    gap: 1.5rem;
+    gap: 1.9rem;
     list-style: none;
     padding: 0;
   }
   .nav a {
-    color: var(--muted);
-    font-weight: 600;
-    font-size: 0.95rem;
-    transition: color 0.15s ease;
+    color: #1d120a;
+    font-family: var(--font-cond);
+    font-weight: 700;
+    font-style: italic;
+    font-size: 1.06rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    transition: opacity 0.15s ease;
   }
   .nav a:hover {
-    color: var(--text);
+    opacity: 0.65;
     text-decoration: none;
   }
-  .nav-cta {
-    padding: 0.6rem 1.1rem;
-    font-size: 0.9rem;
+
+  .find-us {
+    padding: 0.7rem 1.25rem;
+    font-size: 0.98rem;
+    font-style: italic;
+  }
+  .find-us svg {
+    margin-right: 0.1rem;
   }
 
+  /* ---------- Mobile ---------- */
   .nav-toggle {
     display: none;
     flex-direction: column;
     gap: 5px;
-    width: 44px;
-    height: 44px;
+    width: 46px;
+    height: 46px;
     align-items: center;
     justify-content: center;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid var(--border-strong);
+    background: rgba(24, 17, 11, 0.14);
+    border: 1px solid rgba(24, 17, 11, 0.3);
     border-radius: 10px;
     cursor: pointer;
   }
   .nav-toggle span {
     display: block;
-    width: 20px;
+    width: 22px;
     height: 2px;
-    background: var(--text);
+    background: #1d120a;
     border-radius: 2px;
     transition: transform 0.2s ease, opacity 0.2s ease;
   }
 
-  @media (max-width: 860px) {
+  @media (max-width: 900px) {
+    .bar {
+      height: 80px;
+    }
+    .brand-text {
+      font-size: 1.3rem;
+    }
     .nav-toggle {
       display: flex;
     }
     .nav {
       position: absolute;
-      inset: 68px 0 auto 0;
+      inset: 80px 0 auto 0;
       flex-direction: column;
       align-items: stretch;
       gap: 0.25rem;
       padding: 1rem clamp(1.1rem, 0.6rem + 2vw, 2rem) 1.5rem;
-      background: color-mix(in srgb, var(--bg) 96%, transparent);
-      border-bottom: 1px solid var(--border);
-      box-shadow: var(--shadow);
-      transform-origin: top;
+      background: linear-gradient(180deg, var(--orange-hd-1), #b5512c);
+      border-bottom: 1px solid rgba(60, 30, 12, 0.3);
+      box-shadow: 0 20px 40px -24px rgba(0, 0, 0, 0.9);
       display: none;
     }
     .nav[data-open="true"] {
@@ -160,13 +178,13 @@ import { NAV, SITE } from "../consts";
     .nav li a {
       display: block;
       padding: 0.85rem 0.25rem;
-      border-bottom: 1px solid var(--border);
-      font-size: 1.05rem;
+      border-bottom: 1px solid rgba(24, 17, 11, 0.2);
+      font-size: 1.15rem;
+      color: #fdf3e7;
     }
-    .nav-cta {
-      margin-top: 0.85rem;
-      padding: 0.85rem 1.1rem;
-      font-size: 1rem;
+    .find-us {
+      margin-top: 0.9rem;
+      justify-content: center;
     }
     .nav-toggle[aria-expanded="true"] span:nth-child(1) {
       transform: translateY(7px) rotate(45deg);
@@ -194,13 +212,11 @@ import { NAV, SITE } from "../consts";
       setOpen(toggle.getAttribute("aria-expanded") !== "true");
     });
 
-    // Close the menu after tapping a link.
     nav.querySelectorAll("a").forEach((link) => {
       link.addEventListener("click", () => setOpen(false));
     });
 
-    // Reset state when resizing back up to desktop.
-    const mq = window.matchMedia("(min-width: 861px)");
+    const mq = window.matchMedia("(min-width: 901px)");
     mq.addEventListener("change", (e) => {
       if (e.matches) setOpen(false);
     });

@@ -2,36 +2,31 @@
 import { EBAY } from "../consts";
 ---
 
-<section class="section" id="ebay">
-  <div class="container">
-    <div class="ebay-panel panel">
-      <div class="ebay-copy">
-        <span class="eyebrow">Shop online</span>
-        <h2>Browse our eBay store</h2>
+<section class="tl-band tl-band--angle-a store" id="store">
+  <div class="tl-band-inner">
+    <div class="container store-grid">
+      <div class="store-copy">
+        <span class="eyebrow eyebrow--ink">Shop online · In-store coming soon!</span>
+        <h2>Browse Our Curated Store</h2>
         <p class="lead">
-          Can&rsquo;t make it to Portland? Thousands of buyers trust our eBay
-          listings for graded retro titles, complete-in-box classics, consoles,
-          and hard-to-find accessories — all shipped fast with buyer protection.
+          Shop a hand-picked selection of Nintendo games, consoles, and
+          accessories — every item tested, refurbished, and shipped fast with
+          buyer protection.
         </p>
 
-        <div class="ebay-cta">
-          <a href={EBAY.storeUrl} class="btn btn-magenta" target="_blank" rel="noopener">
-            Visit our eBay store ↗
+        <div class="store-cta">
+          <a href={EBAY.storeUrl} class="tl-btn tl-btn--dark" target="_blank" rel="noopener">
+            Shop Our Curated Store Now <span class="arrow">↗️</span>
           </a>
-          <a href={EBAY.sellerSearchUrl} class="btn btn-ghost" target="_blank" rel="noopener">
-            See all listings
+          <a href={EBAY.sellerSearchUrl} class="tl-btn tl-btn--teal" target="_blank" rel="noopener">
+            See All Listings
           </a>
         </div>
 
         <div class="chips" aria-label="Popular categories on eBay">
           {
             EBAY.categories.map((cat) => (
-              <a
-                class="chip"
-                href={EBAY.storeUrl}
-                target="_blank"
-                rel="noopener"
-              >
+              <a class="tl-chip" href={EBAY.storeUrl} target="_blank" rel="noopener">
                 {cat}
               </a>
             ))
@@ -39,19 +34,48 @@ import { EBAY } from "../consts";
         </div>
       </div>
 
-      <div class="ebay-art" aria-hidden="true">
-        <div class="store-card">
-          <div class="store-head">
+      <div class="store-art" aria-hidden="true">
+        <div class="browser">
+          <div class="browser-head">
             <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-            <span class="store-url">ebay.com/str/…</span>
+            <span class="url">ebay.com/str/timelaggaming</span>
           </div>
-          <div class="store-body">
-            <div class="tile"></div>
-            <div class="tile"></div>
-            <div class="tile"></div>
-            <div class="tile"></div>
-            <div class="tile"></div>
-            <div class="tile"></div>
+          <div class="browser-body">
+            <div class="eb-banner">
+              <div class="eb-banner-text">
+                <strong>Hand-Picked Nintendo Games &amp; Consoles</strong>
+                <span>SNES · N64 · Game Boy · GameCube · Wii · Switch — region-free imports &amp; classics</span>
+              </div>
+              <div class="eb-banner-tiles">
+                {Array.from({ length: 7 }).map(() => <i></i>)}
+              </div>
+            </div>
+
+            <div class="eb-profile">
+              <span class="eb-avatar">TL</span>
+              <div class="eb-id">
+                <strong>TimeLag Gaming</strong>
+                <span>100% positive feedback · 1.6K items sold · 162 followers</span>
+              </div>
+              <span class="eb-actions">Share · Contact</span>
+            </div>
+
+            <div class="eb-tabs">
+              <span class="eb-cats">☰ Categories</span>
+              <span class="eb-tab is-on">Shop</span>
+              <span class="eb-tab">Sale</span>
+              <span class="eb-tab">About</span>
+              <span class="eb-tab">Feedback</span>
+              <span class="eb-search">🔍 Search all 473 items</span>
+            </div>
+
+            <p class="eb-feat">Featured categories</p>
+            <div class="eb-tiles">
+              <div class="eb-card"><span class="eb-thumb t1">🎮</span><b>Game Consoles</b><i>Video Game Consoles</i></div>
+              <div class="eb-card"><span class="eb-thumb t2">🕹️</span><b>Video Games</b><i>Video Games</i></div>
+              <div class="eb-card"><span class="eb-thumb t3">🎛️</span><b>Accessories</b><i>Video Game Accessories</i></div>
+              <div class="eb-card"><span class="eb-thumb t4">⭐</span><b>Collectibles</b><i>Collectibles</i></div>
+            </div>
           </div>
         </div>
       </div>
@@ -60,82 +84,223 @@ import { EBAY } from "../consts";
 </section>
 
 <style>
-  .ebay-panel {
+  .store-grid {
     display: grid;
-    gap: clamp(1.5rem, 1rem + 3vw, 3rem);
+    gap: clamp(2rem, 1rem + 4vw, 3.5rem);
     align-items: center;
-    padding: clamp(1.5rem, 1rem + 3vw, 3rem);
   }
-  @media (min-width: 900px) {
-    .ebay-panel {
-      grid-template-columns: 1.1fr 0.9fr;
+  @media (min-width: 940px) {
+    .store-grid {
+      grid-template-columns: 1fr 1fr;
     }
   }
 
-  .ebay-cta {
+  .store-copy h2 {
+    font-size: clamp(2rem, 1.4rem + 2.4vw, 3rem);
+    margin-bottom: 0.9rem;
+    color: var(--ink);
+  }
+  .store-copy .lead {
+    color: #3c2012;
+    max-width: 46ch;
+  }
+  .store-cta {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.8rem;
-    margin-top: 1.6rem;
+    gap: 0.9rem;
+    margin: 1.7rem 0 1.4rem;
+  }
+  .arrow {
+    font-size: 0.95em;
   }
   .chips {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.55rem;
-    margin-top: 1.6rem;
+    gap: 0.7rem;
+    max-width: 30rem;
   }
 
-  .ebay-art {
+  /* ---------- Browser mock ---------- */
+  .store-art {
     display: grid;
     place-items: center;
   }
-  .store-card {
-    width: min(100%, 380px);
-    border-radius: 16px;
+  .browser {
+    width: min(100%, 460px);
+    border-radius: 14px;
     overflow: hidden;
-    border: 1px solid var(--border-strong);
-    background: var(--bg-2);
-    box-shadow: var(--shadow);
+    background: #1e1e22;
+    box-shadow: 0 30px 60px -28px rgba(0, 0, 0, 0.8);
   }
-  .store-head {
+  .browser-head {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
-    padding: 0.7rem 0.9rem;
-    background: rgba(255, 255, 255, 0.04);
-    border-bottom: 1px solid var(--border);
+    gap: 0.45rem;
+    padding: 0.6rem 0.8rem;
+    background: #2a2a30;
   }
-  .store-head .dot {
-    width: 10px;
-    height: 10px;
+  .browser-head .dot {
+    width: 11px;
+    height: 11px;
     border-radius: 50%;
-    background: var(--muted-2);
   }
-  .store-head .dot:nth-child(1) { background: #ff5f57; }
-  .store-head .dot:nth-child(2) { background: #febc2e; }
-  .store-head .dot:nth-child(3) { background: #28c840; }
-  .store-url {
+  .browser-head .dot:nth-child(1) { background: #ff5f57; }
+  .browser-head .dot:nth-child(2) { background: #febc2e; }
+  .browser-head .dot:nth-child(3) { background: #28c840; }
+  .browser-head .url {
     margin-left: auto;
     font-family: var(--font-mono);
-    font-size: 0.75rem;
-    color: var(--muted);
+    font-size: 0.74rem;
+    color: #d7d2cc;
+    background: #1b1b1f;
+    padding: 0.2rem 0.7rem;
+    border-radius: 6px;
   }
-  .store-body {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 0.6rem;
-    padding: 0.9rem;
+  .browser-body {
+    background: #fff;
+    color: #20242b;
+    padding: 0.6rem;
+    font-size: 0.78rem;
   }
-  .tile {
-    aspect-ratio: 3 / 4;
+
+  .eb-banner {
     border-radius: 8px;
-    background: linear-gradient(160deg, rgba(44, 230, 224, 0.18), rgba(139, 92, 246, 0.18));
-    border: 1px solid var(--border);
+    padding: 0.7rem 0.85rem;
+    background: linear-gradient(110deg, #1b1340 0%, #3a1d57 60%, #6a2a6f 100%);
+    color: #fff;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
   }
-  .tile:nth-child(2n) {
-    background: linear-gradient(160deg, rgba(255, 73, 208, 0.18), rgba(139, 92, 246, 0.18));
+  .eb-banner-text strong {
+    color: #fff;
+    font-size: 0.92rem;
+    font-weight: 800;
   }
-  .tile:nth-child(3n) {
-    background: linear-gradient(160deg, rgba(128, 255, 114, 0.16), rgba(44, 230, 224, 0.16));
+  .eb-banner-text span {
+    display: block;
+    font-size: 0.66rem;
+    color: #d8cfe8;
+    margin-top: 0.15rem;
   }
+  .eb-banner-tiles {
+    display: flex;
+    gap: 0.3rem;
+  }
+  .eb-banner-tiles i {
+    flex: 1;
+    height: 24px;
+    border-radius: 4px;
+    background: linear-gradient(160deg, #2ce6e0, #8b5cf6);
+  }
+  .eb-banner-tiles i:nth-child(2n) { background: linear-gradient(160deg, #ff49d0, #8b5cf6); }
+  .eb-banner-tiles i:nth-child(3n) { background: linear-gradient(160deg, #ffd23f, #ff7a59); }
+  .eb-banner-tiles i:nth-child(5n) { background: linear-gradient(160deg, #80ff72, #2ce6e0); }
+
+  .eb-profile {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.6rem 0.2rem;
+    border-bottom: 1px solid #eee;
+  }
+  .eb-avatar {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: linear-gradient(135deg, #c2673a, #d59a64);
+    color: #fff;
+    font-family: var(--font-display);
+    font-weight: 800;
+    font-size: 0.72rem;
+    flex: none;
+  }
+  .eb-id strong {
+    display: block;
+    font-size: 0.84rem;
+    font-weight: 800;
+    color: #111;
+  }
+  .eb-id span {
+    font-size: 0.64rem;
+    color: #666;
+  }
+  .eb-actions {
+    margin-left: auto;
+    font-size: 0.64rem;
+    color: #3665c9;
+  }
+
+  .eb-tabs {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    padding: 0.55rem 0.2rem;
+    font-size: 0.68rem;
+    color: #444;
+    border-bottom: 1px solid #eee;
+    flex-wrap: wrap;
+  }
+  .eb-cats {
+    background: #f2f2f2;
+    border-radius: 20px;
+    padding: 0.2rem 0.6rem;
+  }
+  .eb-tab.is-on {
+    color: #111;
+    font-weight: 700;
+    border-bottom: 2px solid #111;
+  }
+  .eb-search {
+    margin-left: auto;
+    color: #888;
+    border: 1px solid #ddd;
+    border-radius: 20px;
+    padding: 0.2rem 0.6rem;
+  }
+
+  .eb-feat {
+    margin: 0.6rem 0.2rem 0.45rem;
+    font-weight: 800;
+    color: #111;
+    font-size: 0.78rem;
+  }
+  .eb-tiles {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.4rem;
+    padding-bottom: 0.2rem;
+  }
+  .eb-card b {
+    display: block;
+    font-size: 0.6rem;
+    color: #fff;
+    margin-top: -1rem;
+    position: relative;
+    text-align: center;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+    font-weight: 800;
+    letter-spacing: 0.02em;
+  }
+  .eb-card i {
+    display: block;
+    font-size: 0.56rem;
+    color: #666;
+    font-style: normal;
+    text-align: center;
+    margin-top: 0.55rem;
+  }
+  .eb-thumb {
+    display: grid;
+    place-items: center;
+    height: 50px;
+    border-radius: 6px;
+    font-size: 1.2rem;
+  }
+  .eb-thumb.t1 { background: linear-gradient(160deg, #3a2b1a, #6b4a2a); }
+  .eb-thumb.t2 { background: linear-gradient(160deg, #7a1f2b, #c23a2a); }
+  .eb-thumb.t3 { background: linear-gradient(160deg, #1f4a7a, #2a86c2); }
+  .eb-thumb.t4 { background: linear-gradient(160deg, #5a2a6f, #b03a8a); }
 </style>

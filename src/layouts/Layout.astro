@@ -1,5 +1,6 @@
 ---
 import "../styles/global.css";
+import "../styles/marketing.css";
 import Header from "../components/Header.astro";
 import Footer from "../components/Footer.astro";
 import { SITE } from "../consts";
@@ -51,7 +52,15 @@ const jsonLd = {
     <link rel="canonical" href={canonical} />
 
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="theme-color" content="#0a0913" />
+    <meta name="theme-color" content="#c2673a" />
+
+    <!-- Display + slab type for the marketing site -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@0,600;0,700;0,800;1,600;1,700&family=Barlow+Semi+Condensed:ital,wght@0,600;0,700;1,600;1,700&family=Roboto+Slab:wght@600;700;800&display=swap"
+    />
 
     <!-- Open Graph / social sharing -->
     <meta property="og:type" content="website" />
@@ -70,7 +79,7 @@ const jsonLd = {
       set:html={JSON.stringify(jsonLd)}
     />
   </head>
-  <body>
+  <body class="site">
     <a class="skip-link" href="#main">Skip to content</a>
     <Header />
     <main id="main">

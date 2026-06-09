@@ -1,13 +1,17 @@
 ---
-import { SITE, EBAY, NAV, YEAR } from "../consts";
+import { SITE, EBAY, NAV, YEAR, FIND_US_HREF } from "../consts";
+import Logo from "./Logo.astro";
 ---
 
 <footer class="site-footer">
   <div class="container">
     <div class="foot-grid">
       <div class="foot-brand">
-        <span class="brand-text">Time Lag Gaming</span>
-        <p>{SITE.tagline}</p>
+        <span class="brand-lockup">
+          <Logo size={44} />
+          <span class="brand-text">TIMELAG VIDEO GAMES</span>
+        </span>
+        <p>Buy. Sell. Chill. Curated retro &amp; modern games in {SITE.location}.</p>
         <p class="loc">📍 {SITE.location}</p>
       </div>
 
@@ -15,7 +19,8 @@ import { SITE, EBAY, NAV, YEAR } from "../consts";
         <h3>Explore</h3>
         <ul>
           {NAV.map((item) => <li><a href={item.href}>{item.label}</a></li>)}
-          <li><a href={EBAY.storeUrl} target="_blank" rel="noopener">Shop on eBay ↗</a></li>
+          <li><a href={FIND_US_HREF}>Find Us</a></li>
+          <li><a href={EBAY.storeUrl} target="_blank" rel="noopener">Shop on eBay ↗️</a></li>
         </ul>
       </div>
 
@@ -24,79 +29,88 @@ import { SITE, EBAY, NAV, YEAR } from "../consts";
         <ul>
           <li><a href={`mailto:${SITE.email}`}>{SITE.email}</a></li>
           <li><a href={SITE.phoneHref}>{SITE.phoneDisplay}</a></li>
-          <li><a href="/sell">Sell or trade your games</a></li>
+          <li><a href="/#sell">Sell or trade your games</a></li>
         </ul>
       </div>
     </div>
 
-    <hr class="divider" />
-
     <div class="foot-bottom">
       <p>© {YEAR} {SITE.name}. All rights reserved.</p>
-      <p class="built">Buy · Sell · Trade — {SITE.location}</p>
+      <p class="built">Buy · Sell · Chill — {SITE.location}</p>
     </div>
   </div>
 </footer>
 
 <style>
   .site-footer {
-    border-top: 1px solid var(--border);
-    background: linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.3));
-    padding-block: clamp(2.5rem, 2rem + 2vw, 4rem) 2rem;
-    margin-top: 2rem;
+    background: linear-gradient(105deg, #e6a6cc 0%, #b59ec4 45%, #8aa0bd 100%);
+    color: #2f2118;
+    padding-block: clamp(3rem, 2rem + 3vw, 4.5rem) 2rem;
   }
 
   .foot-grid {
     display: grid;
-    gap: 2rem;
+    gap: 2.5rem;
     grid-template-columns: 1fr;
   }
-  @media (min-width: 720px) {
+  @media (min-width: 760px) {
     .foot-grid {
       grid-template-columns: 1.6fr 1fr 1fr;
     }
   }
 
+  .brand-lockup {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.7rem;
+    color: #3a2a14;
+  }
   .brand-text {
-    font-family: var(--font-mono);
+    font-family: var(--font-cond);
+    font-style: italic;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--text);
-    font-size: 1.05rem;
+    letter-spacing: 0.02em;
+    color: #2a1a12;
+    font-size: 1.3rem;
   }
   .foot-brand p {
-    margin-top: 0.6rem;
-    max-width: 38ch;
+    margin-top: 1rem;
+    max-width: 34ch;
+    color: #43342a;
   }
   .foot-brand .loc {
-    color: var(--muted);
+    margin-top: 0.7rem;
+    color: #43342a;
   }
 
   .foot-col h3 {
-    font-size: 0.8rem;
-    text-transform: uppercase;
-    letter-spacing: 0.14em;
-    color: var(--muted-2);
-    margin-bottom: 0.9rem;
     font-family: var(--font-mono);
+    font-size: 0.82rem;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: #6b5546;
+    margin-bottom: 1.1rem;
   }
   .foot-col ul {
     list-style: none;
     padding: 0;
     display: grid;
-    gap: 0.6rem;
+    gap: 0.9rem;
   }
   .foot-col a {
-    color: var(--muted);
-    font-weight: 500;
+    color: #2f2118;
+    font-weight: 600;
+    font-size: 1.05rem;
   }
   .foot-col a:hover {
-    color: var(--cyan);
+    color: #000;
+    text-decoration: none;
+    opacity: 0.75;
   }
 
   .foot-bottom {
-    margin-top: 1.5rem;
+    margin-top: 2.5rem;
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem 1.5rem;
@@ -104,7 +118,7 @@ import { SITE, EBAY, NAV, YEAR } from "../consts";
     align-items: center;
   }
   .foot-bottom p {
-    font-size: 0.88rem;
-    color: var(--muted-2);
+    font-size: 0.92rem;
+    color: #5a4636;
   }
 </style>

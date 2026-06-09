@@ -10,11 +10,11 @@ export interface NavItem {
 }
 
 export const SITE = {
-  name: 'Time Lag Gaming',
-  shortName: 'Time Lag',
-  tagline: 'Buy. Sell. Trade. Retro and modern games in Portland.',
+  name: 'TimeLag Video Games',
+  shortName: 'TimeLag',
+  tagline: 'Buy. Sell. Chill. Curated retro & modern games in Portland, OR.',
   description:
-    'Time Lag Gaming buys, sells, and trades retro and modern video games, consoles, and accessories in Portland, OR. Shop our eBay store or sell your collection for fast cash or store credit.',
+    'TimeLag Video Games is Portland’s premier inclusive hub to shop, play, eat, and connect. Discover Japanese imports and classic collectibles, sell your games for cash, or level up in our chill lounge. Launching 2027 near PDX.',
 
   // TODO: update once your domain is registered (Cloudflare) and live on Vercel.
   url: 'https://timelaggaming.com',
@@ -35,25 +35,29 @@ export const EBAY = {
   // TODO: confirm your eBay seller username.
   sellerSearchUrl: 'https://www.ebay.com/sch/i.html?_ssn=timelaggaming',
 
-  // Shown as quick-browse chips in the eBay section.
+  // Shown as quick-browse chips in the store section.
   categories: [
     'Retro Consoles',
-    'NES & SNES',
+    'NES & Famicom',
+    'SNES & Super Famicom',
     'Nintendo 64',
-    'PlayStation',
     'GameCube & Wii',
-    'Pokémon',
     'Game Boy & DS',
-    'Accessories',
+    'Pokémon',
+    'Japanese Imports',
   ],
 };
 
+// Primary navigation shown in the header and footer.
+// "Find Us" lives as a standalone button in the header (see Header.astro).
 export const NAV: NavItem[] = [
-  { label: 'Home', href: '/' },
-  { label: 'Sell Games', href: '/sell' },
-  { label: 'eBay Store', href: '/#ebay' },
-  { label: 'Contact', href: '/#contact' },
+  { label: 'Shop', href: '/#store' },
+  { label: 'Sell Games', href: '/#sell' },
+  { label: 'About', href: '/#why' },
 ];
+
+// Anchor target for the "Find Us" header button (the hangout-hub section).
+export const FIND_US_HREF = '/#find';
 
 // Used in the "condition" dropdown on the sell/trade form.
 export const CONDITIONS = [
