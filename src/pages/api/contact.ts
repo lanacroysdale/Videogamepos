@@ -6,7 +6,7 @@ export const prerender = false;
 // Read config at request time. Vercel injects dashboard env vars into
 // process.env; import.meta.env is the local-dev (.env) fallback.
 const TO = process.env.CONTACT_TO_EMAIL || import.meta.env.CONTACT_TO_EMAIL || "timelaggaming@gmail.com";
-const FROM = process.env.CONTACT_FROM || import.meta.env.CONTACT_FROM || "Time Lag Gaming <onboarding@resend.dev>";
+const FROM = process.env.CONTACT_FROM || import.meta.env.CONTACT_FROM || "TimeLag Video Games <onboarding@resend.dev>";
 const API_KEY = process.env.RESEND_API_KEY || import.meta.env.RESEND_API_KEY;
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
