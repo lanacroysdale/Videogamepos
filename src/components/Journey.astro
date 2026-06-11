@@ -1,7 +1,7 @@
 ---
 const phases = [
   { icon: "📈", date: "Jan 2026 – Dec 2026", title: "Investment & Expansion", desc: "So far in 2026 we've grown our inventory by 460% and increased sales by over 300%." },
-  { icon: "🐷", date: "Dec 2026 – March 2027", title: "Saving & Preparation", desc: "As we crush our 2026 goals, we'll build up savings and prep for the retail-space build-out." },
+  { icon: "💰", date: "Dec 2026 – March 2027", title: "Saving & Preparation", desc: "As we crush our 2026 goals, we'll build up savings and prep for the retail-space build-out." },
   { icon: "🔨", date: "March 2027 – May 2027", title: "Build-Out & Finalization", desc: "As spring rolls around, we'll start the build-out and finalize the space by summer." },
   { icon: "🎉", date: "June 2027", title: "Grand Opening", desc: "We'll host a soft opening to test the waters before our full grand opening in early summer." },
 ];
@@ -11,8 +11,8 @@ const phases = [
   <div class="container">
     <div class="journey-intro">
       <div class="section-head">
-        <span class="eyebrow">Eat · Play · Connect</span>
-        <h2>Your Hangout Hub for All Things Nostalgia</h2>
+        <span class="eyebrow">The Ultimate Vision of TimeLag</span>
+        <h2 class="hub-h2">Your Hangout Hub for All Things&nbsp;<span class="grad-pb">Nostalgia</span></h2>
         <p class="lead">
           Step through the door into an immersive, curated nostalgia museum you can browse
           at your leisure. Head toward the back and you&rsquo;ve stepped into a chill gaming
@@ -80,9 +80,11 @@ const phases = [
 <style>
   .journey { background: linear-gradient(180deg, rgba(205,128,76,0.07), transparent 60%); }
   .journey .lead { max-width: 64ch; }
-  .journey-intro { display: grid; gap: clamp(1.75rem, 1rem + 3vw, 3.5rem); align-items: center; margin-bottom: clamp(1.75rem, 1rem + 2vw, 3rem); }
-  @media (min-width: 920px) { .journey-intro { grid-template-columns: 0.92fr 1.08fr; } }
+  .journey-intro { display: grid; grid-template-columns: minmax(0, 1fr); gap: clamp(1.75rem, 1rem + 3vw, 3.5rem); align-items: center; margin-bottom: clamp(1.75rem, 1rem + 2vw, 3rem); }
+  .journey-intro > * { min-width: 0; }
+  @media (min-width: 920px) { .journey-intro { grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr); } }
   .journey-intro .section-head { margin-bottom: 0; max-width: none; }
+  .hub-h2 { text-wrap: balance; font-size: clamp(2.4rem, 1.6rem + 3.4vw, 4rem); }
   .storefront-shot { width: 100%; padding: 9px; }
   .storefront-shot img {
     width: 100%; height: auto; display: block; border-radius: 0; clip-path: none;
@@ -147,6 +149,7 @@ const phases = [
     .club-card { clip-path: polygon(18px 0, 100% 0, calc(100% - 18px) 100%, 0 100%); }
     .club-card#club { padding: 1.9rem 1.35rem; }
     .club-card#club h3 { font-size: clamp(1.9rem, 1.3rem + 3.5vw, 2.6rem); }
+    .hub-h2 { font-size: clamp(1.8rem, 1.3rem + 3vw, 2.4rem); }
     .club-card .btn-primary { width: 100%; white-space: normal; }
     .storefront-shot { padding: 5px; }
     .storefront-shot img {

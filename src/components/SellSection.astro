@@ -4,8 +4,7 @@
 
 <section class="section sell-cash" id="sell">
   <div class="container">
-    <span class="eyebrow" style="justify-content:center;display:inline-flex;">Sell or trade · Cash today</span>
-    <h2>Sell Your Video Games for <span class="grad">Cash</span></h2>
+    <h2 class="sell-h2">Sell Your Video Games for <span class="grad-pb">Cash</span></h2>
     <p class="lead">
       TimeLag Video Games makes better cash offers than any other retro game store in the
       Pacific Northwest. In Portland, OR or Vancouver, WA? Reach out today for a free cash
@@ -86,6 +85,7 @@
 
 <style>
   .sell-cash .container { max-width: 860px; text-align: center; }
+  .sell-h2 { font-size: clamp(2.6rem, 1.6rem + 4.4vw, 4.8rem); text-wrap: balance; }
   .sell-cash .lead { margin: 1rem auto 0; max-width: 60ch; }
   .sell-cash .sub2 { margin: 0.8rem auto 1.8rem; max-width: 56ch; font-size: 0.98rem; }
   .hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
@@ -147,6 +147,7 @@
   /* ---------- Mobile: stack CTAs, shallow slants, tighter card padding ---------- */
   @media (max-width: 600px) {
     #offer-toggle, #how-toggle { width: 100%; }
+    .sell-h2 { font-size: clamp(2rem, 1.5rem + 3vw, 2.6rem); }
     .offer-card { clip-path: polygon(18px 0, 100% 0, calc(100% - 18px) 100%, 0 100%); padding: 1.9rem 1.35rem; }
     .how-card { clip-path: polygon(16px 0, 100% 0, calc(100% - 16px) 100%, 0 100%); padding: 1.9rem 1.35rem; }
     .offer-card .modal-head h3 { font-size: 1.7rem; }

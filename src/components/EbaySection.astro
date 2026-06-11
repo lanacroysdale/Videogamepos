@@ -4,8 +4,8 @@ import { EBAY } from "../consts";
 
 <section class="section" id="shop">
   <div class="container">
+    <span class="eyebrow shop-eyebrow">Shop online · In-store coming soon!</span>
     <div class="ebay-panel panel">
-      <span class="eyebrow ebay-eyebrow">Shop online · In-store coming soon!</span>
       <div class="ebay-copy">
         <h2>Browse Our Curated Store</h2>
         <p class="lead">
@@ -43,9 +43,9 @@ import { EBAY } from "../consts";
 </section>
 
 <style>
+  .shop-eyebrow { margin-bottom: 1rem; }
   .ebay-panel { display: grid; gap: clamp(1.5rem, 1rem + 3vw, 3rem); align-items: center; padding: clamp(1.5rem, 1rem + 3vw, 3rem); }
   @media (min-width: 900px) { .ebay-panel { grid-template-columns: 0.95fr 1.05fr; } }
-  .ebay-eyebrow { grid-column: 1 / -1; margin-bottom: -0.4rem; }
   .ebay-cta { display: flex; flex-wrap: wrap; gap: 0.8rem; margin-top: 1.6rem; }
   .chips { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.4rem; }
   .ebay-art { display: grid; place-items: center; }
@@ -91,7 +91,7 @@ import { EBAY } from "../consts";
       padding: 1.75rem 1.35rem;
       gap: 1.4rem;
     }
-    .ebay-eyebrow { font-size: 0.68rem; letter-spacing: 0.07em; }
+    .shop-eyebrow { font-size: 0.7rem; letter-spacing: 0.07em; }
     .ebay-panel h2 { font-size: 1.95rem; }
     .ebay-panel .btn { width: 100%; white-space: normal; }
     .ebay-panel .chip { padding: 0.4rem 0.85rem; font-size: 0.82rem; }

@@ -162,6 +162,15 @@ strong { color: var(--text); font-weight: 700; }
   color: transparent;
 }
 
+/* Pink → Pacific Cyan gradient text — "Nostalgia" (Hangout Hub) and "Cash" (Sell) */
+.grad-pb {
+  background: linear-gradient(110deg, #f39ccd 10%, #468596 90%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
 /* ---------- Buttons (angular / parallelogram) ----------
    Real element is clip-path'd into a parallelogram that echoes the italic
    TimeLag logo. Gradient sits directly on the button; the neon glow uses
