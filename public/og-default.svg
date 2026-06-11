@@ -1,26 +1,27 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#100c26"/>
-      <stop offset="1" stop-color="#0a0913"/>
+      <stop offset="0" stop-color="#1f1006"/>
+      <stop offset="1" stop-color="#160b03"/>
+    </linearGradient>
+    <linearGradient id="bar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#df5e39"/>
+      <stop offset="1" stop-color="#cd804c"/>
     </linearGradient>
     <linearGradient id="txt" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#2ce6e0"/>
-      <stop offset="1" stop-color="#ff49d0"/>
+      <stop offset="0" stop-color="#f39ccd"/>
+      <stop offset="1" stop-color="#468596"/>
     </linearGradient>
   </defs>
   <rect width="1200" height="630" fill="url(#bg)"/>
-  <circle cx="1050" cy="90" r="320" fill="#8b5cf6" opacity="0.18"/>
-  <circle cx="120" cy="560" r="260" fill="#2ce6e0" opacity="0.12"/>
+  <circle cx="1050" cy="80" r="320" fill="#df5e39" opacity="0.20"/>
+  <circle cx="120" cy="580" r="260" fill="#f39ccd" opacity="0.12"/>
 
-  <g transform="translate(90,150)">
-    <rect x="0" y="40" width="120" height="62" rx="31" fill="none" stroke="url(#txt)" stroke-width="8"/>
-    <path d="M28 58v26M15 71h26" stroke="#2ce6e0" stroke-width="8" stroke-linecap="round"/>
-    <circle cx="86" cy="64" r="7" fill="#ff49d0"/>
-    <circle cx="100" cy="78" r="7" fill="#80ff72"/>
-  </g>
+  <!-- warm header bar, echoing the site -->
+  <rect x="0" y="0" width="1200" height="14" fill="url(#bar)"/>
 
-  <text x="92" y="330" font-family="Consolas,Menlo,monospace" font-size="34" letter-spacing="6" fill="#a8a3c9">PORTLAND, OR · BUY · SELL · TRADE</text>
-  <text x="88" y="430" font-family="Arial,Helvetica,sans-serif" font-size="96" font-weight="800" fill="#ecebff">Time Lag Gaming</text>
-  <text x="92" y="500" font-family="Arial,Helvetica,sans-serif" font-size="40" fill="url(#txt)">Retro &amp; modern games — turn yours into cash or credit</text>
+  <text x="92" y="250" font-family="Consolas,Menlo,monospace" font-size="32" letter-spacing="7" fill="#e0824e">PORTLAND, OR · BUY · SELL · CHILL</text>
+  <text x="86" y="372" font-family="Arial Narrow,Arial,Helvetica,sans-serif" font-size="116" font-weight="800" fill="#fbf3ec">TimeLag Video Games</text>
+  <text x="92" y="452" font-family="Arial,Helvetica,sans-serif" font-size="44" font-weight="700" fill="url(#txt)">Lose Track of Time, Find Your Third Place.</text>
+  <text x="92" y="520" font-family="Arial,Helvetica,sans-serif" font-size="34" fill="#cbb4a3">Curated retro &amp; modern games · Japanese imports · Launching 2027 near PDX</text>
 </svg>

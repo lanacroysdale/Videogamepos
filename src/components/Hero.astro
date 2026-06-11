@@ -1,173 +1,155 @@
 ---
-import { SITE } from "../consts";
+// Hero — animated pixel field + half-bleed TL monogram behind the copy.
 ---
 
 <section class="hero">
+  <div class="hero-fx" aria-hidden="true">
+    <canvas class="hero-pixels"></canvas>
+    <img class="hero-logo" src="/logo-tl.png" alt="" />
+  </div>
   <div class="container hero-grid">
     <div class="hero-copy">
-      <span class="eyebrow">{SITE.location} · Buy · Sell · Trade</span>
-      <h1>
-        Your local home for
-        <span class="grad"> retro &amp; modern games</span>.
-      </h1>
+      <span class="eyebrow">Portland, OR · Buy · Sell · Chill</span>
+      <h1><span class="hl1">Lose Track of Time,</span><span class="hl2">Find Your Third Place.</span></h1>
       <p class="lead">
-        Time Lag Gaming buys, sells, and trades video games, consoles, and
-        accessories — from NES classics to the latest releases. Got games
-        collecting dust? Turn them into cash or store credit.
+        TimeLag is Portland&rsquo;s premier inclusive hub to shop, play, eat, and connect.
+        Discover Japanese imports, browse classic collectibles, or level up in our chill
+        lounge. Whether you bring your own set up or try our massive library of games,
+        there&rsquo;s always a seat for you here. Launching 2027 near PDX.
       </p>
       <div class="hero-cta">
-        <a href="/#contact" class="btn btn-primary">Sell your games →</a>
-        <a href="/#ebay" class="btn btn-ghost">Shop our eBay store</a>
+        <a href="/#sell" class="btn btn-magenta">Sell your games →</a>
+        <a href="/#shop" class="btn btn-ghost">Browse our games</a>
       </div>
-      <ul class="hero-trust">
-        <li>✅ Fair, data-backed offers</li>
-        <li>🎮 Every platform, every era</li>
-        <li>⚡ Cash or store credit</li>
-      </ul>
-    </div>
-
-    <div class="hero-art" aria-hidden="true">
-      <div class="screen">
-        <div class="screen-scan"></div>
-        <div class="cart cart-1">★ NES</div>
-        <div class="cart cart-2">◆ SNES</div>
-        <div class="cart cart-3">● N64</div>
-        <div class="press">▶ INSERT&nbsp;CART</div>
+      <div class="hero-trust" aria-label="What TimeLag offers">
+        <ul class="trust-track">
+          <li>⏳ Curated Nostalgia</li>
+          <li>🌏 Rare Imports</li>
+          <li>⚡ Surprising Finds</li>
+          <li>✅ Fair Offers</li>
+          <li>🎮 Every Era</li>
+          <li>💗 Inclusive Space</li>
+          <li>👾 Retro Paradise</li>
+          <li>🔴 Nintendo Experts</li>
+          <li aria-hidden="true">⏳ Curated Nostalgia</li>
+          <li aria-hidden="true">🌏 Rare Imports</li>
+          <li aria-hidden="true">⚡ Surprising Finds</li>
+          <li aria-hidden="true">✅ Fair Offers</li>
+          <li aria-hidden="true">🎮 Every Era</li>
+          <li aria-hidden="true">💗 Inclusive Space</li>
+          <li aria-hidden="true">👾 Retro Paradise</li>
+          <li aria-hidden="true">🔴 Nintendo Experts</li>
+        </ul>
       </div>
     </div>
   </div>
 </section>
 
 <style>
-  .hero {
-    padding-block: clamp(3rem, 2rem + 5vw, 6rem);
-    position: relative;
-    overflow: hidden;
+  .hero { padding-block: clamp(3rem, 2rem + 5vw, 6rem); position: relative; overflow: hidden; }
+  .hero-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: clamp(2rem, 1rem + 4vw, 4rem); align-items: center; }
+  .hero-copy { position: relative; z-index: 2; max-width: 640px; min-width: 0; }
+  /* Giant half-bleed monogram + animated pixel field behind the copy */
+  .hero-fx { position: absolute; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+  .hero-pixels { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .hero-logo {
+    position: absolute; top: 50%; right: -32%; transform: translateY(-50%);
+    height: 120%; width: auto; max-width: none; opacity: 1;
+    filter: drop-shadow(0 0 24px rgba(0, 0, 0, 0.35));
   }
-
-  .hero-grid {
-    display: grid;
-    gap: clamp(2rem, 1rem + 4vw, 4rem);
-    align-items: center;
-  }
-  @media (min-width: 900px) {
-    .hero-grid {
-      grid-template-columns: 1.15fr 0.85fr;
-    }
-  }
-
-  .grad {
-    background: linear-gradient(120deg, var(--cyan), var(--magenta) 80%);
+  @media (max-width: 720px) { .hero-logo { right: -32%; height: 112%; opacity: 0.5; } }
+  .hero-copy h1 { margin-bottom: 1.1rem; }
+  .hero h1 .hl1, .hero h1 .hl2 { display: block; }
+  .hero h1 .hl2 {
+    background: linear-gradient(180deg, #df5e39 0%, #cd804c 100%);
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
+    -webkit-text-fill-color: transparent;
+    text-shadow: none;
+    filter: drop-shadow(0 5px 12px rgba(0, 0, 0, 0.6));
   }
-
-  .hero-copy h1 {
-    margin-bottom: 1.1rem;
-  }
-  .hero-cta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.8rem;
-    margin-top: 1.8rem;
-  }
+  .hero-cta { display: flex; flex-wrap: wrap; gap: 0.8rem; margin-top: 1.8rem; }
   .hero-trust {
-    list-style: none;
-    padding: 0;
-    margin-top: 1.8rem;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.6rem 1.4rem;
-    color: var(--muted);
-    font-size: 0.92rem;
-    font-weight: 600;
+    list-style: none; padding: 0; margin-top: 1.8rem; overflow: hidden;
+    -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 8%, #000 92%, transparent 100%);
+    mask-image: linear-gradient(90deg, transparent 0, #000 8%, #000 92%, transparent 100%);
   }
+  .trust-track {
+    list-style: none; padding: 0; margin: 0; display: flex; width: max-content; gap: 1.7rem;
+    animation: trust-scroll 32s linear infinite;
+  }
+  .hero-trust:hover .trust-track { animation-play-state: paused; }
+  .trust-track li {
+    display: inline-flex; align-items: center; gap: 0.4rem; white-space: nowrap;
+    color: #fff; font-size: 0.95rem; font-weight: 600; text-shadow: 0 1px 4px rgba(0, 0, 0, 0.65);
+  }
+  @keyframes trust-scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+  @media (prefers-reduced-motion: reduce) { .trust-track { animation: none; flex-wrap: wrap; width: auto; } }
 
-  /* Decorative arcade "screen" */
-  .hero-art {
-    display: grid;
-    place-items: center;
-  }
-  .screen {
-    position: relative;
-    width: min(100%, 360px);
-    aspect-ratio: 4 / 3;
-    border-radius: 20px;
-    background: radial-gradient(120% 120% at 30% 0%, #221b4d, #0c0a1f 70%);
-    border: 1px solid var(--border-strong);
-    box-shadow: var(--shadow), inset 0 0 60px rgba(139, 92, 246, 0.25);
-    overflow: hidden;
-  }
-  .screen-scan {
-    position: absolute;
-    inset: 0;
-    background: repeating-linear-gradient(
-      0deg,
-      rgba(255, 255, 255, 0.04) 0 2px,
-      transparent 2px 4px
-    );
-    mix-blend-mode: overlay;
-  }
-  .cart {
-    position: absolute;
-    padding: 0.55rem 0.95rem;
-    border-radius: 10px;
-    font-family: var(--font-mono);
-    font-weight: 700;
-    font-size: 0.95rem;
-    color: var(--text);
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.02));
-    border: 1px solid var(--border-strong);
-    box-shadow: var(--shadow);
-    animation: float 6s ease-in-out infinite;
-  }
-  .cart-1 {
-    top: 18%;
-    left: 12%;
-    color: var(--cyan);
-    border-color: rgba(44, 230, 224, 0.5);
-  }
-  .cart-2 {
-    top: 42%;
-    right: 10%;
-    color: var(--magenta);
-    border-color: rgba(255, 73, 208, 0.5);
-    animation-delay: -2s;
-  }
-  .cart-3 {
-    bottom: 16%;
-    left: 22%;
-    color: var(--green);
-    border-color: rgba(128, 255, 114, 0.5);
-    animation-delay: -4s;
-  }
-  .press {
-    position: absolute;
-    bottom: 8%;
-    right: 8%;
-    font-family: var(--font-mono);
-    font-size: 0.72rem;
-    letter-spacing: 0.12em;
-    color: var(--yellow);
-    text-shadow: 0 0 10px rgba(255, 210, 63, 0.6);
-    animation: blink 1.6s steps(1) infinite;
-  }
-
-  @keyframes float {
-    0%, 100% {
-      transform: translateY(0);
-    }
-    50% {
-      transform: translateY(-8px);
-    }
-  }
-  @keyframes blink {
-    0%, 60% {
-      opacity: 1;
-    }
-    61%, 100% {
-      opacity: 0.2;
-    }
+  /* ---------- Mobile: keep the big headline + CTAs inside the screen ---------- */
+  @media (max-width: 600px) {
+    .hero { padding-block: 2.25rem 2.75rem; }
+    .hero-copy h1 { font-size: clamp(1.85rem, 1.2rem + 3.6vw, 2.6rem); letter-spacing: 0; }
+    .hero-cta { flex-direction: column; align-items: stretch; gap: 0.7rem; }
+    .hero-cta .btn { width: 100%; }
+    .hero-logo { opacity: 0.32; }
   }
 </style>
+
+<script>
+  // Animated lavender pixel field (hero backdrop)
+  (function () {
+    const canvas = document.querySelector<HTMLCanvasElement>(".hero-pixels");
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const palette = ["#b9a4e8", "#cdbcf0", "#a98fe0", "#c77fd6", "#d4a9e8", "#f39ccd", "#ef85c6", "#9a6fd0", "#e7d9f7", "#df9bd8"];
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    let W = 0, H = 0, squares: any[] = [];
+    const rand = (a: number, b: number) => a + Math.random() * (b - a);
+
+    function build() {
+      const rect = canvas.getBoundingClientRect();
+      W = Math.max(1, rect.width); H = Math.max(1, rect.height);
+      canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const n = Math.round(Math.min(580, (W * H) / 2300));
+      squares = [];
+      for (let i = 0; i < n; i++) {
+        const x = W * (0.12 + 0.9 * Math.sqrt(Math.random()));
+        const y = H * (Math.pow(Math.random(), 1.5) * 0.95 + 0.02);
+        const size = rand(3, 11);
+        squares.push({
+          x, y, size,
+          color: palette[(Math.random() * palette.length) | 0],
+          baseA: rand(0.16, 0.6), amp: rand(0.05, 0.28), phase: rand(0, Math.PI * 2),
+          tw: rand(0.4, 1.3), vx: rand(-0.12, 0.05), vy: rand(-0.08, 0.12),
+        });
+      }
+    }
+    function draw(t: number) {
+      ctx.clearRect(0, 0, W, H);
+      for (let i = 0; i < squares.length; i++) {
+        const s = squares[i];
+        if (!reduce) {
+          s.x += s.vx; s.y += s.vy;
+          if (s.x < -14) s.x = W + 12; else if (s.x > W + 14) s.x = -12;
+          if (s.y < -14) s.y = H + 12; else if (s.y > H + 14) s.y = -12;
+        }
+        let a = reduce ? s.baseA : s.baseA + s.amp * Math.sin(t * 0.001 * s.tw + s.phase);
+        if (a < 0) a = 0; else if (a > 1) a = 1;
+        ctx.globalAlpha = a; ctx.fillStyle = s.color; ctx.fillRect(s.x, s.y, s.size, s.size);
+      }
+      ctx.globalAlpha = 1;
+    }
+    let raf: number | null = null;
+    function loop(t: number) { draw(t); raf = requestAnimationFrame(loop); }
+    function start() { if (raf) cancelAnimationFrame(raf); if (reduce) draw(0); else raf = requestAnimationFrame(loop); }
+    build(); start();
+    let rt: any;
+    window.addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(build, 150); });
+    if (window.ResizeObserver) { try { new ResizeObserver(() => build()).observe(canvas); } catch (e) {} }
+  })();
+</script>

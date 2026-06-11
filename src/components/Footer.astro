@@ -1,30 +1,37 @@
 ---
-import { SITE, EBAY, NAV, YEAR } from "../consts";
+import { SITE, EBAY, NAV, YEAR, FIND_US_HREF } from "../consts";
 ---
 
 <footer class="site-footer">
   <div class="container">
     <div class="foot-grid">
       <div class="foot-brand">
-        <span class="brand-text">Time Lag Gaming</span>
-        <p>{SITE.tagline}</p>
-        <p class="loc">📍 {SITE.location}</p>
+        <div class="foot-brand-row">
+          <img src="/logo-dark.png" alt="" class="foot-logo" />
+          <span class="brand-text">TimeLag<span class="brand-text-2"> Video Games</span></span>
+        </div>
+        <p>
+          Portland&rsquo;s premier inclusive hub to shop, play, eat, and connect. Discover
+          Japanese imports, browse classic collectibles, or level up in our chill lounge.
+        </p>
+        <p class="foot-launch">Launching 2027 near PDX.</p>
       </div>
 
       <div class="foot-col">
         <h3>Explore</h3>
         <ul>
           {NAV.map((item) => <li><a href={item.href}>{item.label}</a></li>)}
+          <li><a href={FIND_US_HREF}>Find Us</a></li>
           <li><a href={EBAY.storeUrl} target="_blank" rel="noopener">Shop on eBay ↗</a></li>
         </ul>
       </div>
 
       <div class="foot-col">
-        <h3>Get in touch</h3>
+        <h3>Get in Touch</h3>
         <ul>
-          <li><a href={`mailto:${SITE.email}`}>{SITE.email}</a></li>
-          <li><a href={SITE.phoneHref}>{SITE.phoneDisplay}</a></li>
-          <li><a href="/sell">Sell or trade your games</a></li>
+          <li><a href={`mailto:${SITE.email}`}>✉️ {SITE.email}</a></li>
+          <li><a href={SITE.phoneHref}>☎️ {SITE.phoneDisplay}</a></li>
+          <li class="loc">📍 {SITE.location}</li>
         </ul>
       </div>
     </div>
@@ -33,78 +40,6 @@ import { SITE, EBAY, NAV, YEAR } from "../consts";
 
     <div class="foot-bottom">
       <p>© {YEAR} {SITE.name}. All rights reserved.</p>
-      <p class="built">Buy · Sell · Trade — {SITE.location}</p>
     </div>
   </div>
 </footer>
-
-<style>
-  .site-footer {
-    border-top: 1px solid var(--border);
-    background: linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.3));
-    padding-block: clamp(2.5rem, 2rem + 2vw, 4rem) 2rem;
-    margin-top: 2rem;
-  }
-
-  .foot-grid {
-    display: grid;
-    gap: 2rem;
-    grid-template-columns: 1fr;
-  }
-  @media (min-width: 720px) {
-    .foot-grid {
-      grid-template-columns: 1.6fr 1fr 1fr;
-    }
-  }
-
-  .brand-text {
-    font-family: var(--font-mono);
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--text);
-    font-size: 1.05rem;
-  }
-  .foot-brand p {
-    margin-top: 0.6rem;
-    max-width: 38ch;
-  }
-  .foot-brand .loc {
-    color: var(--muted);
-  }
-
-  .foot-col h3 {
-    font-size: 0.8rem;
-    text-transform: uppercase;
-    letter-spacing: 0.14em;
-    color: var(--muted-2);
-    margin-bottom: 0.9rem;
-    font-family: var(--font-mono);
-  }
-  .foot-col ul {
-    list-style: none;
-    padding: 0;
-    display: grid;
-    gap: 0.6rem;
-  }
-  .foot-col a {
-    color: var(--muted);
-    font-weight: 500;
-  }
-  .foot-col a:hover {
-    color: var(--cyan);
-  }
-
-  .foot-bottom {
-    margin-top: 1.5rem;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem 1.5rem;
-    justify-content: space-between;
-    align-items: center;
-  }
-  .foot-bottom p {
-    font-size: 0.88rem;
-    color: var(--muted-2);
-  }
-</style>

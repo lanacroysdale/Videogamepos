@@ -1,19 +1,23 @@
-<<<<<<< HEAD
-# Time Lag Gaming — Website
+# TimeLag Video Games — Website
 
-Marketing site for **Time Lag Gaming** (Portland, OR). Built with [Astro](https://astro.build)
-and deployed on [Vercel](https://vercel.com), per the project's infrastructure plan
-(Cloudflare registrar → Vercel hosting → optional Supabase later).
+Marketing site for **TimeLag Video Games** (Portland, OR — "Buy · Sell · Chill"). Built with
+[Astro](https://astro.build) and deployed on [Vercel](https://vercel.com), per the project's
+infrastructure plan (Cloudflare registrar → Vercel hosting → Supabase for the POS app).
 
 ## What's here
 
-**Public marketing site**
+**Public marketing site** (`/`) — a long-scroll home page:
 
-- **Landing page** (`/`) — hero, "why sell to us", **eBay store** section, and a
-  **sell-your-games contact form** that emails the shop owner (Adam).
-- **Sell page** (`/sell`) — focused "how it works" steps, the same contact form, and an FAQ.
+- **Hero** — glitch-3D headline, animated pixel field, and an auto-scrolling trust marquee.
+- **About / "Why TimeLag"** (`#about`) — the quality-and-curation pitch.
+- **Shop / eBay** (`#shop`) — the curated **eBay store** showcase + category chips.
+- **Hangout Hub** (`#journey`) — the vision + a grand-opening **timeline**, and a
+  **"Want Updates?"** newsletter signup.
+- **Sell Your Games** (`#sell`) — an inline **cash-offer form** and a "how it works" panel.
+- **Sell page** (`/sell`) — focused "how it works" steps, the contact form, and an FAQ.
 - **404 page** — on-brand not-found page.
-- **`/api/contact`** — a serverless endpoint that validates the form and emails the lead.
+- **`/api/contact`** — a serverless endpoint that validates the forms and emails the lead
+  (the newsletter, the cash-offer form, and the `/sell` contact form all post here).
 
 **Point-of-sale app** (`/app`, employee login required — see the [POS app](#point-of-sale-app-app) section)
 
@@ -56,15 +60,15 @@ npm run preview  # preview the production build
 npm run check    # type-check the project
 ```
 
-## Make the contact form deliver email
+## Make the contact forms deliver email
 
-The form works immediately — but until email is configured, submissions are just
+The forms work immediately — but until email is configured, submissions are just
 **logged to the server console** (so nothing is lost). To deliver real emails:
 
 1. Create a free account at [resend.com](https://resend.com) and make an API key.
 2. Copy `.env.example` to `.env` and fill in `RESEND_API_KEY`.
 3. (Optional) Verify your domain in Resend, then set `CONTACT_FROM` to an address
-   on that domain (e.g. `Time Lag Gaming <hello@timelaggaming.com>`). Until then the
+   on that domain (e.g. `TimeLag Video Games <hello@timelaggaming.com>`). Until then the
    included Resend test sender works for trying it out.
 
 Leads are sent to `CONTACT_TO_EMAIL` (defaults to `timelaggaming@gmail.com`).
@@ -111,27 +115,35 @@ Web NFC on supported devices).
    `anon` and `service_role` keys.
 4. Add them as Vercel env vars (next section): `PUBLIC_SUPABASE_URL`,
    `PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`.
-5. Create your real employee logins in the Supabase Auth dashboard (the
+5. In **Supabase → Authentication → URL Configuration**, set the **Site URL** and
+   redirect URLs to your production domain.
+6. Create your real employee logins in the Supabase Auth dashboard (the
    `profiles` row + role is created automatically; set roles to `owner`/`manager`).
+
+> Note: the public marketing site does **not** need Supabase. If you deploy without
+> these vars, the site works, but `/app` and `/api/pos/*` will error until they're set.
 
 ## Deploy to Vercel
 
-1. Push this repo to GitHub.
+1. Push this repo to GitHub and merge to your default branch (`main`).
 2. In Vercel, **Add New → Project** and import the repo. Vercel auto-detects Astro;
    no build settings needed.
 3. Add your environment variables under **Project → Settings → Environment Variables**:
-   - Contact form: `RESEND_API_KEY`, `CONTACT_TO_EMAIL`, `CONTACT_FROM`
-   - POS app: `PUBLIC_SUPABASE_URL`, `PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`
+   - Contact forms: `RESEND_API_KEY`, `CONTACT_TO_EMAIL`, `CONTACT_FROM`
+   - POS app (optional): `PUBLIC_SUPABASE_URL`, `PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`
 4. Point your Cloudflare domain's DNS at Vercel. Every `git push` now auto-deploys.
 
-After your domain is live, update `site` in `astro.config.mjs` and the `Sitemap:` line
-in `public/robots.txt` so canonical URLs and the sitemap use the real address.
+The repo already targets `https://timelaggaming.com` for canonical URLs and the
+sitemap (`astro.config.mjs` `site`, `public/robots.txt`, and `src/consts.ts`). If you
+use a different domain, update those three spots.
 
 ## Project structure
 
 ```
 src/
-  components/   Header, Footer, Hero, Features, EbaySection, SellSection, Steps, ContactForm
+  components/   Header, Footer, Hero, Features (About), EbaySection (Shop),
+                Journey (Hangout + timeline + newsletter), SellSection (cash offer),
+                Steps, ContactForm
   layouts/      Layout.astro (marketing), AppLayout.astro (POS shell)
   lib/          supabase.ts (SSR client), types.ts, money.ts
   middleware.ts auth + route protection + RBAC for /app and /api/pos
@@ -142,11 +154,11 @@ src/
                   clock, shifts, pricing, customer, merge-customers, card-login
     app/          login, logout, index (dashboard), checkout, trade-in, returns,
                   inventory, repairs, customers, schedule, reports, pricing
-  styles/       global.css (marketing), app.css (POS)
+  styles/       global.css (shared brand system + marketing), app.css (POS)
   consts.ts     ← marketing-site content / config you edit
 supabase/       migrations/ (schema — two migrations)
 scripts/        seed.mjs (demo data)
-public/         favicon.svg, og-default.svg, robots.txt
+public/         favicon.svg, og-default.svg, robots.txt, logo + storefront assets
 ```
 
 ## Notes / next steps
@@ -159,8 +171,3 @@ public/         favicon.svg, og-default.svg, robots.txt
   workflow (approve/revert) is fully built.
 - **Card/NFC login** maps a card code → employee. Web NFC works on supported devices
   (Chrome/Android); elsewhere staff type/scan the code.
-- Remaining ideas from the planning docs: kiosk → open-order sync, shift-swap/time-off
-  requests, CSV import, opening/closing checklists, and barcode-scanner hardware.
-=======
-"# Videogamepos" 
->>>>>>> 9f02dc81dc4b7d133fac83de8973f951e9c2cb32

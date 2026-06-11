@@ -2,140 +2,101 @@
 import { EBAY } from "../consts";
 ---
 
-<section class="section" id="ebay">
+<section class="section" id="shop">
   <div class="container">
+    <span class="eyebrow shop-eyebrow">Shop online · In-store coming soon!</span>
     <div class="ebay-panel panel">
       <div class="ebay-copy">
-        <span class="eyebrow">Shop online</span>
-        <h2>Browse our eBay store</h2>
+        <h2>Browse Our Curated Store</h2>
         <p class="lead">
-          Can&rsquo;t make it to Portland? Thousands of buyers trust our eBay
-          listings for graded retro titles, complete-in-box classics, consoles,
-          and hard-to-find accessories — all shipped fast with buyer protection.
+          Flip through our hand picked selection of authentic Nintendo games, consoles,
+          accessories, merch and plushies. We specialize in rare and obscure imports from
+          Japan and across the world that never came to the US. Every item is tested,
+          authentic, and shipped fast with buyer protection.
         </p>
-
         <div class="ebay-cta">
           <a href={EBAY.storeUrl} class="btn btn-magenta" target="_blank" rel="noopener">
-            Visit our eBay store ↗
+            Browse Our eBay Store Now ↗
           </a>
-          <a href={EBAY.sellerSearchUrl} class="btn btn-ghost" target="_blank" rel="noopener">
-            See all listings
-          </a>
-        </div>
-
-        <div class="chips" aria-label="Popular categories on eBay">
-          {
-            EBAY.categories.map((cat) => (
-              <a
-                class="chip"
-                href={EBAY.storeUrl}
-                target="_blank"
-                rel="noopener"
-              >
-                {cat}
-              </a>
-            ))
-          }
         </div>
       </div>
 
-      <div class="ebay-art" aria-hidden="true">
+      <div class="ebay-art">
         <div class="store-card">
           <div class="store-head">
             <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-            <span class="store-url">ebay.com/str/…</span>
+            <span class="store-url">ebay.com/str/timelaggaming</span>
           </div>
-          <div class="store-body">
-            <div class="tile"></div>
-            <div class="tile"></div>
-            <div class="tile"></div>
-            <div class="tile"></div>
-            <div class="tile"></div>
-            <div class="tile"></div>
+          <div class="store-shot">
+            <img src="/ebay-store.png" alt="TimeLag Gaming eBay storefront" />
           </div>
         </div>
+      </div>
+
+      <div class="chips" aria-label="Popular categories">
+        {EBAY.categories.map((cat) => (
+          <a class="chip" href={EBAY.storeUrl} target="_blank" rel="noopener">{cat}</a>
+        ))}
       </div>
     </div>
   </div>
 </section>
 
 <style>
-  .ebay-panel {
-    display: grid;
-    gap: clamp(1.5rem, 1rem + 3vw, 3rem);
-    align-items: center;
-    padding: clamp(1.5rem, 1rem + 3vw, 3rem);
-  }
-  @media (min-width: 900px) {
-    .ebay-panel {
-      grid-template-columns: 1.1fr 0.9fr;
-    }
-  }
-
-  .ebay-cta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.8rem;
-    margin-top: 1.6rem;
-  }
-  .chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.55rem;
-    margin-top: 1.6rem;
-  }
-
-  .ebay-art {
-    display: grid;
-    place-items: center;
-  }
+  .shop-eyebrow { margin-bottom: 1rem; }
+  .ebay-panel { display: grid; gap: clamp(1.5rem, 1rem + 3vw, 3rem); align-items: center; padding: clamp(1.5rem, 1rem + 3vw, 3rem); }
+  @media (min-width: 900px) { .ebay-panel { grid-template-columns: 0.95fr 1.05fr; } }
+  .ebay-cta { display: flex; flex-wrap: wrap; gap: 0.8rem; margin-top: 1.6rem; }
+  .chips { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.4rem; }
+  .ebay-art { display: grid; place-items: center; }
   .store-card {
-    width: min(100%, 380px);
-    border-radius: 16px;
-    overflow: hidden;
-    border: 1px solid var(--border-strong);
-    background: var(--bg-2);
-    box-shadow: var(--shadow);
+    width: min(100%, 500px); margin-inline: auto; border-radius: 0; overflow: hidden;
+    border: 1px solid var(--border-strong); background: var(--bg-2);
+    box-shadow: -4px -4px 0 #3fb6d6, -7px -7px 0 #3fb6d6, 4px 4px 0 var(--cyan), 7px 7px 0 var(--cyan), 10px 10px 0 #4a2c14, 10px 18px 30px rgba(0, 0, 0, 0.5);
   }
-  .store-head {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.7rem 0.9rem;
-    background: rgba(255, 255, 255, 0.04);
-    border-bottom: 1px solid var(--border);
-  }
-  .store-head .dot {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    background: var(--muted-2);
-  }
+  .store-head { display: flex; align-items: center; gap: 0.4rem; padding: 0.7rem 0.9rem; background: rgba(255, 255, 255, 0.04); border-bottom: 1px solid var(--border); }
+  .store-head .dot { width: 10px; height: 10px; border-radius: 50%; }
   .store-head .dot:nth-child(1) { background: #ff5f57; }
   .store-head .dot:nth-child(2) { background: #febc2e; }
   .store-head .dot:nth-child(3) { background: #28c840; }
-  .store-url {
-    margin-left: auto;
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
-    color: var(--muted);
+  .store-url { margin-left: auto; font-family: var(--font-mono); font-size: 0.75rem; color: var(--muted); }
+  .store-shot { display: block; width: 100%; background: #fff; line-height: 0; }
+  .store-shot img { display: block; width: 100%; height: auto; }
+
+  /* Shop module recolored to the header orange; copy switches to dark ink for legibility */
+  .ebay-panel {
+    background: linear-gradient(90deg, #df5e39 0%, #cd804c 100%); border: 0; border-radius: 0; box-shadow: none;
+    clip-path: polygon(72px 0, 100% 0, calc(100% - 72px) 100%, 0 100%);
+    filter: drop-shadow(0 18px 34px rgba(0, 0, 0, 0.42));
+    padding-inline: clamp(3.25rem, 1.5rem + 6vw, 5.5rem);
   }
-  .store-body {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 0.6rem;
-    padding: 0.9rem;
+  .ebay-panel .eyebrow { color: var(--accent-ink); }
+  .ebay-panel .eyebrow::before { background: linear-gradient(90deg, var(--accent-ink), transparent); }
+  .ebay-panel h2 { color: var(--accent-ink); }
+  .ebay-panel .lead { color: rgba(37, 19, 10, 0.82); }
+  .ebay-panel .chip {
+    color: var(--accent-ink); background: #fbf3ec; border: 0; border-radius: 0;
+    padding: 0.42rem 1.2rem; clip-path: polygon(14px 0, 100% 0, calc(100% - 14px) 100%, 0 100%);
+    box-shadow: 0 3px 9px rgba(0, 0, 0, 0.22); font-weight: 700;
   }
-  .tile {
-    aspect-ratio: 3 / 4;
-    border-radius: 8px;
-    background: linear-gradient(160deg, rgba(44, 230, 224, 0.18), rgba(139, 92, 246, 0.18));
-    border: 1px solid var(--border);
-  }
-  .tile:nth-child(2n) {
-    background: linear-gradient(160deg, rgba(255, 73, 208, 0.18), rgba(139, 92, 246, 0.18));
-  }
-  .tile:nth-child(3n) {
-    background: linear-gradient(160deg, rgba(128, 255, 114, 0.16), rgba(44, 230, 224, 0.16));
+  .ebay-panel a.chip:hover { color: var(--accent-ink); background: #ffffff; border: 0; }
+  /* Top CTA → dark brown */
+  .ebay-panel .btn-magenta { background: linear-gradient(135deg, #2b1809, #160b03); color: #fbf3ec; filter: drop-shadow(0 5px 13px rgba(0, 0, 0, 0.4)); }
+  .ebay-panel .btn-magenta:hover { filter: drop-shadow(0 8px 20px rgba(0, 0, 0, 0.6)); }
+
+  /* ---------- Mobile: shallow slant + tighter padding so nothing clips ---------- */
+  @media (max-width: 600px) {
+    .ebay-panel {
+      clip-path: polygon(18px 0, 100% 0, calc(100% - 18px) 100%, 0 100%);
+      padding: 1.75rem 1.35rem;
+      gap: 1.4rem;
+    }
+    .shop-eyebrow { font-size: 0.7rem; letter-spacing: 0.07em; }
+    .ebay-panel h2 { font-size: 1.95rem; }
+    .ebay-panel .btn { width: 100%; white-space: normal; }
+    .ebay-panel .chip { padding: 0.4rem 0.85rem; font-size: 0.82rem; }
+    .store-card {
+      box-shadow: -3px -3px 0 #3fb6d6, -5px -5px 0 #3fb6d6, 3px 3px 0 var(--cyan), 5px 5px 0 var(--cyan), 7px 7px 0 #4a2c14, 8px 14px 22px rgba(0, 0, 0, 0.5);
+    }
   }
 </style>

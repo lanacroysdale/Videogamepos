@@ -1,57 +1,50 @@
 ---
-const features = [
-  {
-    icon: "💵",
-    title: "Fair, honest offers",
-    body: "Offers backed by real market data and what items actually sell for — no lowballing.",
-  },
-  {
-    icon: "🕹️",
-    title: "Every platform, every era",
-    body: "Retro to current-gen: NES, SNES, N64, PlayStation, Xbox, Nintendo Switch, handhelds, and accessories.",
-  },
-  {
-    icon: "🔁",
-    title: "Cash or store credit",
-    body: "Take cash on the spot or boost your offer with store credit toward your next pickup.",
-  },
-  {
-    icon: "📍",
-    title: "Local & friendly",
-    body: "A Portland shop run by gamers. Bring your collection in or reach out online — Adam will take care of you.",
-  },
-];
+import { EBAY } from "../consts";
 ---
 
-<section class="section" id="why">
+<section class="section" id="about">
   <div class="container">
-    <div class="section-head center">
-      <span class="eyebrow">Why Time Lag</span>
-      <h2>Trade in with people who get it</h2>
-      <p class="lead">
-        We make selling your games simple, fair, and fast.
-      </p>
-    </div>
-
-    <div class="grid cols-2 cols-4">
-      {
-        features.map((f) => (
-          <article class="card card--hover">
-            <span class="badge" aria-hidden="true">{f.icon}</span>
-            <h3>{f.title}</h3>
-            <p>{f.body}</p>
-          </article>
-        ))
-      }
+    <div class="about-grid">
+      <div class="about-copy">
+        <span class="eyebrow">Why TimeLag</span>
+        <h2>Raising the Bar for Retro Game Experiences</h2>
+        <p>
+          How many times have you bought a game online or at your local shop only to find
+          out it was never tested, the controller&rsquo;s defective, and the console can&rsquo;t read
+          discs? TimeLag Video Games takes a different approach.
+        </p>
+        <p>
+          We carefully curate our selection of games, accessories, and collectibles —
+          specializing in Japanese imports. Everything we buy across the PNW and import
+          from around the world is the highest quality, independently tested by multiple
+          sources, and fully refurbished to the same reliability you&rsquo;d expect fresh out
+          of the box.
+        </p>
+        <p>
+          That includes handhelds and home consoles like region-free Nintendo GameCubes,
+          so you can play your US <em>and</em> Japanese games. You&rsquo;ll also find nostalgic
+          media and merch from anime and pop-culture icons around the world.
+        </p>
+        <p>
+          Your time is valuable, and you care about clean, reliable items in your
+          collection — not dust-covered consoles that fail right after the warranty
+          expires, leaving you frustrated and defeated.
+        </p>
+        <p class="ko">▶ Avoid the KO.</p>
+        <a href={EBAY.storeUrl} class="btn btn-primary" target="_blank" rel="noopener">Shop TimeLag now ↗</a>
+      </div>
     </div>
   </div>
 </section>
 
 <style>
-  .card h3 {
-    margin: 0.9rem 0 0.4rem;
-  }
-  .card p {
-    font-size: 0.95rem;
+  .about-grid { display: grid; gap: clamp(1.75rem, 1rem + 3vw, 3.5rem); align-items: start; }
+  .about-copy p { margin-bottom: 1rem; max-width: none; }
+  /* CTA in this section is the flat pink button */
+  .about-copy .btn-primary { background: #f39ccd; color: var(--accent-ink); filter: drop-shadow(0 5px 13px rgba(0, 0, 0, 0.35)); }
+  .about-copy .btn-primary:hover { background: #f6abd5; filter: drop-shadow(0 8px 20px rgba(0, 0, 0, 0.5)); }
+  .ko {
+    font-family: var(--font-mono); font-weight: 800; letter-spacing: 0.04em; color: var(--yellow);
+    text-shadow: 0 0 14px rgba(232, 162, 74, 0.5); font-size: 1.05rem; margin: 0.4rem 0 1.5rem;
   }
 </style>
