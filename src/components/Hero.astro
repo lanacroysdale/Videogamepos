@@ -47,8 +47,8 @@
 
 <style>
   .hero { padding-block: clamp(3rem, 2rem + 5vw, 6rem); position: relative; overflow: hidden; }
-  .hero-grid { display: grid; gap: clamp(2rem, 1rem + 4vw, 4rem); align-items: center; }
-  .hero-copy { position: relative; z-index: 2; max-width: 640px; }
+  .hero-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: clamp(2rem, 1rem + 4vw, 4rem); align-items: center; }
+  .hero-copy { position: relative; z-index: 2; max-width: 640px; min-width: 0; }
   /* Giant half-bleed monogram + animated pixel field behind the copy */
   .hero-fx { position: absolute; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
   .hero-pixels { position: absolute; inset: 0; width: 100%; height: 100%; }
@@ -86,6 +86,15 @@
   }
   @keyframes trust-scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
   @media (prefers-reduced-motion: reduce) { .trust-track { animation: none; flex-wrap: wrap; width: auto; } }
+
+  /* ---------- Mobile: keep the big headline + CTAs inside the screen ---------- */
+  @media (max-width: 600px) {
+    .hero { padding-block: 2.25rem 2.75rem; }
+    .hero-copy h1 { font-size: clamp(1.85rem, 1.2rem + 3.6vw, 2.6rem); letter-spacing: 0; }
+    .hero-cta { flex-direction: column; align-items: stretch; gap: 0.7rem; }
+    .hero-cta .btn { width: 100%; }
+    .hero-logo { opacity: 0.32; }
+  }
 </style>
 
 <script>

@@ -141,6 +141,20 @@ const phases = [
   .club-card .btn-primary:hover { filter: drop-shadow(0 8px 20px rgba(0, 0, 0, 0.6)); }
   /* readable success message on the orange card */
   .club-msg { color: var(--accent-ink) !important; font-weight: 700; }
+
+  /* ---------- Mobile: shallow slants, tighter padding, full-width CTA ---------- */
+  @media (max-width: 600px) {
+    .club-card { clip-path: polygon(18px 0, 100% 0, calc(100% - 18px) 100%, 0 100%); }
+    .club-card#club { padding: 1.9rem 1.35rem; }
+    .club-card#club h3 { font-size: clamp(1.9rem, 1.3rem + 3.5vw, 2.6rem); }
+    .club-card .btn-primary { width: 100%; white-space: normal; }
+    .storefront-shot { padding: 5px; }
+    .storefront-shot img {
+      box-shadow: -3px -3px 0 #3fb6d6, -6px -6px 0 #3fb6d6, 3px 3px 0 var(--magenta), 6px 6px 0 var(--magenta), 8px 8px 0 #4a2c14, 10px 16px 24px rgba(0, 0, 0, 0.5);
+    }
+    .jt-box { padding: 1rem 1.2rem; }
+    .jt-phase { font-size: 1.15rem; }
+  }
 </style>
 
 <script>

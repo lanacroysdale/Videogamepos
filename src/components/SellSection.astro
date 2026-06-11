@@ -143,6 +143,15 @@
   .offer-card .modal-success h3, .offer-card .modal-success p { color: var(--accent-ink); }
   .offer-card[data-sent="true"] .modal-form, .offer-card[data-sent="true"] .modal-head { display: none; }
   .offer-card[data-sent="true"] .modal-success { display: block; }
+
+  /* ---------- Mobile: stack CTAs, shallow slants, tighter card padding ---------- */
+  @media (max-width: 600px) {
+    #offer-toggle, #how-toggle { width: 100%; }
+    .offer-card { clip-path: polygon(18px 0, 100% 0, calc(100% - 18px) 100%, 0 100%); padding: 1.9rem 1.35rem; }
+    .how-card { clip-path: polygon(16px 0, 100% 0, calc(100% - 16px) 100%, 0 100%); padding: 1.9rem 1.35rem; }
+    .offer-card .modal-head h3 { font-size: 1.7rem; }
+    .how-title { font-size: 1.5rem; }
+  }
 </style>
 
 <script>

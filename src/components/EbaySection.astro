@@ -83,4 +83,20 @@ import { EBAY } from "../consts";
   /* Top CTA → dark brown */
   .ebay-panel .btn-magenta { background: linear-gradient(135deg, #2b1809, #160b03); color: #fbf3ec; filter: drop-shadow(0 5px 13px rgba(0, 0, 0, 0.4)); }
   .ebay-panel .btn-magenta:hover { filter: drop-shadow(0 8px 20px rgba(0, 0, 0, 0.6)); }
+
+  /* ---------- Mobile: shallow slant + tighter padding so nothing clips ---------- */
+  @media (max-width: 600px) {
+    .ebay-panel {
+      clip-path: polygon(18px 0, 100% 0, calc(100% - 18px) 100%, 0 100%);
+      padding: 1.75rem 1.35rem;
+      gap: 1.4rem;
+    }
+    .ebay-eyebrow { font-size: 0.68rem; letter-spacing: 0.07em; }
+    .ebay-panel h2 { font-size: 1.95rem; }
+    .ebay-panel .btn { width: 100%; white-space: normal; }
+    .ebay-panel .chip { padding: 0.4rem 0.85rem; font-size: 0.82rem; }
+    .store-card {
+      box-shadow: -3px -3px 0 #3fb6d6, -5px -5px 0 #3fb6d6, 3px 3px 0 var(--cyan), 5px 5px 0 var(--cyan), 7px 7px 0 #4a2c14, 8px 14px 22px rgba(0, 0, 0, 0.5);
+    }
+  }
 </style>

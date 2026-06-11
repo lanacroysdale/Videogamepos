@@ -371,6 +371,17 @@ body:not(.app-body) .section::before {
   .nav-pin { margin-top: 0.85rem; align-self: flex-start; }
 }
 
+/* Small phones: shrink the brand lockup so it never collides with the menu button */
+@media (max-width: 420px) {
+  .site-header .navbar { gap: 0.5rem; }
+  .site-header .brand { gap: 0.45rem; font-size: 1.18rem; }
+  .site-header .brand-logo { height: 28px; }
+}
+@media (max-width: 340px) {
+  .site-header .brand { font-size: 1.02rem; }
+  .site-header .brand-logo { height: 24px; }
+}
+
 .site-footer {
   border-top: 0;
   background: linear-gradient(120deg, #f39ccd 0%, #468596 100%);
