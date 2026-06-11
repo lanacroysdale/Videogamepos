@@ -1,0 +1,181 @@
+---
+const phases = [
+  { icon: "📈", date: "Jan 2026 – Dec 2026", title: "Investment & Expansion", desc: "So far in 2026 we've grown our inventory by 460% and increased sales by over 300%." },
+  { icon: "🐷", date: "Dec 2026 – March 2027", title: "Saving & Preparation", desc: "As we crush our 2026 goals, we'll build up savings and prep for the retail-space build-out." },
+  { icon: "🔨", date: "March 2027 – May 2027", title: "Build-Out & Finalization", desc: "As spring rolls around, we'll start the build-out and finalize the space by summer." },
+  { icon: "🎉", date: "June 2027", title: "Grand Opening", desc: "We'll host a soft opening to test the waters before our full grand opening in early summer." },
+];
+---
+
+<section class="section journey" id="journey">
+  <div class="container">
+    <div class="journey-intro">
+      <div class="section-head">
+        <span class="eyebrow">Eat · Play · Connect</span>
+        <h2>Your Hangout Hub for All Things Nostalgia</h2>
+        <p class="lead">
+          Step through the door into an immersive, curated nostalgia museum you can browse
+          at your leisure. Head toward the back and you&rsquo;ve stepped into a chill gaming
+          lounge arcade — complete with food and drinks. Bring your own games or play our
+          wide selection on the consoles we have set up.
+        </p>
+        <p class="lead" style="margin-top:1rem;">
+          We&rsquo;re growing fast toward a double-sided retail space + gaming lounge in
+          <strong>2027</strong> — the closest game store to PDX, easy for visitors and
+          locals alike. The goal: an inclusive community where every kind of gamer feels
+          welcome. There will always be space for you here.
+        </p>
+      </div>
+      <div class="storefront-shot">
+        <img src="/storefront.jpg" alt="TimeLag Video Games storefront — Retro Gaming Lounge & Arcade with Buy · Sell · Chill signage" />
+      </div>
+    </div>
+
+    <div class="journey-timeline">
+      <h2 class="jt-title">Come Along for the Journey!</h2>
+      <p class="jt-sub">Get a sneak peek at our secret grand-opening timeline.</p>
+      <ol class="jt-list">
+        {phases.map((p) => (
+          <li class="jt-row">
+            <div class="jt-rail"><span class="jt-node" aria-hidden="true"></span></div>
+            <div class="jt-box">
+              <span class="jt-badge" aria-hidden="true">{p.icon}</span>
+              <div class="jt-content">
+                <p class="jt-date">{p.date}</p>
+                <h3 class="jt-phase">{p.title}</h3>
+                <p class="jt-desc">{p.desc}</p>
+              </div>
+            </div>
+          </li>
+        ))}
+      </ol>
+      <p class="jt-note">*Subject to change. We expect a few delays are inevitable — but this timeline keeps us on our toes!</p>
+    </div>
+
+    <div class="club">
+      <div class="club-card panel" id="club">
+        <h3>Want Updates?</h3>
+        <p>Get periodic updates about our progress — including videos from behind the scenes.</p>
+        <form class="club-form" data-club-form action="/api/contact" method="POST" novalidate>
+          <input type="hidden" name="items" value="TimeLag Club newsletter signup" />
+          <div class="hp" aria-hidden="true"><label>Company<input type="text" name="company" tabindex="-1" autocomplete="off" /></label></div>
+          <div class="form-row">
+            <div class="field"><label for="club-first">First name <span class="req">*</span></label><input id="club-first" name="first" type="text" required placeholder="Jane" /></div>
+            <div class="field"><label for="club-last">Last name</label><input id="club-last" name="last" type="text" placeholder="Gamer" /></div>
+          </div>
+          <div class="form-row">
+            <div class="field"><label for="club-email">Email <span class="req">*</span></label><input id="club-email" name="email" type="email" required placeholder="you@email.com" /></div>
+            <div class="field"><label for="club-phone">Phone <span class="opt">(optional)</span></label><input id="club-phone" name="phone" type="tel" placeholder="(503) 555-0100" /></div>
+          </div>
+          <div class="club-actions">
+            <button type="submit" class="btn btn-primary">Join the TimeLag Club →</button>
+          </div>
+          <p class="club-msg fineprint" role="status" aria-live="polite" style="text-align:center;margin-top:0.8rem;"></p>
+        </form>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .journey { background: linear-gradient(180deg, rgba(205,128,76,0.07), transparent 60%); }
+  .journey .lead { max-width: 64ch; }
+  .journey-intro { display: grid; gap: clamp(1.75rem, 1rem + 3vw, 3.5rem); align-items: center; margin-bottom: clamp(1.75rem, 1rem + 2vw, 3rem); }
+  @media (min-width: 920px) { .journey-intro { grid-template-columns: 0.92fr 1.08fr; } }
+  .journey-intro .section-head { margin-bottom: 0; max-width: none; }
+  .storefront-shot { width: 100%; padding: 9px; }
+  .storefront-shot img {
+    width: 100%; height: auto; display: block; border-radius: 0; clip-path: none;
+    box-shadow:
+      -5px -5px 0 #3fb6d6, -9px -9px 0 #3fb6d6,
+      5px 5px 0 var(--magenta), 9px 9px 0 var(--magenta),
+      12px 12px 0 #4a2c14, 14px 22px 36px rgba(0, 0, 0, 0.5);
+  }
+
+  /* Vertical grand-opening timeline — colored boxes with diamond rail */
+  .journey-timeline { margin-top: clamp(2.5rem, 1.5rem + 3vw, 4.5rem); text-align: center; }
+  .jt-title { font-size: clamp(1.9rem, 1.3rem + 2.4vw, 2.9rem); margin-bottom: 0.5rem; }
+  .jt-sub { color: var(--muted); max-width: 52ch; margin: 0 auto clamp(2rem, 1.2rem + 2.5vw, 3rem); font-size: 1.05rem; }
+  .jt-list { list-style: none; padding: 0; margin: 0 auto; max-width: 720px; display: grid; gap: 1.2rem; text-align: left; }
+  .jt-row { display: grid; grid-template-columns: 30px 1fr; gap: 1.1rem; align-items: stretch; }
+  .jt-rail { position: relative; }
+  .jt-rail::before { content: ""; position: absolute; left: 50%; transform: translateX(-50%); width: 2px; top: 0; height: calc(100% + 1.2rem); background: currentColor; opacity: 0.4; }
+  .jt-row:first-child .jt-rail::before { top: 34px; height: calc(100% - 34px + 1.2rem); }
+  .jt-row:last-child .jt-rail::before { top: 0; height: 34px; }
+  .jt-node { position: absolute; left: 50%; top: 34px; transform: translate(-50%, -50%) rotate(45deg); width: 18px; height: 18px; background: currentColor; border: 3px solid var(--bg); z-index: 1; }
+  .jt-row:nth-child(1) .jt-rail { color: #df5e39; }
+  .jt-row:nth-child(2) .jt-rail { color: #cd804c; }
+  .jt-row:nth-child(3) .jt-rail { color: #468596; }
+  .jt-row:nth-child(4) .jt-rail { color: #f39ccd; }
+  .jt-box { display: flex; gap: 0.95rem; align-items: flex-start; padding: 1.15rem 1.6rem; border-radius: 0; clip-path: polygon(16px 0, 100% 0, calc(100% - 16px) 100%, 0 100%); }
+  .jt-row:nth-child(1) .jt-box { background: #df5e39; }
+  .jt-row:nth-child(2) .jt-box { background: #cd804c; }
+  .jt-row:nth-child(3) .jt-box { background: #468596; }
+  .jt-row:nth-child(4) .jt-box { background: #f39ccd; }
+  .jt-badge { width: 2.6rem; height: 2.6rem; display: grid; place-items: center; font-size: 1.2rem; flex: none; background: rgba(255, 255, 255, 0.55); clip-path: polygon(7px 0, 100% 0, calc(100% - 7px) 100%, 0 100%); }
+  .jt-date { font-family: var(--font-mono); font-weight: 800; font-size: 0.9rem; color: var(--accent-ink); letter-spacing: 0.02em; margin: 0 0 0.1rem; opacity: 0.82; }
+  .jt-phase { font-size: 1.3rem; margin: 0 0 0.2rem; color: var(--accent-ink); }
+  .jt-desc { color: var(--accent-ink); font-size: 0.96rem; margin: 0; text-wrap: pretty; }
+  .jt-note { color: var(--muted-2); font-style: italic; font-size: 0.92rem; margin: clamp(2rem, 1.2rem + 2.5vw, 3rem) auto 0; max-width: 72ch; }
+  @media (max-width: 520px) { .jt-box { padding: 1rem 1.25rem; } .jt-row { gap: 0.8rem; } }
+
+  /* TimeLag Club signup — orange module, same steep-diagonal as the shop card */
+  .club { margin-top: 2.5rem; }
+  .hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+  .club-card {
+    background: linear-gradient(90deg, #df5e39 0%, #cd804c 100%); border: 0; border-radius: 0; box-shadow: none;
+    clip-path: polygon(72px 0, 100% 0, calc(100% - 72px) 100%, 0 100%);
+    filter: drop-shadow(0 18px 34px rgba(0, 0, 0, 0.42));
+  }
+  .club-card#club { padding: clamp(1.6rem, 1rem + 2vw, 2.4rem) clamp(3.25rem, 1.5rem + 6vw, 5.5rem); }
+  .club-card#club h3 { color: var(--accent-ink); font-size: clamp(2rem, 1.4rem + 3vw, 3.2rem); line-height: 1.05; text-align: center; }
+  .club-card#club > p { color: rgba(37, 19, 10, 0.82); text-align: center; font-size: clamp(1.05rem, 1rem + 0.4vw, 1.25rem); max-width: 52ch; margin-inline: auto; }
+  .club-card label { color: var(--accent-ink); font-weight: 700; }
+  .club-card .opt { color: rgba(37, 19, 10, 0.6); }
+  .club-form { margin-top: 1.1rem; }
+  .club-card#club input { background: #fbf3ec; border: 0; border-radius: 0; color: var(--accent-ink); padding-inline: 1.4rem; clip-path: polygon(14px 0, 100% 0, calc(100% - 14px) 100%, 0 100%); }
+  .club-card input::placeholder { color: rgba(37, 19, 10, 0.5); }
+  .club-card#club input:focus { outline: 0; border: 0; box-shadow: none; filter: drop-shadow(0 0 6px rgba(37, 19, 10, 0.55)); }
+  .club-card#club .club-actions { text-align: center; margin-top: 0.8rem; }
+  .club-card .btn-primary { background: linear-gradient(135deg, #2b1809, #160b03); color: #fbf3ec; filter: drop-shadow(0 5px 13px rgba(0, 0, 0, 0.4)); }
+  .club-card .btn-primary:hover { filter: drop-shadow(0 8px 20px rgba(0, 0, 0, 0.6)); }
+  /* readable success message on the orange card */
+  .club-msg { color: var(--accent-ink) !important; font-weight: 700; }
+</style>
+
+<script>
+  document.querySelectorAll<HTMLFormElement>("form[data-club-form]").forEach((form) => {
+    const msg = form.querySelector<HTMLParagraphElement>(".club-msg");
+    const btn = form.querySelector<HTMLButtonElement>("button[type=submit]");
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const honey = form.querySelector<HTMLInputElement>('input[name="company"]');
+      if (honey?.value) return;
+      if (!form.checkValidity()) { form.reportValidity(); return; }
+
+      const first = (form.querySelector<HTMLInputElement>('[name="first"]')?.value || "").trim();
+      const last = (form.querySelector<HTMLInputElement>('[name="last"]')?.value || "").trim();
+      const fd = new FormData(form);
+      fd.set("name", `${first} ${last}`.trim() || first);
+
+      if (btn) { btn.disabled = true; btn.textContent = "Joining…"; }
+      try {
+        const res = await fetch(form.action, {
+          method: "POST",
+          headers: { Accept: "application/json", "X-Requested-With": "fetch" },
+          body: fd,
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.ok) {
+          if (msg) msg.textContent = "🎉 You're in! Watch your inbox for behind-the-scenes updates.";
+          if (btn) btn.textContent = "Joined ✓";
+          return;
+        }
+        throw new Error(data.error || "error");
+      } catch {
+        if (msg) msg.textContent = "Hmm, that didn't go through — please try again.";
+        if (btn) { btn.disabled = false; btn.textContent = "Join the TimeLag Club →"; }
+      }
+    });
+  });
+</script>

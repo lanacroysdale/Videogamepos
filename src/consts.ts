@@ -37,27 +37,31 @@ export const EBAY = {
 
   // Shown as quick-browse chips in the store section.
   categories: [
+    'GameCube',
+    'Game Boy',
+    'DS & 3DS',
     'Retro Consoles',
+    'Gaming Accessories',
     'NES & Famicom',
     'SNES & Super Famicom',
     'Nintendo 64',
-    'GameCube & Wii',
-    'Game Boy & DS',
-    'Pokémon',
-    'Japanese Imports',
+    'Pokemon',
+    'Playstation',
+    'Sega Dreamcast',
+    'Sega Saturn',
   ],
 };
 
 // Primary navigation shown in the header and footer.
-// "Find Us" lives as a standalone button in the header (see Header.astro).
+// "Find Us" lives as a standalone location pill in the header (see Header.astro).
 export const NAV: NavItem[] = [
-  { label: 'Shop', href: '/#store' },
+  { label: 'Shop', href: '/#shop' },
   { label: 'Sell Games', href: '/#sell' },
-  { label: 'About', href: '/#why' },
+  { label: 'About', href: '/#about' },
 ];
 
-// Anchor target for the "Find Us" header button (the hangout-hub section).
-export const FIND_US_HREF = '/#find';
+// Anchor target for the "Find Us" header pill (the Eat·Play·Connect section).
+export const FIND_US_HREF = '/#journey';
 
 // Used in the "condition" dropdown on the sell/trade form.
 export const CONDITIONS = [

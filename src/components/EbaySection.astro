@@ -2,305 +2,85 @@
 import { EBAY } from "../consts";
 ---
 
-<section class="tl-band tl-band--angle-a store" id="store">
-  <div class="tl-band-inner">
-    <div class="container store-grid">
-      <div class="store-copy">
-        <span class="eyebrow eyebrow--ink">Shop online · In-store coming soon!</span>
+<section class="section" id="shop">
+  <div class="container">
+    <div class="ebay-panel panel">
+      <span class="eyebrow ebay-eyebrow">Shop online · In-store coming soon!</span>
+      <div class="ebay-copy">
         <h2>Browse Our Curated Store</h2>
         <p class="lead">
-          Shop a hand-picked selection of Nintendo games, consoles, and
-          accessories — every item tested, refurbished, and shipped fast with
-          buyer protection.
+          Flip through our hand picked selection of authentic Nintendo games, consoles,
+          accessories, merch and plushies. We specialize in rare and obscure imports from
+          Japan and across the world that never came to the US. Every item is tested,
+          authentic, and shipped fast with buyer protection.
         </p>
-
-        <div class="store-cta">
-          <a href={EBAY.storeUrl} class="tl-btn tl-btn--dark" target="_blank" rel="noopener">
-            Shop Our Curated Store Now <span class="arrow">↗️</span>
+        <div class="ebay-cta">
+          <a href={EBAY.storeUrl} class="btn btn-magenta" target="_blank" rel="noopener">
+            Browse Our eBay Store Now ↗
           </a>
-          <a href={EBAY.sellerSearchUrl} class="tl-btn tl-btn--teal" target="_blank" rel="noopener">
-            See All Listings
-          </a>
-        </div>
-
-        <div class="chips" aria-label="Popular categories on eBay">
-          {
-            EBAY.categories.map((cat) => (
-              <a class="tl-chip" href={EBAY.storeUrl} target="_blank" rel="noopener">
-                {cat}
-              </a>
-            ))
-          }
         </div>
       </div>
 
-      <div class="store-art" aria-hidden="true">
-        <div class="browser">
-          <div class="browser-head">
+      <div class="ebay-art">
+        <div class="store-card">
+          <div class="store-head">
             <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-            <span class="url">ebay.com/str/timelaggaming</span>
+            <span class="store-url">ebay.com/str/timelaggaming</span>
           </div>
-          <div class="browser-body">
-            <div class="eb-banner">
-              <div class="eb-banner-text">
-                <strong>Hand-Picked Nintendo Games &amp; Consoles</strong>
-                <span>SNES · N64 · Game Boy · GameCube · Wii · Switch — region-free imports &amp; classics</span>
-              </div>
-              <div class="eb-banner-tiles">
-                {Array.from({ length: 7 }).map(() => <i></i>)}
-              </div>
-            </div>
-
-            <div class="eb-profile">
-              <span class="eb-avatar">TL</span>
-              <div class="eb-id">
-                <strong>TimeLag Gaming</strong>
-                <span>100% positive feedback · 1.6K items sold · 162 followers</span>
-              </div>
-              <span class="eb-actions">Share · Contact</span>
-            </div>
-
-            <div class="eb-tabs">
-              <span class="eb-cats">☰ Categories</span>
-              <span class="eb-tab is-on">Shop</span>
-              <span class="eb-tab">Sale</span>
-              <span class="eb-tab">About</span>
-              <span class="eb-tab">Feedback</span>
-              <span class="eb-search">🔍 Search all 473 items</span>
-            </div>
-
-            <p class="eb-feat">Featured categories</p>
-            <div class="eb-tiles">
-              <div class="eb-card"><span class="eb-thumb t1">🎮</span><b>Game Consoles</b><i>Video Game Consoles</i></div>
-              <div class="eb-card"><span class="eb-thumb t2">🕹️</span><b>Video Games</b><i>Video Games</i></div>
-              <div class="eb-card"><span class="eb-thumb t3">🎛️</span><b>Accessories</b><i>Video Game Accessories</i></div>
-              <div class="eb-card"><span class="eb-thumb t4">⭐</span><b>Collectibles</b><i>Collectibles</i></div>
-            </div>
+          <div class="store-shot">
+            <img src="/ebay-store.png" alt="TimeLag Gaming eBay storefront" />
           </div>
         </div>
+      </div>
+
+      <div class="chips" aria-label="Popular categories">
+        {EBAY.categories.map((cat) => (
+          <a class="chip" href={EBAY.storeUrl} target="_blank" rel="noopener">{cat}</a>
+        ))}
       </div>
     </div>
   </div>
 </section>
 
 <style>
-  .store-grid {
-    display: grid;
-    gap: clamp(2rem, 1rem + 4vw, 3.5rem);
-    align-items: center;
+  .ebay-panel { display: grid; gap: clamp(1.5rem, 1rem + 3vw, 3rem); align-items: center; padding: clamp(1.5rem, 1rem + 3vw, 3rem); }
+  @media (min-width: 900px) { .ebay-panel { grid-template-columns: 0.95fr 1.05fr; } }
+  .ebay-eyebrow { grid-column: 1 / -1; margin-bottom: -0.4rem; }
+  .ebay-cta { display: flex; flex-wrap: wrap; gap: 0.8rem; margin-top: 1.6rem; }
+  .chips { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.4rem; }
+  .ebay-art { display: grid; place-items: center; }
+  .store-card {
+    width: min(100%, 500px); margin-inline: auto; border-radius: 0; overflow: hidden;
+    border: 1px solid var(--border-strong); background: var(--bg-2);
+    box-shadow: -4px -4px 0 #3fb6d6, -7px -7px 0 #3fb6d6, 4px 4px 0 var(--cyan), 7px 7px 0 var(--cyan), 10px 10px 0 #4a2c14, 10px 18px 30px rgba(0, 0, 0, 0.5);
   }
-  @media (min-width: 940px) {
-    .store-grid {
-      grid-template-columns: 1fr 1fr;
-    }
-  }
+  .store-head { display: flex; align-items: center; gap: 0.4rem; padding: 0.7rem 0.9rem; background: rgba(255, 255, 255, 0.04); border-bottom: 1px solid var(--border); }
+  .store-head .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .store-head .dot:nth-child(1) { background: #ff5f57; }
+  .store-head .dot:nth-child(2) { background: #febc2e; }
+  .store-head .dot:nth-child(3) { background: #28c840; }
+  .store-url { margin-left: auto; font-family: var(--font-mono); font-size: 0.75rem; color: var(--muted); }
+  .store-shot { display: block; width: 100%; background: #fff; line-height: 0; }
+  .store-shot img { display: block; width: 100%; height: auto; }
 
-  .store-copy h2 {
-    font-size: clamp(2rem, 1.4rem + 2.4vw, 3rem);
-    margin-bottom: 0.9rem;
-    color: var(--ink);
+  /* Shop module recolored to the header orange; copy switches to dark ink for legibility */
+  .ebay-panel {
+    background: linear-gradient(90deg, #df5e39 0%, #cd804c 100%); border: 0; border-radius: 0; box-shadow: none;
+    clip-path: polygon(72px 0, 100% 0, calc(100% - 72px) 100%, 0 100%);
+    filter: drop-shadow(0 18px 34px rgba(0, 0, 0, 0.42));
+    padding-inline: clamp(3.25rem, 1.5rem + 6vw, 5.5rem);
   }
-  .store-copy .lead {
-    color: #3c2012;
-    max-width: 46ch;
+  .ebay-panel .eyebrow { color: var(--accent-ink); }
+  .ebay-panel .eyebrow::before { background: linear-gradient(90deg, var(--accent-ink), transparent); }
+  .ebay-panel h2 { color: var(--accent-ink); }
+  .ebay-panel .lead { color: rgba(37, 19, 10, 0.82); }
+  .ebay-panel .chip {
+    color: var(--accent-ink); background: #fbf3ec; border: 0; border-radius: 0;
+    padding: 0.42rem 1.2rem; clip-path: polygon(14px 0, 100% 0, calc(100% - 14px) 100%, 0 100%);
+    box-shadow: 0 3px 9px rgba(0, 0, 0, 0.22); font-weight: 700;
   }
-  .store-cta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.9rem;
-    margin: 1.7rem 0 1.4rem;
-  }
-  .arrow {
-    font-size: 0.95em;
-  }
-  .chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.7rem;
-    max-width: 30rem;
-  }
-
-  /* ---------- Browser mock ---------- */
-  .store-art {
-    display: grid;
-    place-items: center;
-  }
-  .browser {
-    width: min(100%, 460px);
-    border-radius: 14px;
-    overflow: hidden;
-    background: #1e1e22;
-    box-shadow: 0 30px 60px -28px rgba(0, 0, 0, 0.8);
-  }
-  .browser-head {
-    display: flex;
-    align-items: center;
-    gap: 0.45rem;
-    padding: 0.6rem 0.8rem;
-    background: #2a2a30;
-  }
-  .browser-head .dot {
-    width: 11px;
-    height: 11px;
-    border-radius: 50%;
-  }
-  .browser-head .dot:nth-child(1) { background: #ff5f57; }
-  .browser-head .dot:nth-child(2) { background: #febc2e; }
-  .browser-head .dot:nth-child(3) { background: #28c840; }
-  .browser-head .url {
-    margin-left: auto;
-    font-family: var(--font-mono);
-    font-size: 0.74rem;
-    color: #d7d2cc;
-    background: #1b1b1f;
-    padding: 0.2rem 0.7rem;
-    border-radius: 6px;
-  }
-  .browser-body {
-    background: #fff;
-    color: #20242b;
-    padding: 0.6rem;
-    font-size: 0.78rem;
-  }
-
-  .eb-banner {
-    border-radius: 8px;
-    padding: 0.7rem 0.85rem;
-    background: linear-gradient(110deg, #1b1340 0%, #3a1d57 60%, #6a2a6f 100%);
-    color: #fff;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-  .eb-banner-text strong {
-    color: #fff;
-    font-size: 0.92rem;
-    font-weight: 800;
-  }
-  .eb-banner-text span {
-    display: block;
-    font-size: 0.66rem;
-    color: #d8cfe8;
-    margin-top: 0.15rem;
-  }
-  .eb-banner-tiles {
-    display: flex;
-    gap: 0.3rem;
-  }
-  .eb-banner-tiles i {
-    flex: 1;
-    height: 24px;
-    border-radius: 4px;
-    background: linear-gradient(160deg, #2ce6e0, #8b5cf6);
-  }
-  .eb-banner-tiles i:nth-child(2n) { background: linear-gradient(160deg, #ff49d0, #8b5cf6); }
-  .eb-banner-tiles i:nth-child(3n) { background: linear-gradient(160deg, #ffd23f, #ff7a59); }
-  .eb-banner-tiles i:nth-child(5n) { background: linear-gradient(160deg, #80ff72, #2ce6e0); }
-
-  .eb-profile {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.6rem 0.2rem;
-    border-bottom: 1px solid #eee;
-  }
-  .eb-avatar {
-    width: 30px;
-    height: 30px;
-    border-radius: 50%;
-    display: grid;
-    place-items: center;
-    background: linear-gradient(135deg, #c2673a, #d59a64);
-    color: #fff;
-    font-family: var(--font-display);
-    font-weight: 800;
-    font-size: 0.72rem;
-    flex: none;
-  }
-  .eb-id strong {
-    display: block;
-    font-size: 0.84rem;
-    font-weight: 800;
-    color: #111;
-  }
-  .eb-id span {
-    font-size: 0.64rem;
-    color: #666;
-  }
-  .eb-actions {
-    margin-left: auto;
-    font-size: 0.64rem;
-    color: #3665c9;
-  }
-
-  .eb-tabs {
-    display: flex;
-    align-items: center;
-    gap: 0.7rem;
-    padding: 0.55rem 0.2rem;
-    font-size: 0.68rem;
-    color: #444;
-    border-bottom: 1px solid #eee;
-    flex-wrap: wrap;
-  }
-  .eb-cats {
-    background: #f2f2f2;
-    border-radius: 20px;
-    padding: 0.2rem 0.6rem;
-  }
-  .eb-tab.is-on {
-    color: #111;
-    font-weight: 700;
-    border-bottom: 2px solid #111;
-  }
-  .eb-search {
-    margin-left: auto;
-    color: #888;
-    border: 1px solid #ddd;
-    border-radius: 20px;
-    padding: 0.2rem 0.6rem;
-  }
-
-  .eb-feat {
-    margin: 0.6rem 0.2rem 0.45rem;
-    font-weight: 800;
-    color: #111;
-    font-size: 0.78rem;
-  }
-  .eb-tiles {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 0.4rem;
-    padding-bottom: 0.2rem;
-  }
-  .eb-card b {
-    display: block;
-    font-size: 0.6rem;
-    color: #fff;
-    margin-top: -1rem;
-    position: relative;
-    text-align: center;
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
-    font-weight: 800;
-    letter-spacing: 0.02em;
-  }
-  .eb-card i {
-    display: block;
-    font-size: 0.56rem;
-    color: #666;
-    font-style: normal;
-    text-align: center;
-    margin-top: 0.55rem;
-  }
-  .eb-thumb {
-    display: grid;
-    place-items: center;
-    height: 50px;
-    border-radius: 6px;
-    font-size: 1.2rem;
-  }
-  .eb-thumb.t1 { background: linear-gradient(160deg, #3a2b1a, #6b4a2a); }
-  .eb-thumb.t2 { background: linear-gradient(160deg, #7a1f2b, #c23a2a); }
-  .eb-thumb.t3 { background: linear-gradient(160deg, #1f4a7a, #2a86c2); }
-  .eb-thumb.t4 { background: linear-gradient(160deg, #5a2a6f, #b03a8a); }
+  .ebay-panel a.chip:hover { color: var(--accent-ink); background: #ffffff; border: 0; }
+  /* Top CTA → dark brown */
+  .ebay-panel .btn-magenta { background: linear-gradient(135deg, #2b1809, #160b03); color: #fbf3ec; filter: drop-shadow(0 5px 13px rgba(0, 0, 0, 0.4)); }
+  .ebay-panel .btn-magenta:hover { filter: drop-shadow(0 8px 20px rgba(0, 0, 0, 0.6)); }
 </style>

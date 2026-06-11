@@ -1,15 +1,14 @@
 ---
 import { NAV, SITE, FIND_US_HREF } from "../consts";
-import Logo from "./Logo.astro";
 ---
 
 <header class="site-header">
-  <div class="container bar">
+  <div class="container navbar">
     <a href="/" class="brand" aria-label={`${SITE.name} home`}>
-      <Logo size={38} />
-      <span class="brand-text">
-        TIMELAG<span class="brand-text-2"> VIDEO GAMES</span>
+      <span class="brand-mark" aria-hidden="true">
+        <img src="/logo-white.png" alt="" class="brand-logo" />
       </span>
+      <span class="brand-text">TimeLag<span class="brand-text-2"> Video&nbsp;Games</span></span>
     </a>
 
     <button
@@ -24,199 +23,33 @@ import Logo from "./Logo.astro";
 
     <nav id="primary-nav" class="nav" aria-label="Primary">
       <ul>
-        {
-          NAV.map((item) => (
-            <li>
-              <a href={item.href}>{item.label}</a>
-            </li>
-          ))
-        }
+        {NAV.map((item) => (
+          <li><a href={item.href}>{item.label}</a></li>
+        ))}
       </ul>
-      <a href={FIND_US_HREF} class="tl-btn tl-btn--dark find-us">
-        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
-          <path
-            fill="currentColor"
-            d="M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7Zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5Z"
-          ></path>
-        </svg>
-        Find Us
+      <a href={FIND_US_HREF} class="btn nav-pin" aria-label="Find us in Portland">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"></path></svg>
+        <span>Find&nbsp;Us</span>
       </a>
     </nav>
   </div>
 </header>
 
-<style>
-  .site-header {
-    position: sticky;
-    top: 0;
-    z-index: 50;
-    background: linear-gradient(100deg, var(--orange-hd-1) 0%, var(--orange-hd-2) 100%);
-    border-bottom: 1px solid rgba(60, 30, 12, 0.25);
-    box-shadow: 0 10px 30px -22px rgba(0, 0, 0, 0.9);
-  }
-
-  .bar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-    height: 96px;
-  }
-
-  .brand {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.7rem;
-    color: #1d120a;
-  }
-  .brand:hover {
-    text-decoration: none;
-  }
-  .brand-text {
-    font-family: var(--font-cond);
-    font-weight: 700;
-    font-style: italic;
-    letter-spacing: 0.01em;
-    text-transform: uppercase;
-    font-size: 1.5rem;
-    line-height: 1;
-  }
-  .brand-text-2 {
-    color: #3c2414;
-    font-weight: 600;
-  }
-
-  .nav {
-    display: flex;
-    align-items: center;
-    gap: 2rem;
-  }
-  .nav ul {
-    display: flex;
-    align-items: center;
-    gap: 1.9rem;
-    list-style: none;
-    padding: 0;
-  }
-  .nav a {
-    color: #1d120a;
-    font-family: var(--font-cond);
-    font-weight: 700;
-    font-style: italic;
-    font-size: 1.06rem;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    transition: opacity 0.15s ease;
-  }
-  .nav a:hover {
-    opacity: 0.65;
-    text-decoration: none;
-  }
-
-  .find-us {
-    padding: 0.7rem 1.25rem;
-    font-size: 0.98rem;
-    font-style: italic;
-  }
-  .find-us svg {
-    margin-right: 0.1rem;
-  }
-
-  /* ---------- Mobile ---------- */
-  .nav-toggle {
-    display: none;
-    flex-direction: column;
-    gap: 5px;
-    width: 46px;
-    height: 46px;
-    align-items: center;
-    justify-content: center;
-    background: rgba(24, 17, 11, 0.14);
-    border: 1px solid rgba(24, 17, 11, 0.3);
-    border-radius: 10px;
-    cursor: pointer;
-  }
-  .nav-toggle span {
-    display: block;
-    width: 22px;
-    height: 2px;
-    background: #1d120a;
-    border-radius: 2px;
-    transition: transform 0.2s ease, opacity 0.2s ease;
-  }
-
-  @media (max-width: 900px) {
-    .bar {
-      height: 80px;
-    }
-    .brand-text {
-      font-size: 1.3rem;
-    }
-    .nav-toggle {
-      display: flex;
-    }
-    .nav {
-      position: absolute;
-      inset: 80px 0 auto 0;
-      flex-direction: column;
-      align-items: stretch;
-      gap: 0.25rem;
-      padding: 1rem clamp(1.1rem, 0.6rem + 2vw, 2rem) 1.5rem;
-      background: linear-gradient(180deg, var(--orange-hd-1), #b5512c);
-      border-bottom: 1px solid rgba(60, 30, 12, 0.3);
-      box-shadow: 0 20px 40px -24px rgba(0, 0, 0, 0.9);
-      display: none;
-    }
-    .nav[data-open="true"] {
-      display: flex;
-    }
-    .nav ul {
-      flex-direction: column;
-      align-items: stretch;
-      gap: 0;
-    }
-    .nav li a {
-      display: block;
-      padding: 0.85rem 0.25rem;
-      border-bottom: 1px solid rgba(24, 17, 11, 0.2);
-      font-size: 1.15rem;
-      color: #fdf3e7;
-    }
-    .find-us {
-      margin-top: 0.9rem;
-      justify-content: center;
-    }
-    .nav-toggle[aria-expanded="true"] span:nth-child(1) {
-      transform: translateY(7px) rotate(45deg);
-    }
-    .nav-toggle[aria-expanded="true"] span:nth-child(2) {
-      opacity: 0;
-    }
-    .nav-toggle[aria-expanded="true"] span:nth-child(3) {
-      transform: translateY(-7px) rotate(-45deg);
-    }
-  }
-</style>
-
 <script>
   const toggle = document.querySelector<HTMLButtonElement>(".nav-toggle");
   const nav = document.getElementById("primary-nav");
-
   if (toggle && nav) {
     const setOpen = (open: boolean) => {
       toggle.setAttribute("aria-expanded", String(open));
       nav.dataset.open = String(open);
     };
-
     toggle.addEventListener("click", () => {
       setOpen(toggle.getAttribute("aria-expanded") !== "true");
     });
-
     nav.querySelectorAll("a").forEach((link) => {
       link.addEventListener("click", () => setOpen(false));
     });
-
-    const mq = window.matchMedia("(min-width: 901px)");
+    const mq = window.matchMedia("(min-width: 961px)");
     mq.addEventListener("change", (e) => {
       if (e.matches) setOpen(false);
     });

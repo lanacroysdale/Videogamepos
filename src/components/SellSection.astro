@@ -1,352 +1,202 @@
 ---
-import { SITE } from "../consts";
-
-const redirectTo = "/?quote=1";
+// Sell — cash CTA with two inline-unfurl panels (offer form + how-it-works).
 ---
 
-<section class="section sellcta" id="sell">
+<section class="section sell-cash" id="sell">
   <div class="container">
-    <div class="sell-head">
-      <span class="eyebrow">Sell or trade · Cash today</span>
-      <h2>Sell Your Video Games for <span class="grad">Cash</span></h2>
-      <p class="sell-lead">
-        TimeLag Video Games makes better cash offers than any other retro game
-        store in the Pacific Northwest. In Portland, OR or Vancouver, WA? Reach
-        out today for a free cash offer on your games, accessories, and
-        collectibles.
-      </p>
-      <p class="sell-sub">
-        Outside the area? No problem — we&rsquo;re always willing to take a look at
-        what you have and make a fair offer.
-      </p>
+    <span class="eyebrow" style="justify-content:center;display:inline-flex;">Sell or trade · Cash today</span>
+    <h2>Sell Your Video Games for <span class="grad">Cash</span></h2>
+    <p class="lead">
+      TimeLag Video Games makes better cash offers than any other retro game store in the
+      Pacific Northwest. In Portland, OR or Vancouver, WA? Reach out today for a free cash
+      offer on your games, accessories, and collectibles.
+    </p>
+    <p class="muted sub2">
+      Outside the area? No problem — we&rsquo;re always willing to take a look at what you have
+      and make a fair offer.
+    </p>
+    <div style="display:flex;gap:0.8rem;justify-content:center;flex-wrap:wrap;">
+      <button id="offer-toggle" class="btn btn-magenta" type="button" aria-expanded="false" aria-controls="offer-inline">Sell my games →</button>
+      <button id="how-toggle" class="btn btn-ghost" type="button" aria-expanded="false" aria-controls="how-inline">See how it works</button>
+    </div>
 
-      <div class="sell-actions">
-        <button type="button" class="tl-btn tl-btn--pink sell-toggle" aria-expanded="false" aria-controls="sell-panel">
-          <span class="toggle-label">Sell My Games →</span>
-        </button>
-        <a href="/sell" class="tl-btn tl-btn--teal">See How It Works</a>
+    <div class="offer-reveal" id="offer-inline" data-open="false">
+      <div class="offer-card" data-sent="false">
+        <div class="modal-head">
+          <span class="eyebrow">Free · No obligation</span>
+          <h3 id="offer-title">Get Your Custom Cash Offer</h3>
+          <p class="modal-sub muted">Tell us what you&rsquo;ve got and we&rsquo;ll get back fast with a fair offer.</p>
+        </div>
+        <form class="modal-form" data-offer-form action="/api/contact" method="POST" novalidate>
+          <input type="hidden" name="_redirect" value="/" />
+          <div class="hp" aria-hidden="true"><label>Company<input type="text" name="company" tabindex="-1" autocomplete="off" /></label></div>
+          <div class="form-row">
+            <div class="field"><label for="of-first">First name <span class="req">*</span></label><input id="of-first" name="first" type="text" required placeholder="Jane" /></div>
+            <div class="field"><label for="of-last">Last name</label><input id="of-last" name="last" type="text" placeholder="Gamer" /></div>
+          </div>
+          <div class="field"><label for="of-email">Email <span class="req">*</span></label><input id="of-email" name="email" type="email" required placeholder="you@email.com" /></div>
+          <div class="field"><label for="of-phone">Phone <span class="opt">(optional)</span></label><input id="of-phone" name="phone" type="tel" placeholder="(503) 555-0100" /></div>
+          <div class="field"><label for="of-items">What video game items do you have to sell? <span class="req">*</span></label>
+            <textarea id="of-items" name="items" rows="4" required placeholder="Titles, platforms, rough quantities — e.g. 'Super Mario 64 (N64, cart only), PS2 slim + 2 controllers, ~30 mixed GameCube games.'"></textarea></div>
+          <div class="upload-row">
+            <button type="button" class="upload-btn"><span class="ic">📄</span>Upload a spreadsheet</button>
+            <button type="button" class="upload-btn"><span class="ic">🖼️</span>Upload images</button>
+          </div>
+          <button type="submit" class="btn btn-magenta btn-block">Submit for a cash quote →</button>
+          <p class="fineprint">We&rsquo;ll only use your details to respond about buying your games. No spam, ever.</p>
+        </form>
+        <div class="modal-success">
+          <div class="check" aria-hidden="true">✓</div>
+          <h3>Quote Request Sent!</h3>
+          <p>Thanks — we&rsquo;ll review what you&rsquo;ve got and reply soon with your custom cash offer.</p>
+        </div>
       </div>
     </div>
 
-    <div class="sell-panel" id="sell-panel" hidden>
-      <form class="sell-form" data-quote-form action="/api/contact" method="POST">
-        <input type="hidden" name="_redirect" value={redirectTo} />
-        <div class="hp" aria-hidden="true">
-          <label>Company<input type="text" name="company" tabindex="-1" autocomplete="off" /></label>
-        </div>
-
-        <div class="sell-form-head">
-          <span class="eyebrow eyebrow--ink">Free · No Obligation</span>
-          <h3>Get Your Custom Cash Offer</h3>
-          <p>Tell us what you&rsquo;ve got and we&rsquo;ll get back fast with a fair offer.</p>
-        </div>
-
-        <div class="qrow">
-          <div class="tl-field">
-            <label for="q-first">First name <span class="tl-req">*</span></label>
-            <input id="q-first" class="tl-input" name="name" type="text" required placeholder="Jane" />
-          </div>
-          <div class="tl-field">
-            <label for="q-last">Last name</label>
-            <input id="q-last" class="tl-input" name="last" type="text" placeholder="Gamer" />
-          </div>
-        </div>
-
-        <div class="tl-field full">
-          <label for="q-email">Email <span class="tl-req">*</span></label>
-          <input id="q-email" class="tl-input" name="email" type="email" required placeholder="you@email.com" />
-        </div>
-
-        <div class="tl-field full">
-          <label for="q-phone">Phone <span class="tl-opt">(optional)</span></label>
-          <input id="q-phone" class="tl-input" name="phone" type="tel" placeholder="(503) 555-0100" />
-        </div>
-
-        <div class="tl-field full">
-          <label for="q-items">What video game items do you have to sell? <span class="tl-req">*</span></label>
-          <textarea
-            id="q-items"
-            class="tl-input"
-            name="items"
-            rows="4"
-            required
-            placeholder="Titles, platforms, rough quantities — e.g. 'Super Mario 64 (N64, cart only), PS2 slim + 2 controllers, ~30 mixed GameCube games.'"
-          ></textarea>
-        </div>
-
-        <div class="uploads">
-          <label class="upload">
-            <input type="file" name="spreadsheet" accept=".csv,.xls,.xlsx,.numbers" hidden />
-            <span class="upload-ico">📄</span>
-            <span class="upload-label">Upload a spreadsheet</span>
-          </label>
-          <label class="upload">
-            <input type="file" name="images" accept="image/*" multiple hidden />
-            <span class="upload-ico">🖼️</span>
-            <span class="upload-label">Upload images</span>
-          </label>
-        </div>
-
-        <p class="q-status" role="status" aria-live="polite"></p>
-
-        <button type="submit" class="tl-btn tl-btn--dark btn-wide submit">
-          Submit for a Cash Quote →
-        </button>
-        <p class="fineprint">
-          We&rsquo;ll only use your details to respond about buying your games. No spam, ever.
-        </p>
-      </form>
-
-      <div class="sell-success" hidden>
-        <div class="check" aria-hidden="true">✓</div>
-        <h3>Quote Request Sent!</h3>
-        <p>Thanks — we&rsquo;ll review what you&rsquo;ve got and reply soon with your custom cash offer.</p>
+    <div class="how-reveal" id="how-inline" data-open="false">
+      <div class="how-card">
+        <h3 class="how-title">Here&rsquo;s How It Works</h3>
+        <ol class="how-steps">
+          <li class="how-step">
+            <span class="how-num">1</span>
+            <div>
+              <h4>Tell Us What You&rsquo;ve Got</h4>
+              <p>Whether you&rsquo;re in Portland, OR, Vancouver, WA, or beyond, fill out the form to get a free cash offer on your games, accessories, and collectibles.</p>
+            </div>
+          </li>
+          <li class="how-step">
+            <span class="how-num">2</span>
+            <div>
+              <h4>We&rsquo;ll Reach Out With an Offer</h4>
+              <p>To give you the fairest estimate, we review each trade request by hand — checking real market sales data — and get back to you with a transparent offer within 24–48 hours.</p>
+            </div>
+          </li>
+          <li class="how-step">
+            <span class="how-num">3</span>
+            <div>
+              <h4>Get Paid Your Way</h4>
+              <p>If you like our offer, accept and walk away with cash. We always put our best foot forward — and if you aren&rsquo;t happy, we&rsquo;re glad to crunch the numbers again.</p>
+            </div>
+          </li>
+        </ol>
       </div>
     </div>
   </div>
 </section>
 
 <style>
-  .sellcta {
-    position: relative;
-  }
-  .sell-head {
-    text-align: center;
-    max-width: 760px;
-    margin-inline: auto;
-  }
-  .sell-head .eyebrow {
-    justify-content: center;
-  }
-  .sellcta h2 {
-    font-size: clamp(2.1rem, 1.4rem + 2.8vw, 3.3rem);
-    color: #f4ead9;
-    margin: 0.5rem 0 1.1rem;
-  }
-  .sell-lead {
-    color: #d8c7b8 !important;
-    font-size: clamp(1.08rem, 1rem + 0.5vw, 1.35rem);
-    margin-bottom: 1rem;
-  }
-  .sell-sub {
-    color: #b6a596 !important;
-    max-width: 52ch;
-    margin: 0 auto;
-  }
-  .sell-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1rem;
-    justify-content: center;
-    margin-top: 1.8rem;
-  }
+  .sell-cash .container { max-width: 860px; text-align: center; }
+  .sell-cash .lead { margin: 1rem auto 0; max-width: 60ch; }
+  .sell-cash .sub2 { margin: 0.8rem auto 1.8rem; max-width: 56ch; font-size: 0.98rem; }
+  .hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
 
-  /* ---------- Inline quote form ---------- */
-  .sell-panel {
-    --lean: 38px;
-    max-width: 920px;
-    margin: 2rem auto 0;
-    padding: clamp(1.8rem, 1rem + 3vw, 3rem) clamp(2rem, 1rem + 4vw, 4rem);
-    background: linear-gradient(102deg, var(--orange) 0%, var(--orange-2) 100%);
-    color: var(--ink);
-    clip-path: polygon(var(--lean) 0, 100% 0, calc(100% - var(--lean)) 100%, 0 100%);
+  /* "See how it works" steps — unfurls like the sell form */
+  .how-reveal { overflow: hidden; max-height: 0; opacity: 0; transition: max-height 0.6s ease, opacity 0.5s ease, margin 0.5s ease; text-align: left; }
+  .how-reveal[data-open="true"] { max-height: 1400px; opacity: 1; margin-top: 1.9rem; }
+  .how-card {
+    max-width: 760px; margin-inline: auto; background: linear-gradient(180deg, var(--panel), var(--bg-2));
+    border: 0; border-radius: 0; clip-path: polygon(40px 0, 100% 0, calc(100% - 40px) 100%, 0 100%);
+    filter: drop-shadow(0 18px 34px rgba(0, 0, 0, 0.42)); padding: clamp(1.9rem, 1.2rem + 2vw, 2.8rem) clamp(2.75rem, 1.5rem + 4vw, 4.25rem);
   }
-  .sell-panel[hidden] {
-    display: none;
-  }
-  .hp {
-    position: absolute;
-    left: -9999px;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-  }
+  .how-title { text-align: center; margin-bottom: 1.5rem; font-size: clamp(1.5rem, 1.2rem + 1.2vw, 2rem); }
+  .how-steps { list-style: none; padding: 0; margin: 0; display: grid; gap: 1.2rem; }
+  .how-step { display: flex; gap: 1.1rem; align-items: flex-start; text-align: left; }
+  .how-num { flex: none; width: 2.7rem; height: 2.7rem; display: grid; place-items: center; font-family: var(--font-mono); font-weight: 800; font-size: 1.15rem; color: var(--accent-ink); background: var(--cyan); clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%); }
+  .how-step:nth-child(2) .how-num { background: var(--magenta); }
+  .how-step:nth-child(3) .how-num { background: var(--green); color: #fff; }
+  .how-step h4 { font-family: var(--font-display); font-weight: 400; font-size: 1.3rem; margin-bottom: 0.2rem; color: var(--text); }
+  .how-step p { color: var(--muted); font-size: 0.96rem; margin: 0; text-wrap: pretty; }
 
-  .sell-form-head {
-    text-align: center;
-    margin-bottom: 1.8rem;
+  /* Inline cash-offer form — unfurls like the timeline */
+  .offer-reveal { overflow: hidden; max-height: 0; opacity: 0; transition: max-height 0.6s ease, opacity 0.5s ease, margin 0.5s ease; text-align: left; }
+  .offer-reveal[data-open="true"] { max-height: 2000px; opacity: 1; margin-top: 1.9rem; }
+  .offer-card {
+    max-width: 640px; margin-inline: auto; background: linear-gradient(90deg, #df5e39 0%, #cd804c 100%);
+    border: 0; border-radius: 0; clip-path: polygon(56px 0, 100% 0, calc(100% - 56px) 100%, 0 100%);
+    filter: drop-shadow(0 18px 34px rgba(0, 0, 0, 0.42)); padding: clamp(1.8rem, 1.2rem + 2vw, 2.6rem) clamp(3.75rem, 2rem + 5vw, 5rem);
   }
-  .sell-form-head .eyebrow {
-    justify-content: center;
-  }
-  .sell-form-head h3 {
-    font-family: var(--font-slab);
-    font-size: clamp(1.6rem, 1.2rem + 1.4vw, 2.2rem);
-    color: var(--ink);
-    margin: 0.4rem 0 0.5rem;
-  }
-  .sell-form-head p {
-    color: #3c2012;
-  }
+  .offer-card .modal-head { text-align: center; margin-bottom: 1.3rem; }
+  .offer-card .modal-head .eyebrow { color: var(--accent-ink); justify-content: center; display: inline-flex; }
+  .offer-card .modal-head .eyebrow::before { background: linear-gradient(90deg, var(--accent-ink), transparent); }
+  .offer-card .modal-head h3 { font-size: clamp(1.5rem, 1.2rem + 1.2vw, 2rem); margin-bottom: 0.3rem; color: var(--accent-ink); }
+  .offer-card .modal-sub { margin: 0; color: rgba(37, 19, 10, 0.82); }
+  .offer-card label { color: var(--accent-ink); font-weight: 700; }
+  .offer-card .req { color: var(--accent-ink); }
+  .offer-card .opt { color: rgba(37, 19, 10, 0.6); }
+  .offer-card input, .offer-card textarea { background: #fbf3ec; color: var(--accent-ink); border: 0; border-radius: 0; padding-inline: 1.3rem; clip-path: polygon(14px 0, 100% 0, calc(100% - 14px) 100%, 0 100%); }
+  .offer-card input::placeholder, .offer-card textarea::placeholder { color: rgba(37, 19, 10, 0.5); }
+  .offer-card input:focus, .offer-card textarea:focus { box-shadow: none; filter: drop-shadow(0 0 7px rgba(37, 19, 10, 0.5)); }
 
-  .qrow {
-    display: grid;
-    gap: 1rem 1.6rem;
-    margin-bottom: 1.1rem;
-  }
-  @media (min-width: 640px) {
-    .qrow {
-      grid-template-columns: 1fr 1fr;
-    }
-  }
-  .tl-field.full {
-    margin-bottom: 1.1rem;
-  }
+  .upload-row { display: grid; gap: 0.7rem; grid-template-columns: 1fr 1fr; margin-bottom: 1rem; }
+  @media (max-width: 460px) { .upload-row { grid-template-columns: 1fr; } }
+  .upload-btn { display: flex; flex-direction: column; align-items: center; gap: 0.35rem; padding: 1rem 0.75rem; font-size: 0.85rem; font-weight: 600; text-align: center; cursor: pointer; }
+  .upload-btn .ic { font-size: 1.4rem; }
+  .offer-card .upload-btn { background: rgba(255, 255, 255, 0.62); border: 0; border-radius: 0; color: var(--accent-ink); padding-inline: 1rem; clip-path: polygon(14px 0, 100% 0, calc(100% - 14px) 100%, 0 100%); }
+  .offer-card .upload-btn:hover { background: #ffffff; color: var(--accent-ink); }
 
-  .uploads {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1rem;
-    margin: 0.4rem 0 1.4rem;
-  }
-  .upload {
-    --lean: 16px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 1.4rem 1rem;
-    background: rgba(246, 237, 224, 0.6);
-    color: var(--ink);
-    cursor: pointer;
-    text-align: center;
-    clip-path: polygon(var(--lean) 0, 100% 0, calc(100% - var(--lean)) 100%, 0 100%);
-    transition: background 0.15s ease;
-  }
-  .upload:hover {
-    background: rgba(246, 237, 224, 0.8);
-  }
-  .upload-ico {
-    font-size: 1.5rem;
-  }
-  .upload-label {
-    font-weight: 700;
-  }
+  .offer-card .fineprint { color: rgba(37, 19, 10, 0.72); }
+  .offer-card .btn-magenta { background: linear-gradient(135deg, #2b1809, #160b03); color: #fbf3ec; filter: drop-shadow(0 5px 13px rgba(0, 0, 0, 0.4)); }
+  .offer-card .btn-magenta:hover { filter: drop-shadow(0 8px 20px rgba(0, 0, 0, 0.6)); }
 
-  .btn-wide {
-    --lean: 22px;
-    width: 100%;
-    margin-top: 0.4rem;
-  }
-  .submit[aria-busy="true"] {
-    opacity: 0.75;
-    cursor: progress;
-  }
-  .fineprint {
-    text-align: center;
-    color: #3c2012 !important;
-    font-size: 0.9rem;
-    margin-top: 1rem;
-  }
-  .q-status {
-    text-align: center;
-    font-weight: 700;
-    color: #6e1532 !important;
-    margin-bottom: 0.6rem;
-  }
-  .q-status:empty {
-    display: none;
-  }
-
-  .sell-success {
-    text-align: center;
-    padding: 1.5rem 0.5rem;
-    color: var(--ink);
-  }
-  .sell-success[hidden] {
-    display: none;
-  }
-  .sell-success .check {
-    width: 72px;
-    height: 72px;
-    margin: 0 auto 1.2rem;
-    display: grid;
-    place-items: center;
-    border-radius: 50%;
-    font-size: 2.2rem;
-    color: var(--ink);
-    background: radial-gradient(circle at 35% 30%, #cfe3e8, #9bb3bd);
-    box-shadow: 0 14px 30px -16px rgba(0, 0, 0, 0.7);
-  }
-  .sell-success h3 {
-    font-family: var(--font-slab);
-    font-size: 1.7rem;
-    color: var(--ink);
-    margin-bottom: 0.4rem;
-  }
-  .sell-success p {
-    color: #3c2012 !important;
-    max-width: 40ch;
-    margin: 0 auto;
-  }
+  .modal-success { display: none; text-align: center; padding: 1rem 0.5rem; }
+  .modal-success .check { width: 64px; height: 64px; margin: 0 auto 1rem; display: grid; place-items: center; border-radius: 50%; font-size: 2rem; font-weight: 800; color: var(--accent-ink); background: linear-gradient(135deg, var(--green), var(--cyan)); box-shadow: var(--glow-cyan); }
+  .offer-card .modal-success h3, .offer-card .modal-success p { color: var(--accent-ink); }
+  .offer-card[data-sent="true"] .modal-form, .offer-card[data-sent="true"] .modal-head { display: none; }
+  .offer-card[data-sent="true"] .modal-success { display: block; }
 </style>
 
 <script>
-  // Toggle the inline quote form open/closed.
-  const toggle = document.querySelector<HTMLButtonElement>(".sell-toggle");
-  const panel = document.getElementById("sell-panel");
-  const label = toggle?.querySelector<HTMLElement>(".toggle-label");
-
-  toggle?.addEventListener("click", () => {
-    const open = toggle.getAttribute("aria-expanded") === "true";
-    toggle.setAttribute("aria-expanded", String(!open));
-    if (panel) panel.hidden = open;
-    if (label) label.textContent = open ? "Sell My Games →" : "Close Form ✕";
-    if (!open) panel?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  });
-
-  // Show chosen filenames on the upload tiles.
-  document.querySelectorAll<HTMLInputElement>(".upload input[type=file]").forEach((input) => {
-    input.addEventListener("change", () => {
-      const span = input.parentElement?.querySelector<HTMLElement>(".upload-label");
-      if (span && input.files?.length) {
-        span.textContent =
-          input.files.length === 1 ? input.files[0].name : `${input.files.length} files selected`;
-      }
+  // Inline cash-offer form (unfurls like the timeline)
+  (function () {
+    const wrap = document.getElementById("offer-inline");
+    const toggle = document.getElementById("offer-toggle");
+    if (!wrap || !toggle) return;
+    const card = wrap.querySelector<HTMLElement>(".offer-card");
+    const form = wrap.querySelector<HTMLFormElement>("[data-offer-form]");
+    toggle.addEventListener("click", () => {
+      const open = wrap.dataset.open === "true";
+      wrap.dataset.open = String(!open);
+      toggle.setAttribute("aria-expanded", String(!open));
+      toggle.innerHTML = open ? "Sell my games →" : "Close form ✕";
     });
-  });
-
-  // Submit the quote form.
-  document.querySelectorAll<HTMLFormElement>("form[data-quote-form]").forEach((form) => {
-    const wrap = form.closest("#sell-panel");
-    const status = form.querySelector<HTMLParagraphElement>(".q-status");
-    const submit = form.querySelector<HTMLButtonElement>(".submit");
-    const success = wrap?.querySelector<HTMLElement>(".sell-success");
-
-    form.addEventListener("submit", async (event) => {
+    form?.addEventListener("submit", async (e) => {
+      e.preventDefault();
       const honey = form.querySelector<HTMLInputElement>('input[name="company"]');
-      if (honey?.value) {
-        event.preventDefault();
-        return;
-      }
-      if (!form.checkValidity()) return;
-      event.preventDefault();
-      if (status) status.textContent = "";
-      submit?.setAttribute("aria-busy", "true");
-      submit?.setAttribute("disabled", "true");
-
+      if (honey?.value) return;
+      if (!form.checkValidity()) { form.reportValidity(); return; }
+      const first = (form.querySelector<HTMLInputElement>('[name="first"]')?.value || "").trim();
+      const last = (form.querySelector<HTMLInputElement>('[name="last"]')?.value || "").trim();
+      const fd = new FormData(form);
+      fd.set("name", `${first} ${last}`.trim() || first);
+      const submit = form.querySelector<HTMLButtonElement>('button[type=submit]');
+      if (submit) { submit.disabled = true; submit.textContent = "Sending…"; }
       try {
         const res = await fetch(form.action, {
           method: "POST",
           headers: { Accept: "application/json", "X-Requested-With": "fetch" },
-          body: new FormData(form),
+          body: fd,
         });
         const data = await res.json().catch(() => ({}));
-        if (res.ok && data.ok) {
-          form.hidden = true;
-          if (success) {
-            success.hidden = false;
-            success.scrollIntoView({ behavior: "smooth", block: "center" });
-          }
-          return;
-        }
-        if (status) status.textContent = data.error || "Something went wrong — please try again.";
+        if (res.ok && data.ok) { if (card) card.dataset.sent = "true"; return; }
+        throw new Error(data.error || "error");
       } catch {
-        if (status) status.textContent = "Network error — please try again.";
-      } finally {
-        submit?.removeAttribute("aria-busy");
-        submit?.removeAttribute("disabled");
+        if (submit) { submit.disabled = false; submit.textContent = "Submit for a cash quote →"; }
+        const fp = form.querySelector<HTMLParagraphElement>(".fineprint");
+        if (fp) fp.textContent = "Something went wrong — please try again or email timelaggaming@gmail.com.";
       }
     });
-  });
+  })();
+
+  // Inline "See how it works" steps (unfurls like the sell form)
+  (function () {
+    const wrap = document.getElementById("how-inline");
+    const toggle = document.getElementById("how-toggle");
+    if (!wrap || !toggle) return;
+    toggle.addEventListener("click", () => {
+      const open = wrap.dataset.open === "true";
+      wrap.dataset.open = String(!open);
+      toggle.setAttribute("aria-expanded", String(!open));
+      toggle.textContent = open ? "See how it works" : "Hide steps";
+    });
+  })();
 </script>

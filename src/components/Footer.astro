@@ -1,18 +1,20 @@
 ---
 import { SITE, EBAY, NAV, YEAR, FIND_US_HREF } from "../consts";
-import Logo from "./Logo.astro";
 ---
 
 <footer class="site-footer">
   <div class="container">
     <div class="foot-grid">
       <div class="foot-brand">
-        <span class="brand-lockup">
-          <Logo size={44} />
-          <span class="brand-text">TIMELAG VIDEO GAMES</span>
-        </span>
-        <p>Buy. Sell. Chill. Curated retro &amp; modern games in {SITE.location}.</p>
-        <p class="loc">📍 {SITE.location}</p>
+        <div class="foot-brand-row">
+          <img src="/logo-dark.png" alt="" class="foot-logo" />
+          <span class="brand-text">TimeLag<span class="brand-text-2"> Video Games</span></span>
+        </div>
+        <p>
+          Portland&rsquo;s premier inclusive hub to shop, play, eat, and connect. Discover
+          Japanese imports, browse classic collectibles, or level up in our chill lounge.
+        </p>
+        <p class="foot-launch">Launching 2027 near PDX.</p>
       </div>
 
       <div class="foot-col">
@@ -20,19 +22,21 @@ import Logo from "./Logo.astro";
         <ul>
           {NAV.map((item) => <li><a href={item.href}>{item.label}</a></li>)}
           <li><a href={FIND_US_HREF}>Find Us</a></li>
-          <li><a href={EBAY.storeUrl} target="_blank" rel="noopener">Shop on eBay ↗️</a></li>
+          <li><a href={EBAY.storeUrl} target="_blank" rel="noopener">Shop on eBay ↗</a></li>
         </ul>
       </div>
 
       <div class="foot-col">
-        <h3>Get in touch</h3>
+        <h3>Get in Touch</h3>
         <ul>
-          <li><a href={`mailto:${SITE.email}`}>{SITE.email}</a></li>
-          <li><a href={SITE.phoneHref}>{SITE.phoneDisplay}</a></li>
-          <li><a href="/#sell">Sell or trade your games</a></li>
+          <li><a href={`mailto:${SITE.email}`}>✉️ {SITE.email}</a></li>
+          <li><a href={SITE.phoneHref}>☎️ {SITE.phoneDisplay}</a></li>
+          <li class="loc">📍 {SITE.location}</li>
         </ul>
       </div>
     </div>
+
+    <hr class="divider" />
 
     <div class="foot-bottom">
       <p>© {YEAR} {SITE.name}. All rights reserved.</p>
@@ -40,85 +44,3 @@ import Logo from "./Logo.astro";
     </div>
   </div>
 </footer>
-
-<style>
-  .site-footer {
-    background: linear-gradient(105deg, #e6a6cc 0%, #b59ec4 45%, #8aa0bd 100%);
-    color: #2f2118;
-    padding-block: clamp(3rem, 2rem + 3vw, 4.5rem) 2rem;
-  }
-
-  .foot-grid {
-    display: grid;
-    gap: 2.5rem;
-    grid-template-columns: 1fr;
-  }
-  @media (min-width: 760px) {
-    .foot-grid {
-      grid-template-columns: 1.6fr 1fr 1fr;
-    }
-  }
-
-  .brand-lockup {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.7rem;
-    color: #3a2a14;
-  }
-  .brand-text {
-    font-family: var(--font-cond);
-    font-style: italic;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.02em;
-    color: #2a1a12;
-    font-size: 1.3rem;
-  }
-  .foot-brand p {
-    margin-top: 1rem;
-    max-width: 34ch;
-    color: #43342a;
-  }
-  .foot-brand .loc {
-    margin-top: 0.7rem;
-    color: #43342a;
-  }
-
-  .foot-col h3 {
-    font-family: var(--font-mono);
-    font-size: 0.82rem;
-    text-transform: uppercase;
-    letter-spacing: 0.16em;
-    color: #6b5546;
-    margin-bottom: 1.1rem;
-  }
-  .foot-col ul {
-    list-style: none;
-    padding: 0;
-    display: grid;
-    gap: 0.9rem;
-  }
-  .foot-col a {
-    color: #2f2118;
-    font-weight: 600;
-    font-size: 1.05rem;
-  }
-  .foot-col a:hover {
-    color: #000;
-    text-decoration: none;
-    opacity: 0.75;
-  }
-
-  .foot-bottom {
-    margin-top: 2.5rem;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem 1.5rem;
-    justify-content: space-between;
-    align-items: center;
-  }
-  .foot-bottom p {
-    font-size: 0.92rem;
-    color: #5a4636;
-  }
-</style>

@@ -1,162 +1,73 @@
 ---
 import { EBAY } from "../consts";
-
-const cards = [
-  {
-    icon: "🔬",
-    title: "Independently Tested",
-    body: "Verified by multiple sources before it ever hits the shelf.",
-    tone: "coral",
-  },
-  {
-    icon: "✨",
-    title: "Fully Refurbished",
-    body: "Cleaned and restored to like-new, out-of-the-box reliability.",
-    tone: "tan",
-  },
-  {
-    icon: "🌐",
-    title: "Region-Free Imports",
-    body: "GameCubes & more that play your US and Japanese libraries.",
-    tone: "teal",
-  },
-  {
-    icon: "🎏",
-    title: "Niche & Collectible",
-    body: "Anime & pop-culture merch and hard-to-find Japanese exclusives.",
-    tone: "pink",
-  },
-];
 ---
 
-<section class="section why" id="why">
-  <div class="container why-grid">
-    <div class="why-copy">
-      <span class="eyebrow">Why TimeLag</span>
-      <h2>Raising the Bar for Retro Game Experiences</h2>
-      <p>
-        How many times have you bought a game online or at your local shop only
-        to find out it was never tested, the controller&rsquo;s defective, and the
-        console can&rsquo;t read discs? TimeLag Video Games takes a different
-        approach.
-      </p>
-      <p>
-        We carefully curate our selection of games, accessories, and collectibles
-        — specializing in Japanese imports. Everything we buy across the PNW and
-        import from around the world is the highest quality, independently tested
-        by multiple sources, and fully refurbished to the same reliability
-        you&rsquo;d expect fresh out of the box.
-      </p>
-      <p>
-        That includes handhelds and home consoles like region-free Nintendo
-        GameCubes, so you can play your US <em>and</em> Japanese games. You&rsquo;ll
-        also find nostalgic media and merch from anime and pop-culture icons
-        around the world.
-      </p>
-      <p>
-        Your time is valuable, and you care about clean, reliable items in your
-        collection — not dust-covered consoles that fail right after the warranty
-        expires, leaving you frustrated and defeated.
-      </p>
-      <p class="ko">▶ Avoid the KO.</p>
-      <a href={EBAY.storeUrl} class="tl-btn tl-btn--orange" target="_blank" rel="noopener">
-        Shop TimeLag Now <span class="arrow">↗️</span>
-      </a>
-    </div>
+<section class="section" id="about">
+  <div class="container">
+    <div class="about-grid">
+      <div class="about-copy">
+        <span class="eyebrow">Why TimeLag</span>
+        <h2>Raising the Bar for Retro Game Experiences</h2>
+        <p>
+          How many times have you bought a game online or at your local shop only to find
+          out it was never tested, the controller&rsquo;s defective, and the console can&rsquo;t read
+          discs? TimeLag Video Games takes a different approach.
+        </p>
+        <p>
+          We carefully curate our selection of games, accessories, and collectibles —
+          specializing in Japanese imports. Everything we buy across the PNW and import
+          from around the world is the highest quality, independently tested by multiple
+          sources, and fully refurbished to the same reliability you&rsquo;d expect fresh out
+          of the box.
+        </p>
+        <p>
+          That includes handhelds and home consoles like region-free Nintendo GameCubes,
+          so you can play your US <em>and</em> Japanese games. You&rsquo;ll also find nostalgic
+          media and merch from anime and pop-culture icons around the world.
+        </p>
+        <p>
+          Your time is valuable, and you care about clean, reliable items in your
+          collection — not dust-covered consoles that fail right after the warranty
+          expires, leaving you frustrated and defeated.
+        </p>
+        <p class="ko">▶ Avoid the KO.</p>
+        <a href={EBAY.storeUrl} class="btn btn-primary" target="_blank" rel="noopener">Shop TimeLag now ↗</a>
+      </div>
 
-    <div class="why-cards">
-      {
-        cards.map((c) => (
-          <article class={`wcard wcard--${c.tone}`}>
-            <span class="wcard-ico" aria-hidden="true">{c.icon}</span>
-            <div>
-              <h3>{c.title}</h3>
-              <p>{c.body}</p>
-            </div>
-          </article>
-        ))
-      }
+      <div class="quality-list">
+        <div class="quality"><span class="badge" aria-hidden="true">🔬</span><div><h3>Independently Tested</h3><p>Verified by multiple sources before it ever hits the shelf.</p></div></div>
+        <div class="quality"><span class="badge" aria-hidden="true">✨</span><div><h3>Fully Refurbished</h3><p>Cleaned and restored to like-new, out-of-the-box reliability.</p></div></div>
+        <div class="quality"><span class="badge" aria-hidden="true">🌏</span><div><h3>Region-Free Imports</h3><p>GameCubes &amp; more that play your US and Japanese libraries.</p></div></div>
+        <div class="quality"><span class="badge" aria-hidden="true">🎌</span><div><h3>Niche &amp; Collectible</h3><p>Anime &amp; pop-culture merch and hard-to-find Japanese exclusives.</p></div></div>
+      </div>
     </div>
   </div>
 </section>
 
 <style>
-  .why-grid {
-    display: grid;
-    gap: clamp(2rem, 1rem + 4vw, 4rem);
-    align-items: start;
-  }
-  @media (min-width: 940px) {
-    .why-grid {
-      grid-template-columns: 1.05fr 0.95fr;
-    }
-  }
-
-  .why-copy h2 {
-    font-size: clamp(2rem, 1.3rem + 2.6vw, 3.1rem);
-    margin: 0.6rem 0 1.2rem;
-    color: #f4ead9;
-    max-width: 18ch;
-  }
-  .why-copy p {
-    color: #cdbcae;
-    margin-bottom: 1rem;
-    max-width: 56ch;
-  }
-  .why-copy em {
-    color: #f4ead9;
-    font-style: italic;
-  }
+  .about-grid { display: grid; gap: clamp(1.75rem, 1rem + 3vw, 3.5rem); align-items: start; }
+  @media (min-width: 920px) { .about-grid { grid-template-columns: 1.2fr 0.8fr; } }
+  .about-copy p { margin-bottom: 1rem; max-width: 62ch; }
   .ko {
-    font-family: var(--font-mono);
-    color: var(--yellow) !important;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    margin: 1.3rem 0 1.2rem !important;
+    font-family: var(--font-mono); font-weight: 800; letter-spacing: 0.04em; color: var(--yellow);
+    text-shadow: 0 0 14px rgba(232, 162, 74, 0.5); font-size: 1.05rem; margin: 0.4rem 0 1.5rem;
   }
-  .arrow {
-    font-size: 0.95em;
+  .quality-list { display: grid; gap: 0.8rem; margin-top: 0.5rem; }
+  .quality {
+    display: flex; gap: 0.85rem; align-items: flex-start; padding: 1rem 1.5rem;
+    background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border); border-radius: 0;
+    clip-path: polygon(16px 0, 100% 0, calc(100% - 16px) 100%, 0 100%);
   }
-
-  /* ---------- Feature cards ---------- */
-  .why-cards {
-    display: grid;
-    gap: 1.1rem;
+  .quality:nth-child(1) { background: #df5e39; border-color: transparent; }
+  .quality:nth-child(2) { background: #cd804c; border-color: transparent; }
+  .quality:nth-child(3) { background: #468596; border-color: transparent; }
+  .quality:nth-child(4) { background: #f39ccd; border-color: transparent; }
+  .quality h3, .quality p { color: var(--accent-ink); }
+  .quality .badge {
+    width: 2.5rem; height: 2.5rem; font-size: 1.15rem; flex: none;
+    background: rgba(255, 255, 255, 0.55); border: 0; border-radius: 0;
+    clip-path: polygon(7px 0, 100% 0, calc(100% - 7px) 100%, 0 100%);
   }
-  .wcard {
-    --lean: 16px;
-    display: flex;
-    align-items: flex-start;
-    gap: 1rem;
-    padding: 1.15rem 1.6rem;
-    color: var(--ink);
-    clip-path: polygon(var(--lean) 0, 100% 0, calc(100% - var(--lean)) 100%, 0 100%);
-    box-shadow: 0 18px 34px -22px rgba(0, 0, 0, 0.9);
-  }
-  .wcard--coral { background: #cf6f43; }
-  .wcard--tan { background: #cf9d5f; }
-  .wcard--teal { background: #5e8f9d; }
-  .wcard--pink { background: #e7a3cb; }
-
-  .wcard-ico {
-    flex: none;
-    width: 2.6rem;
-    height: 2.6rem;
-    display: grid;
-    place-items: center;
-    border-radius: 12px;
-    background: rgba(255, 255, 255, 0.78);
-    font-size: 1.35rem;
-  }
-  .wcard h3 {
-    font-family: var(--font-slab);
-    font-size: 1.18rem;
-    color: var(--ink);
-    margin-bottom: 0.2rem;
-  }
-  .wcard p {
-    color: #3c2012;
-    font-size: 0.98rem;
-    margin: 0;
-  }
+  .quality h3 { font-size: 1rem; margin-bottom: 0.15rem; }
+  .quality p { font-size: 0.9rem; margin: 0; }
 </style>
