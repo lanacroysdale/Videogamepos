@@ -70,8 +70,7 @@ const phases = [
       <div class="club-card panel" id="club">
         <h3>Want Updates?</h3>
         <p>Get periodic updates about our progress, including videos!</p>
-        <form class="club-form" data-club-form action="/api/contact" method="POST" novalidate>
-          <input type="hidden" name="items" value="TimeLag Club newsletter signup" />
+        <form class="club-form" data-club-form action="/api/subscribe" method="POST" novalidate>
           <div class="hp" aria-hidden="true"><label>Company<input type="text" name="company" tabindex="-1" autocomplete="off" /></label></div>
           <div class="form-row">
             <div class="field"><label for="club-first">First name <span class="req">*</span></label><input id="club-first" name="first" type="text" required placeholder="Jane" /></div>
@@ -199,6 +198,7 @@ const phases = [
         });
         const data = await res.json().catch(() => ({}));
         if (res.ok && data.ok) {
+          (window as any).gtag?.("event", "newsletter_signup", { method: "timelag_club" });
           if (msg) msg.textContent = "🎉 You're in! Watch your inbox for behind-the-scenes updates.";
           if (btn) btn.textContent = "Joined ✓";
           return;

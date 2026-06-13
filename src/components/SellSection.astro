@@ -259,7 +259,11 @@ import { SITE } from "../consts";
           body: fd,
         });
         const data = await res.json().catch(() => ({}));
-        if (res.ok && data.ok) { if (card) card.dataset.sent = "true"; return; }
+        if (res.ok && data.ok) {
+          (window as any).gtag?.("event", "generate_lead", { form_name: "cash_offer" });
+          if (card) card.dataset.sent = "true";
+          return;
+        }
         throw new Error(data.error || "error");
       } catch {
         if (submit) { submit.disabled = false; submit.textContent = "Submit Your No Obligation Quote"; }
