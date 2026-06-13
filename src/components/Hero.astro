@@ -90,7 +90,9 @@
   /* ---------- Mobile: keep the big headline + CTAs inside the screen ---------- */
   @media (max-width: 600px) {
     .hero { padding-block: 2.25rem 2.75rem; }
-    .hero-copy h1 { font-size: clamp(1.85rem, 1.2rem + 3.6vw, 2.6rem); letter-spacing: 0; }
+    /* Let the headline span the full width of the screen on phones */
+    .hero-copy { max-width: 100%; }
+    .hero-copy h1 { font-size: clamp(2.5rem, 1.5rem + 6vw, 3.6rem); letter-spacing: 0; }
     .hero-cta { flex-direction: column; align-items: stretch; gap: 0.7rem; }
     .hero-cta .btn { width: 100%; }
     .hero-logo { opacity: 0.32; }

@@ -7,12 +7,13 @@ import { EBAY } from "../consts";
     <span class="eyebrow shop-eyebrow">Shop online · In-store coming soon!</span>
     <div class="ebay-panel panel">
       <div class="ebay-copy">
-        <h2>Browse Our Curated Store</h2>
+        <h2>Explore Our Curated Store. Score Awesome Finds.</h2>
         <p class="lead">
           Flip through our hand picked selection of authentic Nintendo games, consoles,
           accessories, merch and plushies. We specialize in rare and obscure imports from
-          Japan and across the world that never came to the US. Every item is tested,
-          authentic, and shipped fast with buyer protection.
+          Japan and across the world that never came to the US. Our selection for Playstation,
+          Xbox, Sega and beyond is currently limited. However as we grow and expand into our
+          retail space look forward to a more diverse range of products.
         </p>
         <div class="ebay-cta">
           <a href={EBAY.storeUrl} class="btn btn-magenta" target="_blank" rel="noopener">
@@ -33,9 +34,9 @@ import { EBAY } from "../consts";
         </div>
       </div>
 
-      <div class="chips" aria-label="Popular categories">
+      <div class="chips" aria-label="Shop by category">
         {EBAY.categories.map((cat) => (
-          <a class="chip" href={EBAY.storeUrl} target="_blank" rel="noopener">{cat}</a>
+          <a class="chip" href={cat.url} target="_blank" rel="noopener">{cat.label}</a>
         ))}
       </div>
     </div>
@@ -88,8 +89,8 @@ import { EBAY } from "../consts";
   @media (max-width: 600px) {
     .ebay-panel {
       clip-path: polygon(18px 0, 100% 0, calc(100% - 18px) 100%, 0 100%);
-      padding: 1.75rem 1.35rem;
-      gap: 1.4rem;
+      padding: 2.25rem 1.85rem;
+      gap: 1.6rem;
     }
     .shop-eyebrow { font-size: 0.7rem; letter-spacing: 0.07em; }
     .ebay-panel h2 { font-size: 1.95rem; }

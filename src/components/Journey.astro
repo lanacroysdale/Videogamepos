@@ -1,9 +1,9 @@
 ---
 const phases = [
-  { icon: "📈", date: "Jan 2026 – Dec 2026", title: "Investment & Expansion", desc: "So far in 2026 we've grown our inventory by 460% and increased sales by over 300%." },
-  { icon: "💰", date: "Dec 2026 – March 2027", title: "Saving & Preparation", desc: "As we crush our 2026 goals, we'll build up savings and prep for the retail-space build-out." },
-  { icon: "🔨", date: "March 2027 – May 2027", title: "Build-Out & Finalization", desc: "As spring rolls around, we'll start the build-out and finalize the space by summer." },
-  { icon: "🎉", date: "June 2027", title: "Grand Opening", desc: "We'll host a soft opening to test the waters before our full grand opening in early summer." },
+  { icon: "📈", date: "Jan 2026 - Dec 2026", title: "Investment and Expansion", desc: "So far in 2026 we have grown our inventory by 460% and increased sales by over 300%" },
+  { icon: "💰", date: "Dec 2026 - March 2027", title: "Saving and Preparation", desc: "As we crush our goals for 2026 we will be looking to build up our savings and prepare for the retail space build out" },
+  { icon: "🔨", date: "March 2027 - May 2027", title: "Build out and Finalization", desc: "As spring comes around the corner we will start build out and finalize the space by summer" },
+  { icon: "🎉", date: "June 2027", title: "Grand Opening", desc: "We will host a soft opening to test the water before our full grand opening in early summer" },
 ];
 ---
 
@@ -14,16 +14,30 @@ const phases = [
         <span class="eyebrow">The Ultimate Vision of TimeLag</span>
         <h2 class="hub-h2">Your Hangout Hub for All Things&nbsp;<span class="grad-pb">Nostalgia</span></h2>
         <p class="lead">
-          Step through the door into an immersive, curated nostalgia museum you can browse
-          at your leisure. Head toward the back and you&rsquo;ve stepped into a chill gaming
-          lounge arcade — complete with food and drinks. Bring your own games or play our
-          wide selection on the consoles we have set up.
+          Step through the door and you&rsquo;ll walk into an immersive curated nostalgia
+          filled museum where you can browse or shop at your leisure…
         </p>
         <p class="lead" style="margin-top:1rem;">
-          We&rsquo;re growing fast toward a double-sided retail space + gaming lounge in
-          <strong>2027</strong> — the closest game store to PDX, easy for visitors and
-          locals alike. The goal: an inclusive community where every kind of gamer feels
-          welcome. There will always be space for you here.
+          You get towards the back and all of a sudden you&rsquo;ve stepped into a chill gaming
+          lounge arcade, complete with food and drinks. Bring your own games to play exactly
+          how you want or browse our wide selection of games and use the consoles we have set
+          up. Want to test out a game from the retail side? Have at it!
+        </p>
+        <p class="lead" style="margin-top:1rem;">
+          We are growing fast and working towards launching this double-sided retail space
+          with gaming lounge experience in <strong>2027</strong>. TimeLag Video Games will be
+          the closest video game store to the Portland, Oregon Airport (PDX) making it super
+          accessible to visitors and locals alike.
+        </p>
+        <p class="lead" style="margin-top:1rem;">
+          The goal is to cultivate a community of gamers of all kinds with an inclusive space
+          where everyone feels welcome.
+        </p>
+        <p class="lead" style="margin-top:1rem;">
+          Whether you want to come hangout and chat about your favorite media, play games
+          while chowing down on good food, or browse a wide selection of video games,
+          accessories, collectibles and Japanese Imports… there will always be space for you
+          here.
         </p>
       </div>
       <div class="storefront-shot">
@@ -33,7 +47,7 @@ const phases = [
 
     <div class="journey-timeline">
       <h2 class="jt-title">Come Along for the Journey!</h2>
-      <p class="jt-sub">Get a sneak peek at our secret grand-opening timeline.</p>
+      <p class="jt-sub">Get a sneak peek at our secret grand opening timeline.</p>
       <ol class="jt-list">
         {phases.map((p) => (
           <li class="jt-row">
@@ -49,13 +63,13 @@ const phases = [
           </li>
         ))}
       </ol>
-      <p class="jt-note">*Subject to change. We expect a few delays are inevitable — but this timeline keeps us on our toes!</p>
+      <p class="jt-note">*Subject to change. We expect many delays will be inevitable but this timeline will keep us on our toes!</p>
     </div>
 
     <div class="club">
       <div class="club-card panel" id="club">
         <h3>Want Updates?</h3>
-        <p>Get periodic updates about our progress — including videos from behind the scenes.</p>
+        <p>Get periodic updates about our progress, including videos!</p>
         <form class="club-form" data-club-form action="/api/contact" method="POST" novalidate>
           <input type="hidden" name="items" value="TimeLag Club newsletter signup" />
           <div class="hp" aria-hidden="true"><label>Company<input type="text" name="company" tabindex="-1" autocomplete="off" /></label></div>
@@ -88,6 +102,7 @@ const phases = [
   .storefront-shot { width: 100%; padding: 9px; }
   .storefront-shot img {
     width: 100%; height: auto; display: block; border-radius: 0; clip-path: none;
+    filter: blur(2px);
     box-shadow:
       -5px -5px 0 #3fb6d6, -9px -9px 0 #3fb6d6,
       5px 5px 0 var(--magenta), 9px 9px 0 var(--magenta),
@@ -147,9 +162,9 @@ const phases = [
   /* ---------- Mobile: shallow slants, tighter padding, full-width CTA ---------- */
   @media (max-width: 600px) {
     .club-card { clip-path: polygon(18px 0, 100% 0, calc(100% - 18px) 100%, 0 100%); }
-    .club-card#club { padding: 1.9rem 1.35rem; }
+    .club-card#club { padding: 2.25rem 1.85rem; }
     .club-card#club h3 { font-size: clamp(1.9rem, 1.3rem + 3.5vw, 2.6rem); }
-    .hub-h2 { font-size: clamp(1.8rem, 1.3rem + 3vw, 2.4rem); }
+    .hub-h2 { font-size: clamp(1.95rem, 1.4rem + 3.5vw, 2.7rem); }
     .club-card .btn-primary { width: 100%; white-space: normal; }
     .storefront-shot { padding: 5px; }
     .storefront-shot img {
@@ -190,7 +205,7 @@ const phases = [
         }
         throw new Error(data.error || "error");
       } catch {
-        if (msg) msg.textContent = "Hmm, that didn't go through — please try again.";
+        if (msg) msg.textContent = "Hmm, that didn't go through. Please try again.";
         if (btn) { btn.disabled = false; btn.textContent = "Join the TimeLag Club →"; }
       }
     });
