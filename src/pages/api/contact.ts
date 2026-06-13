@@ -68,6 +68,29 @@ export const POST: APIRoute = async ({ request, redirect }) => {
     return fail("That email address doesn't look right — please double-check it.");
   }
 
+  // Collect uploaded files (the cash-offer form's spreadsheet / image buttons)
+  // and attach them to the email. Capped to stay under the serverless body
+  // limit; oversized batches are flagged so the shop can request them by email.
+  const MAX_ATTACH_BYTES = 4 * 1024 * 1024;
+  const uploads: File[] = [];
+  const sheet = form.get("spreadsheet");
+  if (sheet instanceof File && sheet.size > 0) uploads.push(sheet);
+  for (const img of form.getAll("images")) {
+    if (img instanceof File && img.size > 0) uploads.push(img);
+  }
+  const attachments: { filename: string; content: string }[] = [];
+  const totalBytes = uploads.reduce((n, f) => n + f.size, 0);
+  let attachLine = "—";
+  if (uploads.length && totalBytes <= MAX_ATTACH_BYTES) {
+    for (const f of uploads) {
+      const buf = Buffer.from(await f.arrayBuffer());
+      attachments.push({ filename: f.name || "upload", content: buf.toString("base64") });
+    }
+    attachLine = uploads.map((f) => f.name).join(", ");
+  } else if (uploads.length) {
+    attachLine = `${uploads.length} file(s) too large to attach (${(totalBytes / 1048576).toFixed(1)}MB) — ask the customer to email them`;
+  }
+
   const rows: Array<[string, string]> = [
     ["Name", name],
     ["Email", email],
@@ -75,6 +98,7 @@ export const POST: APIRoute = async ({ request, redirect }) => {
     ["Condition", condition || "—"],
     ["Items for sale", items],
     ["Photo link", photos || "—"],
+    ["Attachments", attachLine],
   ];
 
   const textBody = rows.map(([k, v]) => `${k}: ${v}`).join("\n");
@@ -114,6 +138,7 @@ export const POST: APIRoute = async ({ request, redirect }) => {
         subject: `🎮 New sell/trade request from ${name}`,
         text: textBody,
         html: htmlBody,
+        ...(attachments.length ? { attachments } : {}),
       }),
     });
 
