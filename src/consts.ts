@@ -21,8 +21,8 @@ export const SITE = {
   description:
     'TimeLag Video Games is Portland’s premier inclusive hub to shop, play, eat, and connect. Discover Japanese imports and classic collectibles, sell your games for cash, or level up in our chill lounge. Launching 2027 near PDX.',
 
-  // TODO: update once your domain is registered (Cloudflare) and live on Vercel.
-  url: 'https://timelaggaming.com',
+  // Canonical site URL (used in SEO metadata + structured data).
+  url: 'https://timelag.co',
 
   owner: 'Adam',
   email: 'timelaggaming@gmail.com',
