@@ -83,4 +83,8 @@ export const CONDITIONS = [
   'Not sure',
 ];
 
+// Google Analytics 4 Measurement ID. This value is public (it ships in the
+// client JS). Override per-environment with the PUBLIC_GA_MEASUREMENT_ID env var.
+export const GA_MEASUREMENT_ID = 'G-0EW143Q1N6';
+
 export const YEAR = new Date().getFullYear();
