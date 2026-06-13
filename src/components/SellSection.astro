@@ -1,18 +1,15 @@
 ---
-// Sell — cash CTA with two inline-unfurl panels (offer form + how-it-works).
+import { SITE } from "../consts";
+// Sell — cash CTA with two mutually-exclusive inline panels (offer form + how-it-works).
 ---
 
 <section class="section sell-cash" id="sell">
   <div class="container">
     <h2 class="sell-h2">Sell Your Video Games for <span class="grad-pb">Cash</span></h2>
     <p class="lead">
-      TimeLag Video Games makes better cash offers than any other retro game store in the
-      Pacific Northwest. In Portland, OR or Vancouver, WA? Reach out today for a free cash
-      offer on your games, accessories, and collectibles.
-    </p>
-    <p class="muted sub2">
-      Outside the area? No problem — we&rsquo;re always willing to take a look at what you have
-      and make a fair offer.
+      Clearing out a closet, trading up or curating your own collection? TimeLag Video Games
+      provides the best cash offers in the Pacific Northwest (compared to local retro game
+      stores.) Here&rsquo;s how it works:
     </p>
     <div style="display:flex;gap:0.8rem;justify-content:center;flex-wrap:wrap;">
       <button id="offer-toggle" class="btn btn-magenta" type="button" aria-expanded="false" aria-controls="offer-inline">Sell my games →</button>
@@ -24,30 +21,34 @@
         <div class="modal-head">
           <span class="eyebrow">Free · No obligation</span>
           <h3 id="offer-title">Get Your Custom Cash Offer</h3>
-          <p class="modal-sub muted">Tell us what you&rsquo;ve got and we&rsquo;ll get back fast with a fair offer.</p>
         </div>
         <form class="modal-form" data-offer-form action="/api/contact" method="POST" novalidate>
           <input type="hidden" name="_redirect" value="/" />
           <div class="hp" aria-hidden="true"><label>Company<input type="text" name="company" tabindex="-1" autocomplete="off" /></label></div>
           <div class="form-row">
-            <div class="field"><label for="of-first">First name <span class="req">*</span></label><input id="of-first" name="first" type="text" required placeholder="Jane" /></div>
-            <div class="field"><label for="of-last">Last name</label><input id="of-last" name="last" type="text" placeholder="Gamer" /></div>
+            <div class="field"><label for="of-first">First name <span class="req">*</span></label><input id="of-first" name="first" type="text" required placeholder="James" /></div>
+            <div class="field"><label for="of-last">Last name <span class="req">*</span></label><input id="of-last" name="last" type="text" required placeholder="Bond" /></div>
           </div>
-          <div class="field"><label for="of-email">Email <span class="req">*</span></label><input id="of-email" name="email" type="email" required placeholder="you@email.com" /></div>
-          <div class="field"><label for="of-phone">Phone <span class="opt">(optional)</span></label><input id="of-phone" name="phone" type="tel" placeholder="(503) 555-0100" /></div>
+          <div class="field"><label for="of-email">Your best email address <span class="req">*</span></label><input id="of-email" name="email" type="email" required placeholder="you@email.com" /></div>
+          <div class="field"><label for="of-phone">Phone number <span class="req">*</span></label><input id="of-phone" name="phone" type="tel" required placeholder="(503) 555-0100" /></div>
           <div class="field"><label for="of-items">What video game items do you have to sell? <span class="req">*</span></label>
-            <textarea id="of-items" name="items" rows="4" required placeholder="Titles, platforms, rough quantities — e.g. 'Super Mario 64 (N64, cart only), PS2 slim + 2 controllers, ~30 mixed GameCube games.'"></textarea></div>
+            <textarea id="of-items" name="items" rows="4" required placeholder="List the games, consoles, and accessories you'd like to sell. Including titles, platforms, and rough quantities all help. For example: 'Super Mario 64 (N64, cart only), PS2 slim w/ 2 controllers, ~30 mixed GameCube games.'"></textarea></div>
           <div class="upload-row">
-            <button type="button" class="upload-btn"><span class="ic">📄</span>Upload a spreadsheet</button>
-            <button type="button" class="upload-btn"><span class="ic">🖼️</span>Upload images</button>
+            <button type="button" class="upload-btn"><span class="ic">📄</span>Upload a spreadsheet!</button>
+            <button type="button" class="upload-btn"><span class="ic">🖼️</span>Upload images!</button>
           </div>
-          <button type="submit" class="btn btn-magenta btn-block">Submit for a cash quote →</button>
-          <p class="fineprint">We&rsquo;ll only use your details to respond about buying your games. No spam, ever.</p>
+          <p class="offer-warn" role="alert" aria-live="assertive"></p>
+          <button type="submit" class="btn btn-magenta btn-block">Submit Your No Obligation Quote</button>
+          <p class="offer-contact">
+            Prefer to talk it through? Email <a href={`mailto:${SITE.email}`}>{SITE.email}</a>
+            or call <a href={SITE.phoneHref}>{SITE.phoneDisplay}</a>.
+          </p>
+          <p class="offer-sign">Keep Being You, Keep Being Awesome :)</p>
         </form>
         <div class="modal-success">
           <div class="check" aria-hidden="true">✓</div>
           <h3>Quote Request Sent!</h3>
-          <p>Thanks — we&rsquo;ll review what you&rsquo;ve got and reply soon with your custom cash offer.</p>
+          <p>Thanks! We&rsquo;ll review what you&rsquo;ve got and reply soon with your custom cash offer.</p>
         </div>
       </div>
     </div>
@@ -59,22 +60,22 @@
           <li class="how-step">
             <span class="how-num">1</span>
             <div>
-              <h4>Tell Us What You&rsquo;ve Got</h4>
-              <p>Whether you&rsquo;re in Portland, OR, Vancouver, WA, or beyond, fill out the form to get a free cash offer on your games, accessories, and collectibles.</p>
+              <h4>Tell us what you&rsquo;ve got</h4>
+              <p>Whether you&rsquo;re in Portland, OR, Vancouver, WA or beyond, fill out the form to get a free cash offer on your games, accessories and collectibles.</p>
             </div>
           </li>
           <li class="how-step">
             <span class="how-num">2</span>
             <div>
-              <h4>We&rsquo;ll Reach Out With an Offer</h4>
-              <p>To give you the fairest estimate, we review each trade request by hand — checking real market sales data — and get back to you with a transparent offer within 24–48 hours.</p>
+              <h4>We&rsquo;ll reach out with an offer</h4>
+              <p>In order to give you the fairest estimate we handle each trade request by hand. We check real market sales data and get back to you with a transparent offer within 24-48 hours.</p>
             </div>
           </li>
           <li class="how-step">
             <span class="how-num">3</span>
             <div>
               <h4>Get Paid Your Way</h4>
-              <p>If you like our offer, accept and walk away with cash. We always put our best foot forward — and if you aren&rsquo;t happy, we&rsquo;re glad to crunch the numbers again.</p>
+              <p>If you like our offer, accept and walk away with cash. We try to put our best foot forward, but if you aren&rsquo;t happy with your offer we can always crunch the numbers again.</p>
             </div>
           </li>
         </ol>
@@ -86,8 +87,7 @@
 <style>
   .sell-cash .container { max-width: 860px; text-align: center; }
   .sell-h2 { font-size: clamp(2.6rem, 1.6rem + 4.4vw, 4.8rem); text-wrap: balance; }
-  .sell-cash .lead { margin: 1rem auto 0; max-width: 60ch; }
-  .sell-cash .sub2 { margin: 0.8rem auto 1.8rem; max-width: 56ch; font-size: 0.98rem; }
+  .sell-cash .lead { margin: 1rem auto 1.8rem; max-width: 60ch; }
   .hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
 
   /* "See how it works" steps — unfurls like the sell form */
@@ -109,7 +109,7 @@
 
   /* Inline cash-offer form — unfurls like the timeline */
   .offer-reveal { overflow: hidden; max-height: 0; opacity: 0; transition: max-height 0.6s ease, opacity 0.5s ease, margin 0.5s ease; text-align: left; }
-  .offer-reveal[data-open="true"] { max-height: 2000px; opacity: 1; margin-top: 1.9rem; }
+  .offer-reveal[data-open="true"] { max-height: 2200px; opacity: 1; margin-top: 1.9rem; }
   .offer-card {
     max-width: 640px; margin-inline: auto; background: linear-gradient(90deg, #df5e39 0%, #cd804c 100%);
     border: 0; border-radius: 0; clip-path: polygon(56px 0, 100% 0, calc(100% - 56px) 100%, 0 100%);
@@ -119,13 +119,12 @@
   .offer-card .modal-head .eyebrow { color: var(--accent-ink); justify-content: center; display: inline-flex; }
   .offer-card .modal-head .eyebrow::before { background: linear-gradient(90deg, var(--accent-ink), transparent); }
   .offer-card .modal-head h3 { font-size: clamp(1.5rem, 1.2rem + 1.2vw, 2rem); margin-bottom: 0.3rem; color: var(--accent-ink); }
-  .offer-card .modal-sub { margin: 0; color: rgba(37, 19, 10, 0.82); }
   .offer-card label { color: var(--accent-ink); font-weight: 700; }
-  .offer-card .req { color: var(--accent-ink); }
-  .offer-card .opt { color: rgba(37, 19, 10, 0.6); }
+  .offer-card .req { color: #6e1226; }
   .offer-card input, .offer-card textarea { background: #fbf3ec; color: var(--accent-ink); border: 0; border-radius: 0; padding-inline: 1.3rem; clip-path: polygon(14px 0, 100% 0, calc(100% - 14px) 100%, 0 100%); }
   .offer-card input::placeholder, .offer-card textarea::placeholder { color: rgba(37, 19, 10, 0.5); }
   .offer-card input:focus, .offer-card textarea:focus { box-shadow: none; filter: drop-shadow(0 0 7px rgba(37, 19, 10, 0.5)); }
+  .offer-card input.invalid, .offer-card textarea.invalid { box-shadow: inset 0 0 0 2px #7a1020; }
 
   .upload-row { display: grid; gap: 0.7rem; grid-template-columns: 1fr 1fr; margin-bottom: 1rem; }
   @media (max-width: 460px) { .upload-row { grid-template-columns: 1fr; } }
@@ -134,7 +133,11 @@
   .offer-card .upload-btn { background: rgba(255, 255, 255, 0.62); border: 0; border-radius: 0; color: var(--accent-ink); padding-inline: 1rem; clip-path: polygon(14px 0, 100% 0, calc(100% - 14px) 100%, 0 100%); }
   .offer-card .upload-btn:hover { background: #ffffff; color: var(--accent-ink); }
 
-  .offer-card .fineprint { color: rgba(37, 19, 10, 0.72); }
+  .offer-warn { color: #5e0f1e; background: rgba(255, 255, 255, 0.55); font-weight: 800; text-align: center; margin: 0 0 0.8rem; padding: 0.55rem 0.8rem; clip-path: polygon(12px 0, 100% 0, calc(100% - 12px) 100%, 0 100%); }
+  .offer-warn:empty { display: none; }
+  .offer-contact { color: var(--accent-ink); text-align: center; font-size: 0.9rem; margin-top: 0.9rem; }
+  .offer-contact a { color: #2b1809; font-weight: 700; text-decoration: underline; }
+  .offer-sign { color: var(--accent-ink); text-align: center; font-weight: 700; font-style: italic; margin-top: 0.5rem; }
   .offer-card .btn-magenta { background: linear-gradient(135deg, #2b1809, #160b03); color: #fbf3ec; filter: drop-shadow(0 5px 13px rgba(0, 0, 0, 0.4)); }
   .offer-card .btn-magenta:hover { filter: drop-shadow(0 8px 20px rgba(0, 0, 0, 0.6)); }
 
@@ -144,41 +147,110 @@
   .offer-card[data-sent="true"] .modal-form, .offer-card[data-sent="true"] .modal-head { display: none; }
   .offer-card[data-sent="true"] .modal-success { display: block; }
 
-  /* ---------- Mobile: stack CTAs, shallow slants, tighter card padding ---------- */
+  /* ---------- Mobile: stack CTAs, shallow slants, roomier card padding ---------- */
   @media (max-width: 600px) {
     #offer-toggle, #how-toggle { width: 100%; }
-    .sell-h2 { font-size: clamp(2rem, 1.5rem + 3vw, 2.6rem); }
-    .offer-card { clip-path: polygon(18px 0, 100% 0, calc(100% - 18px) 100%, 0 100%); padding: 1.9rem 1.35rem; }
-    .how-card { clip-path: polygon(16px 0, 100% 0, calc(100% - 16px) 100%, 0 100%); padding: 1.9rem 1.35rem; }
+    .sell-h2 { font-size: clamp(2.2rem, 1.5rem + 4.5vw, 3.2rem); }
+    .offer-card { clip-path: polygon(18px 0, 100% 0, calc(100% - 18px) 100%, 0 100%); padding: 2.25rem 1.85rem; }
+    .how-card { clip-path: polygon(16px 0, 100% 0, calc(100% - 16px) 100%, 0 100%); padding: 2.25rem 1.85rem; }
     .offer-card .modal-head h3 { font-size: 1.7rem; }
     .how-title { font-size: 1.5rem; }
   }
 </style>
 
 <script>
-  // Inline cash-offer form (unfurls like the timeline)
-  (function () {
-    const wrap = document.getElementById("offer-inline");
-    const toggle = document.getElementById("offer-toggle");
-    if (!wrap || !toggle) return;
-    const card = wrap.querySelector<HTMLElement>(".offer-card");
-    const form = wrap.querySelector<HTMLFormElement>("[data-offer-form]");
-    toggle.addEventListener("click", () => {
-      const open = wrap.dataset.open === "true";
-      wrap.dataset.open = String(!open);
-      toggle.setAttribute("aria-expanded", String(!open));
-      toggle.innerHTML = open ? "Sell my games →" : "Close form ✕";
-    });
-    form?.addEventListener("submit", async (e) => {
+  const offerWrap = document.getElementById("offer-inline");
+  const offerToggle = document.getElementById("offer-toggle");
+  const howWrap = document.getElementById("how-inline");
+  const howToggle = document.getElementById("how-toggle");
+
+  function closeOffer() {
+    if (!offerWrap || !offerToggle) return;
+    offerWrap.dataset.open = "false";
+    offerToggle.setAttribute("aria-expanded", "false");
+    offerToggle.innerHTML = "Sell my games →";
+  }
+  function closeHow() {
+    if (!howWrap || !howToggle) return;
+    howWrap.dataset.open = "false";
+    howToggle.setAttribute("aria-expanded", "false");
+    howToggle.textContent = "See how it works";
+  }
+
+  // "Sell my games" opens the offer form and hides "see how it works".
+  offerToggle?.addEventListener("click", () => {
+    const open = offerWrap?.dataset.open === "true";
+    if (open) {
+      closeOffer();
+    } else {
+      closeHow();
+      if (offerWrap) offerWrap.dataset.open = "true";
+      offerToggle.setAttribute("aria-expanded", "true");
+      offerToggle.innerHTML = "Close form ✕";
+    }
+  });
+
+  // "See how it works" opens the steps and hides the sell form.
+  howToggle?.addEventListener("click", () => {
+    const open = howWrap?.dataset.open === "true";
+    if (open) {
+      closeHow();
+    } else {
+      closeOffer();
+      if (howWrap) howWrap.dataset.open = "true";
+      howToggle.setAttribute("aria-expanded", "true");
+      howToggle.textContent = "Hide steps";
+    }
+  });
+
+  // Cash-offer form: Last name + Phone (and the rest) required, with live warnings.
+  document.querySelectorAll<HTMLFormElement>("form[data-offer-form]").forEach((form) => {
+    const card = form.closest<HTMLElement>(".offer-card");
+    const warnEl = form.querySelector<HTMLParagraphElement>(".offer-warn");
+    const submit = form.querySelector<HTMLButtonElement>('button[type=submit]');
+    const get = (n: string) => form.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[name="${n}"]`);
+    const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    let attempted = false;
+
+    const val = (n: string) => (get(n)?.value || "").trim();
+    function problem(): { msg: string; focus?: string } {
+      const last = val("last");
+      const phone = val("phone");
+      if (!last && !phone) return { msg: "Phone number and last name required", focus: "last" };
+      if (!last) return { msg: "Last name required", focus: "last" };
+      if (!phone) return { msg: "Phone number required", focus: "phone" };
+      if (!val("first")) return { msg: "First name required", focus: "first" };
+      if (!emailRe.test(val("email"))) return { msg: "A valid email is required", focus: "email" };
+      if (!val("items")) return { msg: "Please tell us what you have to sell", focus: "items" };
+      return { msg: "" };
+    }
+    function refresh() {
+      if (!attempted || !warnEl) return;
+      const { msg } = problem();
+      warnEl.textContent = msg;
+      ["last", "phone", "first", "email", "items"].forEach((n) => {
+        const el = get(n);
+        if (el) el.classList.toggle("invalid", !val(n) && msg !== "");
+      });
+    }
+    form.addEventListener("input", refresh);
+
+    form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const honey = form.querySelector<HTMLInputElement>('input[name="company"]');
       if (honey?.value) return;
-      if (!form.checkValidity()) { form.reportValidity(); return; }
-      const first = (form.querySelector<HTMLInputElement>('[name="first"]')?.value || "").trim();
-      const last = (form.querySelector<HTMLInputElement>('[name="last"]')?.value || "").trim();
+      attempted = true;
+      const { msg, focus } = problem();
+      if (msg) {
+        if (warnEl) warnEl.textContent = msg;
+        refresh();
+        if (focus) get(focus)?.focus();
+        return;
+      }
+      if (warnEl) warnEl.textContent = "";
+
       const fd = new FormData(form);
-      fd.set("name", `${first} ${last}`.trim() || first);
-      const submit = form.querySelector<HTMLButtonElement>('button[type=submit]');
+      fd.set("name", `${val("first")} ${val("last")}`.trim());
       if (submit) { submit.disabled = true; submit.textContent = "Sending…"; }
       try {
         const res = await fetch(form.action, {
@@ -190,23 +262,9 @@
         if (res.ok && data.ok) { if (card) card.dataset.sent = "true"; return; }
         throw new Error(data.error || "error");
       } catch {
-        if (submit) { submit.disabled = false; submit.textContent = "Submit for a cash quote →"; }
-        const fp = form.querySelector<HTMLParagraphElement>(".fineprint");
-        if (fp) fp.textContent = "Something went wrong — please try again or email timelaggaming@gmail.com.";
+        if (submit) { submit.disabled = false; submit.textContent = "Submit Your No Obligation Quote"; }
+        if (warnEl) warnEl.textContent = "Something went wrong. Please try again or email timelaggaming@gmail.com.";
       }
     });
-  })();
-
-  // Inline "See how it works" steps (unfurls like the sell form)
-  (function () {
-    const wrap = document.getElementById("how-inline");
-    const toggle = document.getElementById("how-toggle");
-    if (!wrap || !toggle) return;
-    toggle.addEventListener("click", () => {
-      const open = wrap.dataset.open === "true";
-      wrap.dataset.open = String(!open);
-      toggle.setAttribute("aria-expanded", String(!open));
-      toggle.textContent = open ? "See how it works" : "Hide steps";
-    });
-  })();
+  });
 </script>

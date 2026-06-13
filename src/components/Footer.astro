@@ -1,5 +1,5 @@
 ---
-import { SITE, EBAY, NAV, YEAR, FIND_US_HREF } from "../consts";
+import { SITE, EBAY, NAV, YEAR } from "../consts";
 ---
 
 <footer class="site-footer">
@@ -10,6 +10,7 @@ import { SITE, EBAY, NAV, YEAR, FIND_US_HREF } from "../consts";
           <img src="/logo-dark.png" alt="" class="foot-logo" />
           <span class="brand-text">TimeLag<span class="brand-text-2"> Video Games</span></span>
         </div>
+        <p class="foot-tagline">Buy. Sell. Chill.</p>
         <p>
           Portland&rsquo;s premier inclusive hub to shop, play, eat, and connect. Discover
           Japanese imports, browse classic collectibles, or level up in our chill lounge.
@@ -21,12 +22,11 @@ import { SITE, EBAY, NAV, YEAR, FIND_US_HREF } from "../consts";
         <h3>Explore</h3>
         <ul>
           {NAV.map((item) => <li><a href={item.href}>{item.label}</a></li>)}
-          <li><a href={FIND_US_HREF}>Find Us</a></li>
           <li><a href={EBAY.storeUrl} target="_blank" rel="noopener">Shop on eBay ↗</a></li>
         </ul>
       </div>
 
-      <div class="foot-col">
+      <div class="foot-col" id="contact">
         <h3>Get in Touch</h3>
         <ul>
           <li><a href={`mailto:${SITE.email}`}>✉️ {SITE.email}</a></li>

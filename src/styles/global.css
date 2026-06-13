@@ -328,12 +328,13 @@ body:not(.app-body) .section::before {
 .site-header .brand, .site-header .nav { flex: none; }
 .brand {
   display: inline-flex; align-items: center; gap: 0.6rem; white-space: nowrap;
-  color: var(--accent-ink); font-family: var(--font-display); font-style: italic; font-weight: 400;
+  color: #ffffff; font-family: var(--font-display); font-style: italic; font-weight: 400;
   letter-spacing: 0.02em; text-transform: none; font-size: 1.4rem; line-height: 1;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.28);
 }
 .brand:hover { text-decoration: none; }
-.brand-mark { color: var(--accent-ink); display: grid; place-items: center; }
-.brand-text-2 { color: rgba(37, 19, 10, 0.62); }
+.brand-mark { color: #ffffff; display: grid; place-items: center; }
+.brand-text-2 { color: rgba(255, 255, 255, 0.78); }
 
 .nav { display: flex; align-items: center; gap: 1rem; }
 .nav ul { display: flex; align-items: center; flex-wrap: nowrap; gap: 0.95rem; list-style: none; padding: 0; }
@@ -403,6 +404,7 @@ body:not(.app-body) .section::before {
 @media (min-width: 720px) { .foot-grid { grid-template-columns: 1.6fr 1fr 1fr; } }
 .foot-brand .brand-text { font-family: var(--font-display); font-style: italic; font-weight: 400; text-transform: none; letter-spacing: 0.02em; color: var(--accent-ink); font-size: 1.9rem; }
 .foot-brand .brand-text-2 { color: #2b1809; }
+.foot-tagline { font-family: var(--font-display); font-style: italic; font-weight: 400; font-size: 1.25rem; color: var(--accent-ink); margin-top: 0.5rem; }
 .foot-launch { margin-top: 1.1rem; color: rgba(37, 19, 10, 0.82); }
 .foot-logo { height: 44px; width: auto; display: block; }
 .foot-brand-row { display: flex; align-items: center; gap: 0.7rem; margin-bottom: 0.7rem; }
