@@ -34,8 +34,16 @@ import { SITE } from "../consts";
           <div class="field"><label for="of-items">What video game items do you have to sell? <span class="req">*</span></label>
             <textarea id="of-items" name="items" rows="4" required placeholder="List the games, consoles, and accessories you'd like to sell. Including titles, platforms, and rough quantities all help. For example: 'Super Mario 64 (N64, cart only), PS2 slim w/ 2 controllers, ~30 mixed GameCube games.'"></textarea></div>
           <div class="upload-row">
-            <button type="button" class="upload-btn"><span class="ic">📄</span>Upload a spreadsheet!</button>
-            <button type="button" class="upload-btn"><span class="ic">🖼️</span>Upload images!</button>
+            <label class="upload-btn">
+              <input type="file" name="spreadsheet" accept=".csv,.tsv,.xls,.xlsx,.ods,.numbers" hidden />
+              <span class="ic">📄</span>
+              <span class="upload-label" data-default="Upload a spreadsheet!">Upload a spreadsheet!</span>
+            </label>
+            <label class="upload-btn">
+              <input type="file" name="images" accept="image/*" multiple hidden />
+              <span class="ic">🖼️</span>
+              <span class="upload-label" data-default="Upload images!">Upload images!</span>
+            </label>
           </div>
           <p class="offer-warn" role="alert" aria-live="assertive"></p>
           <button type="submit" class="btn btn-magenta btn-block">Submit Your No Obligation Quote</button>
@@ -129,6 +137,7 @@ import { SITE } from "../consts";
   .upload-row { display: grid; gap: 0.7rem; grid-template-columns: 1fr 1fr; margin-bottom: 1rem; }
   @media (max-width: 460px) { .upload-row { grid-template-columns: 1fr; } }
   .upload-btn { display: flex; flex-direction: column; align-items: center; gap: 0.35rem; padding: 1rem 0.75rem; font-size: 0.85rem; font-weight: 600; text-align: center; cursor: pointer; }
+  .upload-label { word-break: break-word; }
   .upload-btn .ic { font-size: 1.4rem; }
   .offer-card .upload-btn { background: rgba(255, 255, 255, 0.62); border: 0; border-radius: 0; color: var(--accent-ink); padding-inline: 1rem; clip-path: polygon(14px 0, 100% 0, calc(100% - 14px) 100%, 0 100%); }
   .offer-card .upload-btn:hover { background: #ffffff; color: var(--accent-ink); }
@@ -235,6 +244,24 @@ import { SITE } from "../consts";
     }
     form.addEventListener("input", refresh);
 
+    // File uploads: reflect chosen file names on the buttons + cap total size.
+    const MAX_FILE_BYTES = 4 * 1024 * 1024;
+    form.querySelectorAll<HTMLInputElement>("input[type=file]").forEach((inp) => {
+      inp.addEventListener("change", () => {
+        const lbl = inp.closest(".upload-btn")?.querySelector<HTMLElement>(".upload-label");
+        if (!lbl) return;
+        const n = inp.files?.length || 0;
+        lbl.textContent = n === 0 ? (lbl.dataset.default || "") : n === 1 ? inp.files![0].name : `${n} files selected`;
+      });
+    });
+    const totalFileBytes = () => {
+      let t = 0;
+      form.querySelectorAll<HTMLInputElement>("input[type=file]").forEach((inp) => {
+        if (inp.files) for (const f of Array.from(inp.files)) t += f.size;
+      });
+      return t;
+    };
+
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const honey = form.querySelector<HTMLInputElement>('input[name="company"]');
@@ -249,6 +276,11 @@ import { SITE } from "../consts";
       }
       if (warnEl) warnEl.textContent = "";
 
+      if (totalFileBytes() > MAX_FILE_BYTES) {
+        if (warnEl) warnEl.textContent = "Uploads are too large (4MB max total). Please email larger files to timelaggaming@gmail.com.";
+        return;
+      }
+
       const fd = new FormData(form);
       fd.set("name", `${val("first")} ${val("last")}`.trim());
       if (submit) { submit.disabled = true; submit.textContent = "Sending…"; }
@@ -259,7 +291,11 @@ import { SITE } from "../consts";
           body: fd,
         });
         const data = await res.json().catch(() => ({}));
-        if (res.ok && data.ok) { if (card) card.dataset.sent = "true"; return; }
+        if (res.ok && data.ok) {
+          (window as any).gtag?.("event", "generate_lead", { form_name: "cash_offer" });
+          if (card) card.dataset.sent = "true";
+          return;
+        }
         throw new Error(data.error || "error");
       } catch {
         if (submit) { submit.disabled = false; submit.textContent = "Submit Your No Obligation Quote"; }

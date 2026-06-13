@@ -277,6 +277,7 @@ const errored = Astro.url.searchParams.get("error") === "1";
         const data = await res.json().catch(() => ({}));
 
         if (res.ok && data.ok) {
+          (window as any).gtag?.("event", "generate_lead", { form_name: "sell_contact" });
           if (success && form) {
             form.hidden = true;
             success.hidden = false;
