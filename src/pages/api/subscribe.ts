@@ -43,39 +43,44 @@ export const POST: APIRoute = async ({ request, redirect }) => {
     return fail("Please enter a valid email address.");
   }
 
-  // Not configured yet: log the signup so it isn't lost, then report success.
-  if (!API_KEY || !AUDIENCE_ID) {
+  // Not configured at all: log the signup so it isn't lost, then report success.
+  if (!API_KEY) {
     console.warn(
-      "[subscribe] RESEND_API_KEY or RESEND_AUDIENCE_ID not set — logging signup instead:\n" +
+      "[subscribe] RESEND_API_KEY not set — logging signup instead:\n" +
         `${first} ${last} <${email}> ${phone || "—"}`,
     );
     return ok();
   }
 
-  // Add the subscriber to the Resend Audience (the mailing list).
-  try {
-    const res = await fetch(`https://api.resend.com/audiences/${AUDIENCE_ID}/contacts`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ email, first_name: first, last_name: last, unsubscribed: false }),
-    });
+  let captured = false;
 
-    if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      // An already-subscribed contact is fine — treat it as success.
-      if (res.status === 409 || /already|exists/i.test(detail)) return ok();
-      console.error("[subscribe] Resend audience error", res.status, detail);
-      return fail("We couldn't add you right now. Please try again later.", 502);
+  // 1) Add the subscriber to the Resend Audience (mailing list), if configured.
+  //    Best-effort: a bad/missing audience ID or a send-only key shouldn't break
+  //    the signup — we still capture it by email below.
+  if (AUDIENCE_ID) {
+    try {
+      const res = await fetch(`https://api.resend.com/audiences/${AUDIENCE_ID}/contacts`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${API_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ email, first_name: first, last_name: last, unsubscribed: false }),
+      });
+      if (res.ok) {
+        captured = true;
+      } else {
+        const detail = await res.text().catch(() => "");
+        // An already-subscribed contact is fine — treat it as success.
+        if (res.status === 409 || /already|exists/i.test(detail)) captured = true;
+        else console.error("[subscribe] Resend audience error", res.status, detail);
+      }
+    } catch (err) {
+      console.error("[subscribe] audience request failed", err);
     }
-  } catch (err) {
-    console.error("[subscribe] Unexpected error", err);
-    return fail("Something went wrong on our end. Please try again.", 500);
   }
 
-  // Best-effort: notify the shop so the phone number (not stored on the Resend
-  // contact) isn't lost. Never fails the request.
+  // 2) Email the shop a copy — captures the phone (not stored on the contact)
+  //    and is the reliable record even when the audience add didn't work.
   try {
-    await fetch("https://api.resend.com/emails", {
+    const res = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { Authorization: `Bearer ${API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -86,10 +91,15 @@ export const POST: APIRoute = async ({ request, redirect }) => {
         text: `Name: ${first} ${last}\nEmail: ${email}\nPhone: ${phone || "—"}`,
       }),
     });
-  } catch {
-    /* ignore notification failures */
+    if (res.ok) captured = true;
+    else console.error("[subscribe] Resend email error", res.status, await res.text().catch(() => ""));
+  } catch (err) {
+    console.error("[subscribe] email request failed", err);
   }
 
+  if (!captured) {
+    return fail("We couldn't sign you up right now. Please email timelaggaming@gmail.com and we'll add you.", 502);
+  }
   return ok();
 };
 
