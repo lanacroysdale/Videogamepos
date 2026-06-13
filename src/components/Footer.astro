@@ -1,5 +1,5 @@
 ---
-import { SITE, EBAY, NAV, YEAR, FIND_US_HREF } from "../consts";
+import { SITE, EBAY, NAV, YEAR } from "../consts";
 ---
 
 <footer class="site-footer">
@@ -22,12 +22,11 @@ import { SITE, EBAY, NAV, YEAR, FIND_US_HREF } from "../consts";
         <h3>Explore</h3>
         <ul>
           {NAV.map((item) => <li><a href={item.href}>{item.label}</a></li>)}
-          <li><a href={FIND_US_HREF}>Find Us</a></li>
           <li><a href={EBAY.storeUrl} target="_blank" rel="noopener">Shop on eBay ↗</a></li>
         </ul>
       </div>
 
-      <div class="foot-col">
+      <div class="foot-col" id="contact">
         <h3>Get in Touch</h3>
         <ul>
           <li><a href={`mailto:${SITE.email}`}>✉️ {SITE.email}</a></li>

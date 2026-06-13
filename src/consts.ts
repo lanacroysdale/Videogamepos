@@ -62,11 +62,13 @@ export const EBAY = {
 };
 
 // Primary navigation shown in the header and footer.
-// "Find Us" lives as a standalone location pill in the header (see Header.astro).
+// "Find Us" lives as a standalone location pill in the header (see Header.astro);
+// the footer adds a "Shop on eBay" link after these.
 export const NAV: NavItem[] = [
-  { label: 'Shop', href: '/#shop' },
-  { label: 'Sell Games', href: '/#sell' },
+  { label: 'Home', href: '/' },
   { label: 'About', href: '/#about' },
+  { label: 'Sell Games', href: '/#sell' },
+  { label: 'Contact', href: '/#contact' },
 ];
 
 // Anchor target for the "Find Us" header pill (the Eat·Play·Connect section).
