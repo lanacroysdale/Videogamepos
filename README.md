@@ -68,7 +68,7 @@ The forms work immediately — but until email is configured, submissions are ju
 1. Create a free account at [resend.com](https://resend.com) and make an API key.
 2. Copy `.env.example` to `.env` and fill in `RESEND_API_KEY`.
 3. (Optional) Verify your domain in Resend, then set `CONTACT_FROM` to an address
-   on that domain (e.g. `TimeLag Video Games <hello@timelaggaming.com>`). Until then the
+   on that domain (e.g. `TimeLag Video Games <hello@timelag.co>`). Until then the
    included Resend test sender works for trying it out.
 
 Leads are sent to `CONTACT_TO_EMAIL` (defaults to `timelaggaming@gmail.com`).
@@ -133,7 +133,7 @@ Web NFC on supported devices).
    - POS app (optional): `PUBLIC_SUPABASE_URL`, `PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`
 4. Point your Cloudflare domain's DNS at Vercel. Every `git push` now auto-deploys.
 
-The repo already targets `https://timelaggaming.com` for canonical URLs and the
+The repo already targets `https://timelag.co` for canonical URLs and the
 sitemap (`astro.config.mjs` `site`, `public/robots.txt`, and `src/consts.ts`). If you
 use a different domain, update those three spots.
 
