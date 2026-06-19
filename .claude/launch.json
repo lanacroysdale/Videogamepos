@@ -6,6 +6,12 @@
       "runtimeExecutable": "C:\\Program Files\\nodejs\\node.exe",
       "runtimeArgs": ["C:\\Users\\LanaCroysdale\\.vgpos\\node_modules\\astro\\astro.js", "dev"],
       "port": 4321
+    },
+    {
+      "name": "web-mac",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 4321
     }
   ]
 }

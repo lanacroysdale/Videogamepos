@@ -179,6 +179,13 @@ import { SITE } from "../consts";
     offerToggle.setAttribute("aria-expanded", "false");
     offerToggle.innerHTML = "Sell my games →";
   }
+  function openOffer() {
+    if (!offerWrap || !offerToggle) return;
+    closeHow();
+    offerWrap.dataset.open = "true";
+    offerToggle.setAttribute("aria-expanded", "true");
+    offerToggle.innerHTML = "Close form ✕";
+  }
   function closeHow() {
     if (!howWrap || !howToggle) return;
     howWrap.dataset.open = "false";
@@ -186,18 +193,29 @@ import { SITE } from "../consts";
     howToggle.textContent = "See how it works";
   }
 
-  // "Sell my games" opens the offer form and hides "see how it works".
+  // "Sell my games" toggles the offer form (and hides "see how it works").
   offerToggle?.addEventListener("click", () => {
-    const open = offerWrap?.dataset.open === "true";
-    if (open) {
-      closeOffer();
-    } else {
-      closeHow();
-      if (offerWrap) offerWrap.dataset.open = "true";
-      offerToggle.setAttribute("aria-expanded", "true");
-      offerToggle.innerHTML = "Close form ✕";
-    }
+    if (offerWrap?.dataset.open === "true") closeOffer();
+    else openOffer();
   });
+
+  // Navigating to #sell (e.g. the "Sell Games" nav link) auto-opens the form
+  // and scrolls it into view.
+  function revealFromHash() {
+    if (location.hash !== "#sell") return;
+    openOffer();
+    document.getElementById("sell")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  // Fires when arriving via the nav while already on the page.
+  window.addEventListener("hashchange", revealFromHash);
+  // Catches clicks on a #sell link when the hash is already #sell (no hashchange).
+  document.querySelectorAll<HTMLAnchorElement>('a[href$="#sell"]').forEach((link) => {
+    link.addEventListener("click", () => {
+      if (location.hash === "#sell") revealFromHash();
+    });
+  });
+  // Fires when landing on /#sell from another page or a fresh load.
+  revealFromHash();
 
   // "See how it works" opens the steps and hides the sell form.
   howToggle?.addEventListener("click", () => {
