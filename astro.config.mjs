@@ -16,5 +16,6 @@ export default defineConfig({
   // The public forms only send email (honeypot-protected), so disable it.
   security: { checkOrigin: false },
 
-  integrations: [sitemap()],
+  // Keep hidden/pre-launch routes (e.g. /shop) out of the generated sitemap.
+  integrations: [sitemap({ filter: (page) => !page.includes("/shop") })],
 });

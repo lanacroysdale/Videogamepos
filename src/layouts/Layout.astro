@@ -9,12 +9,15 @@ interface Props {
   description?: string;
   /** Path to an Open Graph image in /public (optional). */
   image?: string;
+  /** Keep the page out of search engines (hidden/pre-launch pages). */
+  noindex?: boolean;
 }
 
 const {
   title,
   description = SITE.description,
   image = "/og-default.svg",
+  noindex = false,
 } = Astro.props;
 
 const pageTitle = title ? `${title} · ${SITE.name}` : `${SITE.name} — ${SITE.tagline}`;
@@ -52,6 +55,7 @@ const jsonLd = {
 
     <title>{pageTitle}</title>
     <meta name="description" content={description} />
+    {noindex && <meta name="robots" content="noindex, nofollow" />}
     <link rel="canonical" href={canonical} />
 
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />

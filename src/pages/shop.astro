@@ -1,0 +1,143 @@
+---
+export const prerender = false;
+
+import Layout from "../layouts/Layout.astro";
+import { SITE } from "../consts";
+import { fmt } from "../lib/money";
+import { createSupabaseAdminClient } from "../lib/supabase";
+
+// HIDDEN, BROWSE-ONLY shop. Reads the SHARED inventory pool so anything sold in
+// store disappears here automatically. Server-side service-role read selecting
+// ONLY safe columns (never cost_cents); kept out of search via noindex + robots.
+// Not linked from nav — reachable only by direct URL until launch.
+const admin = createSupabaseAdminClient();
+const { data: rows, error } = await admin
+  .from("product_variants")
+  .select(
+    "id, condition, completeness, price_cents, online_price_cents, quantity, product:products(id, title, platform, franchise, image_url, description)",
+  )
+  .eq("online_visible", true)
+  .gt("quantity", 0)
+  .order("price_cents", { ascending: true });
+
+const listings = (rows ?? []).map((v: any) => ({
+  id: v.id,
+  title: v.product?.title ?? "Untitled",
+  platform: v.product?.platform ?? "",
+  franchise: v.product?.franchise ?? "",
+  image: v.product?.image_url ?? null,
+  description: v.product?.description ?? "",
+  condition: v.condition,
+  completeness: v.completeness,
+  priceCents: v.online_price_cents ?? v.price_cents,
+  quantity: v.quantity,
+}));
+---
+
+<Layout
+  title="Shop"
+  description={`Browse games, consoles, and accessories in stock at ${SITE.name}.`}
+  noindex
+>
+  <section class="section--tight shop-hero">
+    <div class="container">
+      <span class="eyebrow">In stock now · {SITE.location}</span>
+      <h1>The <span class="grad">Shop</span></h1>
+      <p class="lead">
+        A live look at what&rsquo;s on our shelves. Everything here is in stock right now —
+        reserve or buy in store while we build out online checkout.
+      </p>
+    </div>
+  </section>
+
+  <section class="section--tight">
+    <div class="container">
+      {error && (
+        <p class="shop-empty">The shop is warming up — check back shortly.</p>
+      )}
+      {!error && listings.length === 0 && (
+        <p class="shop-empty">
+          Nothing published yet. Staff can mark items “Publish to web” from the POS inventory screen.
+        </p>
+      )}
+
+      {listings.length > 0 && (
+        <div class="shop-grid">
+          {listings.map((item) => (
+            <article class="shop-card">
+              <div class="shop-thumb">
+                {item.image ? (
+                  <img src={item.image} alt={item.title} loading="lazy" />
+                ) : (
+                  <span class="shop-thumb-ph" aria-hidden="true">🎮</span>
+                )}
+                {item.quantity <= 3 && <span class="shop-low">Only {item.quantity} left</span>}
+              </div>
+              <div class="shop-body">
+                {item.platform && <span class="shop-plat">{item.platform}</span>}
+                <h3 class="shop-title">{item.title}</h3>
+                <p class="shop-cond">{item.condition}{item.completeness ? ` · ${item.completeness}` : ""}</p>
+                <div class="shop-foot">
+                  <span class="shop-price">{fmt(item.priceCents)}</span>
+                  <span class="shop-stock">In stock</span>
+                </div>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+    </div>
+  </section>
+
+  <section class="section--tight">
+    <div class="container narrow shop-cta">
+      <p>
+        See something you want? Call <a href={SITE.phoneHref}>{SITE.phoneDisplay}</a> or
+        email <a href={`mailto:${SITE.email}`}>{SITE.email}</a> to hold it, or visit us in {SITE.location}.
+      </p>
+    </div>
+  </section>
+</Layout>
+
+<style>
+  .shop-hero { padding-top: clamp(2.5rem, 2rem + 3vw, 4.5rem); }
+  .shop-hero h1 { margin: 0.6rem 0 1rem; }
+  .shop-hero .lead { max-width: 56ch; }
+  .grad {
+    background: linear-gradient(120deg, var(--cyan), var(--magenta) 80%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .narrow { max-width: 760px; }
+
+  .shop-grid {
+    display: grid; gap: 1.1rem;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  }
+  .shop-card {
+    display: flex; flex-direction: column; overflow: hidden;
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    transition: transform 0.15s ease, border-color 0.15s ease;
+  }
+  .shop-card:hover { transform: translateY(-3px); border-color: var(--cyan); }
+  .shop-thumb {
+    position: relative; aspect-ratio: 4 / 3; display: grid; place-items: center;
+    background: rgba(0, 0, 0, 0.25); overflow: hidden;
+  }
+  .shop-thumb img { width: 100%; height: 100%; object-fit: cover; }
+  .shop-thumb-ph { font-size: 2.6rem; opacity: 0.5; }
+  .shop-low {
+    position: absolute; top: 0.5rem; left: 0.5rem; padding: 0.2rem 0.55rem;
+    background: var(--magenta); color: #fff; font-size: 0.72rem; font-weight: 800; border-radius: 999px;
+  }
+  .shop-body { display: flex; flex-direction: column; gap: 0.3rem; padding: 0.85rem 1rem 1rem; }
+  .shop-plat { color: var(--muted-2); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; }
+  .shop-title { font-size: 1.05rem; line-height: 1.25; margin: 0; }
+  .shop-cond { color: var(--muted); font-size: 0.85rem; margin: 0; }
+  .shop-foot { display: flex; align-items: baseline; justify-content: space-between; margin-top: 0.5rem; }
+  .shop-price { font-family: var(--font-mono); font-weight: 800; font-size: 1.15rem; color: var(--text); }
+  .shop-stock { color: var(--green); font-size: 0.78rem; font-weight: 700; }
+
+  .shop-empty { color: var(--muted); text-align: center; padding: 2rem 0; }
+  .shop-cta { text-align: center; color: var(--muted); }
+  .shop-cta a { color: var(--cyan); font-weight: 700; }
+</style>

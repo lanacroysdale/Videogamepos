@@ -1,5 +1,7 @@
 User-agent: *
 Allow: /
+# Hidden / pre-launch pages
+Disallow: /shop
 
 # TODO: update the host below once your real domain is live.
 Sitemap: https://timelag.co/sitemap-index.xml
