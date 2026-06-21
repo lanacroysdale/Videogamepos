@@ -82,7 +82,7 @@ const posData = {
       <label>Title<input id="np-title" placeholder="e.g. Donkey Kong 64" /></label>
       <label>Platform<input id="np-platform" placeholder="Nintendo 64" /></label>
       <label>Category<select id="np-cat">{categories?.map((c) => <option value={c.id}>{c.name}</option>)}</select></label>
-      <label>Completeness<select id="np-comp"><option value="">—</option>{completeness?.map((c) => <option value={c.code}>{c.label}</option>)}</select></label>
+      <label>Completeness<span class="comp-combo-wrap"><input id="np-comp" class="comp-combo" list="comp-list" placeholder="type CIB, complete, open box…" autocomplete="off" /><span class="comp-abbr" id="np-comp-abbr" aria-live="polite"></span></span></label>
       <label>Grade<select id="np-grade"><option value="">—</option>{grades?.map((g) => <option value={g.code}>{g.label}</option>)}</select></label>
       <label>Price $<input id="np-price" type="number" min="0" step="0.01" value="0" /></label>
       <label>Qty<input id="np-qty" type="number" min="0" value="1" /></label>
@@ -90,6 +90,8 @@ const posData = {
     </div>
     <button id="np-save" class="btn btn-primary btn-sm" style="margin-top:0.7rem;">Save product</button>
   </div>
+
+  <datalist id="comp-list">{completeness?.map((c) => <option value={c.label}>{c.code}</option>)}</datalist>
 
   <div class="pos-panel inv-shell">
     <div class="inv-toolbar">
@@ -291,6 +293,7 @@ const posData = {
 
 <script>
   import { buildPlatforms, parseQuery as _parseQuery, smartMatches as _smartMatches, matchScore } from "../../lib/smartSearch";
+  import { resolveComp, compAbbrev } from "../../lib/conditionDisplay";
 
   const data = JSON.parse(document.getElementById("pos-data")!.textContent!);
   let items: any[] = data.items;
@@ -310,7 +313,27 @@ const posData = {
   const parseQuery = (raw: string) => _parseQuery(raw, { completeness, grades, platforms: PLATFORMS });
   const smartMatches = (parsed: any) => _smartMatches(items, parsed);
   const complLabel = (code: string) => completeness.find((c) => c.code === code)?.label || code;
+  const compAbbr = (code: string) => compAbbrev(code, completeness);
   const gradeLabel = (code: string) => { const g = grades.find((x) => x.code === code); return g ? (g.icon ? g.icon + " " : "") + g.label : code; };
+
+  // Typeable completeness field: resolve free text ("cib", "complete", "open
+  // box") to a canonical code held in dataset.code, and show its short badge.
+  function wireComp(input: HTMLInputElement, badge?: HTMLElement | null) {
+    const sync = () => {
+      const code = resolveComp(input.value, completeness);
+      input.dataset.code = code;
+      input.classList.toggle("comp-unknown", !!input.value.trim() && !code);
+      if (badge) badge.textContent = code ? compAbbr(code) : "";
+    };
+    input.addEventListener("input", sync);
+    input.addEventListener("blur", () => { const code = input.dataset.code; if (code) input.value = complLabel(code); sync(); });
+    sync();
+  }
+  function setComp(input: HTMLInputElement, code: string, badge?: HTMLElement | null) {
+    input.value = code ? complLabel(code) : "";
+    input.dataset.code = code || "";
+    if (badge) badge.textContent = code ? compAbbr(code) : "";
+  }
 
   function renderSmart() {
     const bar = $("smart-bar");
@@ -339,7 +362,7 @@ const posData = {
     panel.hidden = false;
     ($("np-title") as HTMLInputElement).value = parsed.title.replace(/\b\w/g, (c: string) => c.toUpperCase());
     ($("np-platform") as HTMLInputElement).value = parsed.platform || "";
-    ($("np-comp") as HTMLSelectElement).value = parsed.completenessCode || "";
+    setComp($("np-comp") as HTMLInputElement, parsed.completenessCode || "", $("np-comp-abbr"));
     ($("np-grade") as HTMLSelectElement).value = parsed.gradeCode || "3";
     panel.scrollIntoView({ behavior: "smooth", block: "center" });
     ($("np-price") as HTMLInputElement).focus();
@@ -378,11 +401,9 @@ const posData = {
   function condLabel(v: any) {
     const c = completeness.find((x) => x.code === v.completenessCode);
     const g = grades.find((x) => x.code === v.gradeCode);
-    if (c || g) return [c ? c.label : null, g ? (g.icon || g.label) : null].filter(Boolean).join(" · ");
+    if (c || g) return [c ? compAbbr(c.code) : null, g ? (g.icon || g.label) : null].filter(Boolean).join(" · ");
     return v.condition || "—";
   }
-  const compOpts = (sel: string) =>
-    `<option value="">—</option>` + completeness.map((c) => `<option value="${c.code}"${c.code === sel ? " selected" : ""}>${esc(c.label)}</option>`).join("");
   const gradeOpts = (sel: string) =>
     `<option value="">—</option>` + grades.map((g) => `<option value="${g.code}"${g.code === sel ? " selected" : ""}>${esc((g.icon ? g.icon + " " : "") + g.label)}</option>`).join("");
 
@@ -555,6 +576,7 @@ const posData = {
 
     bindBarcodes(p);
     bindReprice(p);
+    wireModalComps();
     $("add-cond").addEventListener("click", () => addCondition(p));
 
     // Auto-fill from IGDB (cover, description) — no productId so it doesn't
@@ -602,7 +624,7 @@ const posData = {
       : "";
     return `
       <tr data-vrow="${v.id}">
-        <td><select data-vf="comp">${compOpts(v.completenessCode)}</select></td>
+        <td><input data-vf="comp" class="comp-combo" list="comp-list" value="${esc(complLabel(v.completenessCode))}" data-code="${esc(v.completenessCode ?? "")}" placeholder="type…" autocomplete="off"></td>
         <td><select data-vf="grade">${gradeOpts(v.gradeCode)}</select></td>
         <td><input data-vf="sku" value="${esc(v.sku ?? "")}" placeholder="SKU" style="font-family:var(--font-mono);"></td>
         <td class="c-num"><div class="price-cell"><input data-vf="instore" type="number" min="0" step="0.01" value="${(v.priceCents / 100).toFixed(2)}">${repriceBtn}</div></td>
@@ -663,7 +685,7 @@ const posData = {
       const vid = row.dataset.vrow!;
       const v = p.variants.find((x: any) => x.id === vid);
       const f = (n: string) => row.querySelector<HTMLInputElement>(`[data-vf="${n}"]`)!;
-      const comp = f("comp").value, grade = f("grade").value, price = toCents(f("instore").value);
+      const comp = compVal(f("comp")), grade = f("grade").value, price = toCents(f("instore").value);
       try {
         await api({ action: "updateVariant", id: vid, priceCents: price, completenessCode: comp, gradeCode: grade });
         Object.assign(v, { priceCents: price, completenessCode: comp, gradeCode: grade });
@@ -681,6 +703,15 @@ const posData = {
   function bindReprice(p: any) {
     $("cond-body").querySelectorAll<HTMLElement>("[data-vrow]").forEach((row) => bindRow(row, p));
   }
+  // Make every completeness cell in the edit modal a typeable combobox.
+  function wireModalComps() {
+    $("cond-body").querySelectorAll<HTMLInputElement>('[data-vf="comp"]').forEach((inp) => {
+      if (inp.dataset.wired) return;
+      inp.dataset.wired = "1";
+      wireComp(inp);
+    });
+  }
+  const compVal = (inp: HTMLInputElement) => inp.dataset.code || resolveComp(inp.value, completeness);
 
   async function addCondition(p: any) {
     const defComp = categories.find((c) => c.id === p.categoryId)?.default_completeness || "";
@@ -692,6 +723,7 @@ const posData = {
       $("cond-body").insertAdjacentHTML("beforeend", condRowHtml(nv));
       $("bc-blocks").insertAdjacentHTML("beforeend", bcBlockHtml(nv));
       bindRow($("cond-body").querySelector<HTMLElement>(`[data-vrow="${nv.id}"]`)!, p);
+      wireModalComps();
       bindBcBlock($("bc-blocks").querySelector<HTMLElement>(`[data-bcv="${nv.id}"]`)!, p);
       toast("Condition added — set its price");
     } catch (e: any) { alert(e.message); }
@@ -724,7 +756,7 @@ const posData = {
         const v = p.variants.find((x: any) => x.id === vid);
         const f = (name: string) => row.querySelector<HTMLInputElement>(`[data-vf="${name}"]`)!;
         const onlineRaw = f("online").value.trim();
-        const comp = f("comp").value, grade = f("grade").value;
+        const comp = compVal(f("comp")), grade = f("grade").value;
         const derived = [completeness.find((c) => c.code === comp)?.label, grades.find((g) => g.code === grade)?.label].filter(Boolean).join(" ") || v.condition;
         const payload = {
           action: "updateVariant", id: vid,
@@ -792,8 +824,9 @@ const posData = {
     btn.disabled = false; btn.textContent = orig;
     toast(`✓ Resync done — added ${added} cover${added === 1 ? "" : "s"}`);
   });
+  wireComp($("np-comp") as HTMLInputElement, $("np-comp-abbr"));
   $("np-save").addEventListener("click", async () => {
-    const comp = ($("np-comp") as HTMLSelectElement).value;
+    const comp = compVal($("np-comp") as HTMLInputElement);
     const grade = ($("np-grade") as HTMLSelectElement).value;
     const condition = [completeness.find((c) => c.code === comp)?.label, grades.find((g) => g.code === grade)?.label].filter(Boolean).join(" ") || "Used";
     const body = {
@@ -869,7 +902,7 @@ const posData = {
       const it = j.item;
       ($("np-title") as HTMLInputElement).value = it.title;
       ($("np-platform") as HTMLInputElement).value = it.platform || "";
-      if (it.completenessCode) ($("np-comp") as HTMLSelectElement).value = it.completenessCode;
+      setComp($("np-comp") as HTMLInputElement, it.completenessCode || "", $("np-comp-abbr"));
       if (it.gradeCode) ($("np-grade") as HTMLSelectElement).value = it.gradeCode;
       ($("np-price") as HTMLInputElement).value = (it.priceCents / 100).toFixed(2);
       if (it.upc) ($("np-barcode") as HTMLInputElement).value = it.upc;

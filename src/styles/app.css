@@ -106,6 +106,18 @@
 
 .btn-sm { padding: 0.5rem 0.85rem; font-size: 0.85rem; }
 
+/* Typeable completeness combobox (inventory add form + edit modal) */
+.comp-combo-wrap { position: relative; display: inline-flex; align-items: center; }
+.comp-combo { width: 100%; }
+.comp-combo.comp-unknown { border-color: var(--magenta); }
+.comp-abbr {
+  position: absolute; right: 0.5rem; pointer-events: none; font-family: var(--font-mono);
+  font-size: 0.7rem; font-weight: 800; color: var(--accent-ink); background: var(--cyan);
+  padding: 0.05rem 0.35rem; line-height: 1.4;
+}
+.comp-abbr:empty { display: none; }
+td > .comp-combo { width: 100%; min-width: 7rem; }
+
 /* Tables */
 .tbl { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
 .tbl th, .tbl td { text-align: left; padding: 0.6rem 0.7rem; border-bottom: 1px solid var(--border); }
