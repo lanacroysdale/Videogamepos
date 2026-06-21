@@ -109,10 +109,7 @@ const cardCats = (i: any) => SHOP_CATS.filter((c) => c.key !== "all" && matchSho
             <a class="shop-card" data-shopcat={"all " + cardCats(item)} href={item.slug ? "/shop/" + item.slug : "#"}>
               <div class="shop-thumb">
                 {item.image ? (
-                  <Fragment>
-                    <img class="shop-thumb-bg" src={item.image} alt="" aria-hidden="true" loading="lazy" />
-                    <img class="shop-thumb-fg" src={item.image} alt={item.title} loading="lazy" />
-                  </Fragment>
+                  <img class="shop-thumb-fg" src={item.image} alt={item.title} loading="lazy" />
                 ) : (
                   <span class="shop-thumb-ph" aria-hidden="true">🎮</span>
                 )}
@@ -131,6 +128,31 @@ const cardCats = (i: any) => SHOP_CATS.filter((c) => c.key !== "all" && matchSho
           ))}
         </div>
         <p class="shop-empty" id="shop-noresults" hidden>Nothing in this category yet.</p>
+        <div class="shop-controls" id="shop-controls">
+          <div class="shop-pager">
+            <button type="button" id="pg-prev" class="shop-pgbtn">← Prev</button>
+            <span id="pg-info" class="shop-pginfo"></span>
+            <button type="button" id="pg-next" class="shop-pgbtn">Next →</button>
+          </div>
+          <div class="shop-viewopts">
+            <label class="shop-vopt">Per page
+              <select id="pg-size">
+                <option value="12">12</option>
+                <option value="24">24</option>
+                <option value="48">48</option>
+                <option value="9999">All</option>
+              </select>
+            </label>
+            <div class="shop-colsel" role="group" aria-label="Items per row">
+              <span class="shop-vlabel">Per row</span>
+              <button type="button" class="shop-colbtn" data-cols="1">1</button>
+              <button type="button" class="shop-colbtn" data-cols="2">2</button>
+              <button type="button" class="shop-colbtn" data-cols="3">3</button>
+              <button type="button" class="shop-colbtn c-wide" data-cols="4">4</button>
+              <button type="button" class="shop-colbtn c-wide" data-cols="5">5</button>
+            </div>
+          </div>
+        </div>
         </Fragment>
       )}
     </div>
@@ -147,21 +169,61 @@ const cardCats = (i: any) => SHOP_CATS.filter((c) => c.key !== "all" && matchSho
 </Layout>
 
 <script>
-  // Storefront category filter — show/hide cards by their data-shopcat keys.
+  // Storefront: category filter + pagination + columns. Cards carry their
+  // department keys in data-shopcat; everything is client-side show/hide.
+  const grid = document.querySelector<HTMLElement>(".shop-grid");
   const tabs = [...document.querySelectorAll<HTMLButtonElement>(".shop-cat")];
   const cards = [...document.querySelectorAll<HTMLElement>(".shop-card")];
   const noResults = document.getElementById("shop-noresults");
+  const controls = document.getElementById("shop-controls");
+  const pgPrev = document.getElementById("pg-prev") as HTMLButtonElement | null;
+  const pgNext = document.getElementById("pg-next") as HTMLButtonElement | null;
+  const pgInfo = document.getElementById("pg-info");
+  const pgSize = document.getElementById("pg-size") as HTMLSelectElement | null;
+  const colBtns = [...document.querySelectorAll<HTMLButtonElement>(".shop-colbtn")];
+
+  let cat = "all", page = 1, pageSize = 24;
+
+  const savedSize = Number(localStorage.getItem("shop-size"));
+  if (savedSize) pageSize = savedSize;
+  if (pgSize) pgSize.value = String(pageSize);
+  const savedCols = Number(localStorage.getItem("shop-cols"));
+  if (savedCols) setCols(savedCols);
+
+  function setCols(n: number) {
+    grid?.style.setProperty("--shop-cols", String(n));
+    colBtns.forEach((b) => b.setAttribute("aria-pressed", String(Number(b.dataset.cols) === n)));
+    localStorage.setItem("shop-cols", String(n));
+  }
+
+  function applyView() {
+    const matching = cards.filter((c) => cat === "all" || (c.dataset.shopcat || "").split(" ").includes(cat));
+    cards.forEach((c) => (c.hidden = true));
+    const total = matching.length;
+    const pages = Math.max(1, Math.ceil(total / pageSize));
+    if (page > pages) page = pages;
+    const start = (page - 1) * pageSize;
+    matching.slice(start, start + pageSize).forEach((c) => (c.hidden = false));
+    if (noResults) noResults.hidden = total > 0;
+    if (controls) controls.hidden = total === 0;
+    if (pgInfo) pgInfo.textContent = total ? `${start + 1}–${Math.min(start + pageSize, total)} of ${total}` : "";
+    if (pgPrev) pgPrev.disabled = page <= 1;
+    if (pgNext) pgNext.disabled = page >= pages;
+  }
+
+  const toGridTop = () => grid?.scrollIntoView({ behavior: "smooth", block: "start" });
+
   tabs.forEach((tab) => tab.addEventListener("click", () => {
-    const key = tab.dataset.shopcat!;
+    cat = tab.dataset.shopcat!;
     tabs.forEach((t) => t.setAttribute("aria-pressed", String(t === tab)));
-    let shown = 0;
-    cards.forEach((c) => {
-      const match = key === "all" || (c.dataset.shopcat || "").split(" ").includes(key);
-      c.hidden = !match;
-      if (match) shown++;
-    });
-    if (noResults) noResults.hidden = shown > 0;
+    page = 1; applyView();
   }));
+  pgPrev?.addEventListener("click", () => { if (page > 1) { page--; applyView(); toGridTop(); } });
+  pgNext?.addEventListener("click", () => { page++; applyView(); toGridTop(); });
+  pgSize?.addEventListener("change", () => { pageSize = Number(pgSize.value) || 24; localStorage.setItem("shop-size", String(pageSize)); page = 1; applyView(); });
+  colBtns.forEach((b) => b.addEventListener("click", () => setCols(Number(b.dataset.cols))));
+
+  applyView();
 </script>
 
 <style>
@@ -175,9 +237,11 @@ const cardCats = (i: any) => SHOP_CATS.filter((c) => c.key !== "all" && matchSho
   .narrow { max-width: 760px; }
 
   .shop-grid {
-    display: grid; gap: 1.1rem;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    display: grid; gap: 0.9rem;
+    grid-template-columns: repeat(var(--shop-cols, 3), minmax(0, 1fr));
   }
+  @media (min-width: 600px) { .shop-grid { --shop-cols: 4; } }
+  @media (min-width: 1000px) { .shop-grid { --shop-cols: 5; } }
   .shop-card {
     display: flex; flex-direction: column; overflow: hidden;
     background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
@@ -185,17 +249,16 @@ const cardCats = (i: any) => SHOP_CATS.filter((c) => c.key !== "all" && matchSho
     text-decoration: none; color: inherit;
   }
   .shop-card:hover { transform: translateY(-3px); border-color: var(--cyan); }
+  /* Blend: the cover sits on the card's own background with a little padding so
+     a bit of the module shows around it — no blur, no crop, consistent tiles. */
   .shop-thumb {
     position: relative; aspect-ratio: 1 / 1; display: grid; place-items: center;
-    background: #0b0b14; overflow: hidden;
+    background: var(--panel); overflow: hidden;
   }
-  /* Blurred fill: show the WHOLE cover (contain) over a soft, scaled blur of
-     itself — no cropping, no black bars, consistent square tiles. */
-  .shop-thumb-bg {
+  .shop-thumb-fg {
     position: absolute; inset: 0; width: 100%; height: 100%;
-    object-fit: cover; filter: blur(20px) brightness(0.5) saturate(1.15); transform: scale(1.2);
+    object-fit: contain; padding: 0.85rem; box-sizing: border-box;
   }
-  .shop-thumb-fg { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; object-fit: contain; }
   .shop-thumb-ph { font-size: 2.6rem; opacity: 0.5; }
 
   /* Category nav */
@@ -209,18 +272,47 @@ const cardCats = (i: any) => SHOP_CATS.filter((c) => c.key !== "all" && matchSho
   .shop-cat[aria-pressed="true"] { color: #06121a; background: var(--cyan); border-color: var(--cyan); }
   .shop-cat-n { font-family: var(--font-mono); font-size: 0.74rem; opacity: 0.7; }
   .shop-low {
-    position: absolute; top: 0.5rem; left: 0.5rem; padding: 0.2rem 0.55rem;
-    background: var(--magenta); color: #fff; font-size: 0.72rem; font-weight: 800; border-radius: 999px;
+    position: absolute; top: 0.5rem; left: 0.5rem; z-index: 2; padding: 0.2rem 0.55rem;
+    background: var(--magenta); color: #fff; font-size: 0.72rem; font-weight: 800;
   }
-  .shop-body { display: flex; flex-direction: column; gap: 0.3rem; padding: 0.85rem 1rem 1rem; }
-  .shop-plat { color: var(--muted-2); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; }
-  .shop-title { font-size: 1.05rem; line-height: 1.25; margin: 0; }
-  .shop-cond { color: var(--muted); font-size: 0.85rem; margin: 0; }
-  .shop-foot { display: flex; align-items: baseline; justify-content: space-between; margin-top: 0.5rem; }
-  .shop-price { font-family: var(--font-mono); font-weight: 800; font-size: 1.15rem; color: var(--text); }
-  .shop-stock { color: var(--green); font-size: 0.78rem; font-weight: 700; }
+  .shop-body { display: flex; flex-direction: column; gap: 0.25rem; padding: 0.7rem 0.8rem 0.85rem; }
+  .shop-plat { color: var(--muted-2); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; }
+  .shop-title {
+    font-size: clamp(0.98rem, 0.9rem + 0.4vw, 1.22rem); font-weight: 700; line-height: 1.22; margin: 0;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .shop-cond { color: var(--muted); font-size: 0.8rem; margin: 0; }
+  .shop-foot { display: flex; align-items: baseline; justify-content: space-between; margin-top: 0.4rem; gap: 0.4rem; }
+  .shop-price { font-family: var(--font-mono); font-weight: 800; font-size: clamp(1.05rem, 0.95rem + 0.4vw, 1.3rem); color: var(--text); }
+  .shop-stock { color: var(--green); font-size: 0.72rem; font-weight: 700; white-space: nowrap; }
 
   .shop-empty { color: var(--muted); text-align: center; padding: 2rem 0; }
   .shop-cta { text-align: center; color: var(--muted); }
   .shop-cta a { color: var(--cyan); font-weight: 700; }
+
+  /* Bottom controls: pager + per-page + columns */
+  .shop-controls {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem;
+    margin-top: 1.6rem; padding-top: 1.2rem; border-top: 1px solid var(--border);
+  }
+  .shop-pager { display: flex; align-items: center; gap: 0.7rem; }
+  .shop-pgbtn {
+    padding: 0.45rem 0.9rem; font: inherit; font-weight: 700; font-size: 0.85rem; color: var(--text);
+    background: var(--panel); border: 1px solid var(--border); cursor: pointer;
+  }
+  .shop-pgbtn:disabled { opacity: 0.35; cursor: default; }
+  .shop-pgbtn:not(:disabled):hover { border-color: var(--cyan); }
+  .shop-pginfo { font-size: 0.82rem; color: var(--muted); font-family: var(--font-mono); min-width: 6ch; text-align: center; }
+  .shop-viewopts { display: flex; align-items: center; gap: 1.1rem; flex-wrap: wrap; }
+  .shop-vopt { display: flex; align-items: center; gap: 0.45rem; font-size: 0.8rem; color: var(--muted); font-weight: 600; }
+  .shop-vopt select { background: var(--panel); border: 1px solid var(--border); color: var(--text); padding: 0.35rem 0.5rem; font: inherit; font-size: 0.82rem; }
+  .shop-colsel { display: flex; align-items: center; gap: 0.3rem; }
+  .shop-vlabel { font-size: 0.8rem; color: var(--muted); font-weight: 600; margin-right: 0.15rem; }
+  .shop-colbtn {
+    width: 1.95rem; height: 1.95rem; font: inherit; font-weight: 700; font-size: 0.8rem; color: var(--muted);
+    background: var(--panel); border: 1px solid var(--border); cursor: pointer;
+  }
+  .shop-colbtn:hover { color: var(--text); border-color: var(--muted); }
+  .shop-colbtn[aria-pressed="true"] { color: #06121a; background: var(--cyan); border-color: var(--cyan); }
+  @media (max-width: 560px) { .shop-colbtn.c-wide { display: none; } }
 </style>
