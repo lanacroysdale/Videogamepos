@@ -7,7 +7,10 @@ export const onRequest = defineMiddleware(async (context, next) => {
   const { pathname } = context.url;
   const isApp = pathname.startsWith("/app");
   const isPosApi = pathname.startsWith("/api/pos");
-  if (!isApp && !isPosApi) return next();
+  // /shop is gated behind login pre-launch (staff-only preview). Drop this when
+  // the storefront goes public.
+  const isShop = pathname === "/shop" || pathname.startsWith("/shop/");
+  if (!isApp && !isPosApi && !isShop) return next();
 
   const supabase = createSupabaseServerClient(context);
   context.locals.supabase = supabase;

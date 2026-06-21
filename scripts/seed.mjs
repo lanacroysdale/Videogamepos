@@ -13,7 +13,10 @@ if (!url || !key) {
 }
 const sb = createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
 
-const DEMO_PASSWORD = "password123";
+// Local-dev demo password. Set SEED_PASSWORD in .env to pin it, otherwise a
+// random one is generated and printed at the end. These demo accounts are
+// LOCAL DEV ONLY — never provision them (or this password) in production.
+const DEMO_PASSWORD = process.env.SEED_PASSWORD || "dev-" + Math.random().toString(36).slice(2, 10);
 
 const rand = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
@@ -320,7 +323,7 @@ async function main() {
   );
 
   console.log(`\n✅ Seed complete: ${completedCount} completed sales, ${drafts.length} open drafts, ${customers.length} customers, ${productDefs.length} products.`);
-  console.log("   Logins (password for all: password123):");
+  console.log(`   Local-dev logins (password for all: ${DEMO_PASSWORD}):`);
   console.log("   • owner@timelag.test   (Owner)");
   console.log("   • manager@timelag.test (Manager)");
   console.log("   • cashier@timelag.test (Cashier)");

@@ -95,16 +95,13 @@ npm run dev              # http://localhost:4321  →  visit /app
 The local Supabase keys are already in `.env`. Other DB scripts: `npm run db:stop`,
 `npm run db:reset`, `npm run db:types` (regenerate TypeScript types).
 
-### Demo logins (password `password123`)
+### Demo logins (local dev only)
 
-| Email | Card code | Role | Reports/Pricing? |
-| --- | --- | --- | --- |
-| `owner@timelag.test` | `1001` | owner | ✅ |
-| `manager@timelag.test` | `1002` | manager | ✅ |
-| `cashier@timelag.test` | `1003` | cashier | ❌ |
-
-Card codes work with the **Sign in with card** option on the login screen (and via
-Web NFC on supported devices).
+`npm run db:seed` creates three local demo employees (owner / manager / cashier)
+on your **local** Supabase. The password is printed in the seed output (or set
+`SEED_PASSWORD` in `.env` to pin it). These accounts and password are for local
+development only — **never provision them in production.** Card codes also work
+via the **Sign in with card** option (and Web NFC on supported devices).
 
 ### Going to production (cloud Supabase)
 
