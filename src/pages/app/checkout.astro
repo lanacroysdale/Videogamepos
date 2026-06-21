@@ -140,6 +140,21 @@ const posData = { catalog, categories: categories ?? [], customer };
   const esc = (s: string) => String(s).replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m] as string));
   const $ = (id: string) => document.getElementById(id)!;
 
+  // Faceted 3D gem in the category's colour — replaces the flat colour square.
+  const catGem = (c: string) => `<svg class="cat-gem" viewBox="0 0 24 24" aria-hidden="true">
+      <polygon points="5,8 8,3 16,3 19,8 12,21" fill="${c}"/>
+      <polygon points="8,3 16,3 15,8 9,8" fill="#fff" opacity="0.32"/>
+      <polygon points="16,3 19,8 15,8" fill="#fff" opacity="0.16"/>
+      <polygon points="5,8 8,3 9,8" fill="#000" opacity="0.22"/>
+      <polygon points="5,8 12,8 12,21" fill="#000" opacity="0.30"/>
+      <polygon points="19,8 12,8 12,21" fill="#fff" opacity="0.10"/>
+      <g fill="none" stroke="#fff" stroke-opacity="0.42" stroke-width="0.6" stroke-linejoin="round">
+        <polygon points="5,8 8,3 16,3 19,8 12,21"/>
+        <path d="M9,8 8,3 M15,8 16,3 M9,8 15,8 M5,8 12,21 19,8 M12,8 12,21"/>
+      </g>
+      <path d="M9.6,4.7 11.2,4.7" stroke="#fff" stroke-width="1" stroke-linecap="round" stroke-opacity="0.9"/>
+    </svg>`;
+
   let cart: Item[] = [];
   let activeCat: string | null = null;
   let search = "";
@@ -148,7 +163,7 @@ const posData = { catalog, categories: categories ?? [], customer };
   const tilesEl = $("cat-tiles");
   tilesEl.innerHTML = categories
     .map((c) => `<button class="tile-btn" data-cat="${c.id}" data-track="${c.is_trackable}">
-        <span class="dot" style="background:${c.color}"></span>${esc(c.name)}
+        ${catGem(c.color)}<span class="tile-name">${esc(c.name)}</span>
         <small>${c.is_trackable ? catalog.filter((v) => v.categoryId === c.id).length + " items" : "custom / service"}</small>
       </button>`)
     .join("");

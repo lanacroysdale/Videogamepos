@@ -141,7 +141,10 @@
   transition: transform .12s ease, border-color .15s ease;
 }
 .tile-btn:hover { transform: translateY(-2px); }
+.tile-btn:hover .cat-gem { transform: rotate(-4deg) scale(1.08); }
 .tile-btn .dot { width: 12px; height: 12px; border-radius: 3px; }
+.tile-btn .cat-gem { width: 26px; height: 26px; display: block; filter: drop-shadow(0 1.5px 1.5px rgba(0,0,0,.5)); transition: transform .15s ease; }
+.tile-name { line-height: 1.1; }
 .tile-btn small { color: var(--muted-2); font-weight: 600; }
 
 /* ---------- Cart ---------- */
