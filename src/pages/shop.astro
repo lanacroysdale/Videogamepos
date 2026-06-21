@@ -5,12 +5,15 @@ import Layout from "../layouts/Layout.astro";
 import { SITE } from "../consts";
 import { fmt } from "../lib/money";
 import { createSupabaseAdminClient } from "../lib/supabase";
+import { lowStockSettings, showLowStock } from "../lib/lowStock";
 
 // HIDDEN, BROWSE-ONLY shop. Reads the SHARED inventory pool so anything sold in
 // store disappears here automatically. Server-side service-role read selecting
 // ONLY safe columns (never cost_cents); kept out of search via noindex + robots.
 // Not linked from nav — reachable only by direct URL until launch.
 const admin = createSupabaseAdminClient();
+const { data: settingsRow } = await admin.from("store_settings").select("settings").eq("id", 1).maybeSingle();
+const ls = lowStockSettings(settingsRow?.settings);
 const { data: rows, error } = await admin
   .from("product_variants")
   .select(
@@ -33,6 +36,7 @@ const listings = (rows ?? []).map((v: any) => ({
   completeness: v.completeness,
   priceCents: v.online_price_cents ?? v.price_cents,
   quantity: v.quantity,
+  lowStock: showLowStock(v.quantity, v.online_price_cents ?? v.price_cents, ls),
 }));
 
 // Storefront category nav. Each tab maps the POS taxonomy / platform / title to
@@ -115,7 +119,7 @@ const cardCats = (i: any) => SHOP_CATS.filter((c) => c.key !== "all" && matchSho
                 ) : (
                   <span class="shop-thumb-ph" aria-hidden="true">🎮</span>
                 )}
-                {item.quantity <= 3 && <span class="shop-low">Only {item.quantity} left</span>}
+                {item.lowStock && <span class="shop-low">Only {item.quantity} left</span>}
               </div>
               <div class="shop-body">
                 {item.platform && <span class="shop-plat">{item.platform}</span>}

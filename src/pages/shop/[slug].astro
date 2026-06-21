@@ -8,11 +8,14 @@ import { createSupabaseAdminClient } from "../../lib/supabase";
 import { listGallery } from "../../lib/storage";
 import { ebayItemUrl } from "../../lib/ebay";
 import { splitTitle } from "../../lib/title";
+import { lowStockSettings, showLowStock } from "../../lib/lowStock";
 
 // Product detail page — the SEO surface. Server-rendered, indexable (no
 // noindex) once /shop is ungated at launch. Product JSON-LD + details panel.
 const { slug } = Astro.params;
 const admin = createSupabaseAdminClient();
+const { data: settingsRow } = await admin.from("store_settings").select("settings").eq("id", 1).maybeSingle();
+const ls = lowStockSettings(settingsRow?.settings);
 const { data: product } = await admin
   .from("products")
   .select(
@@ -25,8 +28,12 @@ if (!product) Astro.response.status = 404;
 
 const variants = (product?.product_variants ?? [])
   .filter((v: any) => v.online_visible && v.quantity > 0)
-  .map((v: any) => ({ ...v, displayCents: v.online_price_cents ?? v.price_cents }))
+  .map((v: any) => {
+    const displayCents = v.online_price_cents ?? v.price_cents;
+    return { ...v, displayCents, lowStock: showLowStock(v.quantity, displayCents, ls) };
+  })
   .sort((a: any, b: any) => a.displayCents - b.displayCents);
+const stockLabel = (v: any) => (v.lowStock ? `Only ${v.quantity} left` : "In stock");
 
 const comp: Record<string, string> = {};
 const grade: Record<string, string> = {};
@@ -189,7 +196,7 @@ const metaDesc = product?.description
                 <Fragment>
                   <div class="pdp-priceblock">
                     <span class="pdp-bigprice" id="pdp-bigprice">{fmt(variants[0].displayCents)}</span>
-                    <span class="pdp-instock">In stock</span>
+                    <span class:list={["pdp-instock", { "pdp-lowstock": variants[0].lowStock }]} id="pdp-stock">{stockLabel(variants[0])}</span>
                   </div>
                   <p class="pdp-selcond"><span class="pdp-selcond-lbl">Condition:</span> <strong id="pdp-selcond">{condText(variants[0])}</strong></p>
                 </Fragment>
@@ -213,6 +220,8 @@ const metaDesc = product?.description
                       data-i={i}
                       data-price={fmt(v.displayCents)}
                       data-cond={condText(v)}
+                      data-stock={stockLabel(v)}
+                      data-low={v.lowStock ? "1" : "0"}
                     >
                       <span class="pdp-condbtn-name">{condText(v)}</span>
                       <span class="pdp-condbtn-price">{fmt(v.displayCents)}</span>
@@ -327,11 +336,16 @@ const metaDesc = product?.description
   const condBtns = [...document.querySelectorAll<HTMLButtonElement>(".pdp-condbtn")];
   const bigPrice = document.getElementById("pdp-bigprice");
   const selCond = document.getElementById("pdp-selcond");
+  const stockEl = document.getElementById("pdp-stock");
   condBtns.forEach((b) => b.addEventListener("click", () => {
     condBtns.forEach((x) => x.classList.remove("active"));
     b.classList.add("active");
     if (bigPrice && b.dataset.price) bigPrice.textContent = b.dataset.price;
     if (selCond && b.dataset.cond) selCond.textContent = b.dataset.cond;
+    if (stockEl && b.dataset.stock) {
+      stockEl.textContent = b.dataset.stock;
+      stockEl.classList.toggle("pdp-lowstock", b.dataset.low === "1");
+    }
   }));
 </script>
 
@@ -388,6 +402,7 @@ const metaDesc = product?.description
   .pdp-priceblock { display:flex; align-items:baseline; gap:0.7rem; margin-bottom:0.3rem; flex-wrap:wrap; }
   .pdp-bigprice { font-family:var(--font-mono); font-weight:800; font-size:clamp(2rem, 1.7rem + 1.4vw, 2.9rem); color:var(--text); line-height:1; }
   .pdp-instock { color:var(--green); font-size:0.85rem; font-weight:700; }
+  .pdp-instock.pdp-lowstock { color:var(--magenta); }
   .pdp-selcond { margin:0 0 1.2rem; color:var(--muted); font-size:0.95rem; }
   .pdp-selcond-lbl { color:var(--muted-2); }
   .pdp-selcond strong { color:var(--text); font-weight:700; }

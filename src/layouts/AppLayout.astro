@@ -6,7 +6,7 @@ interface Props {
   title: string;
   active?:
     | "dashboard" | "leads" | "checkout" | "tradein" | "inventory" | "returns"
-    | "repairs" | "schedule" | "customers" | "reports" | "pricing";
+    | "repairs" | "schedule" | "customers" | "reports" | "pricing" | "settings";
 }
 const { title, active } = Astro.props;
 
@@ -61,6 +61,7 @@ const nav = [
           <div class="who">{profile?.full_name ?? "—"}</div>
           <div class="role">{profile?.role ?? ""}</div>
           <button id="alerts-btn" class="btn btn-ghost btn-sm" type="button">🔔 Enable alerts</button>
+          {isManager && <a href="/app/settings" class:list={["btn", "btn-ghost", "btn-sm", { active: active === "settings" }]}>⚙️ Settings</a>}
           <form method="POST" action="/app/logout">
             <button class="btn btn-ghost btn-sm" type="submit">Log out</button>
           </form>
