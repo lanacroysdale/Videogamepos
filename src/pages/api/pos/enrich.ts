@@ -1,6 +1,7 @@
 import type { APIRoute } from "astro";
 import { createSupabaseAdminClient } from "../../../lib/supabase";
 import { searchGame, igdbConfigured } from "../../../lib/igdb";
+import { lbPlatform, lbImageUrl } from "../../../lib/launchbox";
 
 export const prerender = false;
 const json = (d: unknown, s = 200) =>
@@ -8,42 +9,55 @@ const json = (d: unknown, s = 200) =>
 
 // Copy an external image into our public bucket so we own a stable URL.
 async function intoStorage(admin: any, url: string): Promise<string | null> {
-  try {
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const bytes = new Uint8Array(await res.arrayBuffer());
-    const path = `products/igdb-${crypto.randomUUID()}.jpg`;
-    const { error } = await admin.storage.from("product-images").upload(path, bytes, { contentType: "image/jpeg" });
-    if (error) return null;
-    return admin.storage.from("product-images").getPublicUrl(path).data.publicUrl;
-  } catch {
-    return null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) { await new Promise((r) => setTimeout(r, 600)); continue; }
+      const ct = res.headers.get("content-type") || "image/jpeg";
+      const ext = ct.includes("png") ? "png" : ct.includes("webp") ? "webp" : "jpg";
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      const path = `products/cover-${crypto.randomUUID()}.${ext}`;
+      const { error } = await admin.storage.from("product-images").upload(path, bytes, { contentType: ct });
+      if (error) { await new Promise((r) => setTimeout(r, 600)); continue; }
+      return admin.storage.from("product-images").getPublicUrl(path).data.publicUrl;
+    } catch {
+      await new Promise((r) => setTimeout(r, 700));
+    }
   }
+  return null;
 }
 
 // POST { title, platform?, productId? }
-// - returns the enriched fields (cover URL, description, release year, trailer, alt-names)
-// - if productId is given, also persists them to the product (used by auto-enrich on add)
+// Cover image prefers the LaunchBox retail box-front; falls back to the IGDB
+// cover. IGDB also supplies description / trailer / release year / alt-names.
+// With productId it persists, filling ONLY empty fields (additive resync-safe).
 export const POST: APIRoute = async ({ locals, request }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
-  if (!igdbConfigured()) return json({ error: "IGDB is not configured" }, 400);
 
   const b = await request.json().catch(() => ({}));
   const title = String(b.title ?? "").trim();
   if (!title) return json({ error: "title required" }, 400);
 
-  let meta;
-  try {
-    meta = await searchGame(title, b.platform);
-  } catch (e: any) {
-    return json({ error: e.message || "IGDB lookup failed" }, 502);
-  }
-  if (!meta) return json({ ok: true, found: false });
-
   const admin = createSupabaseAdminClient();
 
-  // When persisting to an existing product, fill ONLY empty fields — never
-  // overwrite manual edits. This makes bulk "resync images" purely additive.
+  // 1. IGDB metadata (description, trailer, release year, alt-names, fallback cover).
+  let meta: Awaited<ReturnType<typeof searchGame>> = null;
+  if (igdbConfigured()) {
+    try { meta = await searchGame(title, b.platform); } catch { meta = null; }
+  }
+
+  // 2. LaunchBox retail box-front — preferred cover source.
+  let coverUrl: string | null = meta?.coverUrl ?? null;
+  let coverSource: string | null = meta?.coverUrl ? "igdb" : null;
+  try {
+    const { data: lb } = await admin.rpc("lookup_box_art", { p_title: title, p_platform: lbPlatform(b.platform) });
+    const best = Array.isArray(lb) ? lb[0] : lb;
+    if (best?.box_front && (best.sim ?? 0) >= 0.4) { coverUrl = lbImageUrl(best.box_front); coverSource = "launchbox"; }
+  } catch { /* game_metadata not ingested yet → keep IGDB cover */ }
+
+  if (!meta && !coverUrl) return json({ ok: true, found: false });
+
+  // 3. Persist target — fill ONLY empty fields.
   let cur: any = null;
   if (b.productId) {
     ({ data: cur } = await admin
@@ -54,26 +68,27 @@ export const POST: APIRoute = async ({ locals, request }) => {
   }
 
   const needImage = !b.productId || !cur?.image_url;
-  const imageUrl = meta.coverUrl && needImage ? await intoStorage(admin, meta.coverUrl) : null;
+  const imageUrl = coverUrl && needImage ? await intoStorage(admin, coverUrl) : null;
 
   if (b.productId) {
     const patch: Record<string, unknown> = {};
     if (imageUrl && !cur?.image_url) patch.image_url = imageUrl;
-    if (meta.summary && !cur?.description) patch.description = meta.summary;
-    if (meta.releaseYear && !cur?.release_year) patch.release_year = meta.releaseYear;
-    if (meta.trailerUrl && !cur?.trailer_url) patch.trailer_url = meta.trailerUrl;
-    if (meta.altNames.length && !(cur?.alternative_names?.length)) patch.alternative_names = meta.altNames;
+    if (meta?.summary && !cur?.description) patch.description = meta.summary;
+    if (meta?.releaseYear && !cur?.release_year) patch.release_year = meta.releaseYear;
+    if (meta?.trailerUrl && !cur?.trailer_url) patch.trailer_url = meta.trailerUrl;
+    if (meta?.altNames?.length && !(cur?.alternative_names?.length)) patch.alternative_names = meta.altNames;
     if (Object.keys(patch).length) await admin.from("products").update(patch).eq("id", b.productId);
   }
 
   return json({
     ok: true,
     found: true,
-    matchedName: meta.name,
+    coverSource,
+    matchedName: meta?.name ?? null,
     imageUrl,
-    description: meta.summary,
-    releaseYear: meta.releaseYear,
-    trailerUrl: meta.trailerUrl,
-    altNames: meta.altNames,
+    description: meta?.summary ?? null,
+    releaseYear: meta?.releaseYear ?? null,
+    trailerUrl: meta?.trailerUrl ?? null,
+    altNames: meta?.altNames ?? [],
   });
 };
