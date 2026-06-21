@@ -1,5 +1,11 @@
 ---
 import { NAV, SITE, FIND_US_HREF } from "../consts";
+
+// A nav item is "active" when its href is a real route matching the current
+// path (anchors like "/#sell" are in-page jumps and never get the active state).
+const path = Astro.url.pathname.replace(/\/$/, "") || "/";
+const isActive = (href: string) =>
+  !href.includes("#") && (href.replace(/\/$/, "") || "/") === path;
 ---
 
 <header class="site-header">
@@ -24,7 +30,13 @@ import { NAV, SITE, FIND_US_HREF } from "../consts";
     <nav id="primary-nav" class="nav" aria-label="Primary">
       <ul>
         {NAV.map((item) => (
-          <li><a href={item.href}>{item.label}</a></li>
+          <li>
+            <a
+              href={item.href}
+              class={isActive(item.href) ? "is-active" : undefined}
+              aria-current={isActive(item.href) ? "page" : undefined}
+            >{item.label}</a>
+          </li>
         ))}
       </ul>
       <a href={FIND_US_HREF} class="btn nav-pin" aria-label="Find us in Portland">
@@ -34,6 +46,10 @@ import { NAV, SITE, FIND_US_HREF } from "../consts";
     </nav>
   </div>
 </header>
+
+<style>
+  .nav a.is-active { color: var(--cyan); }
+</style>
 
 <script>
   const toggle = document.querySelector<HTMLButtonElement>(".nav-toggle");

@@ -1,0 +1,12 @@
+---
+import Layout from "../layouts/Layout.astro";
+import Features from "../components/Features.astro";
+import { SITE } from "../consts";
+---
+
+<Layout
+  title="About"
+  description={`Why ${SITE.name} — curated, tested, refurbished retro and modern games in ${SITE.location}.`}
+>
+  <Features />
+</Layout>

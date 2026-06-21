@@ -64,9 +64,11 @@ export const EBAY = {
 // Primary navigation shown in the header and footer.
 // "Find Us" lives as a standalone location pill in the header (see Header.astro);
 // the footer adds a "Shop on eBay" link after these.
+// Items whose href is a real route (e.g. '/about') get active-state highlighting
+// in the header; in-page anchors (e.g. '/#sell') are jump links on the homepage.
 export const NAV: NavItem[] = [
   { label: 'Home', href: '/' },
-  { label: 'About', href: '/#about' },
+  { label: 'About', href: '/about' },
   { label: 'Sell Games', href: '/#sell' },
   { label: 'Contact', href: '/#contact' },
 ];
