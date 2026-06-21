@@ -102,11 +102,13 @@ const cardCats = (i: any) => SHOP_CATS.filter((c) => c.key !== "all" && matchSho
         </nav>
       )}
 
+      <div id="shop-platfilter" class="shop-platfilter" hidden></div>
+
       {listings.length > 0 && (
         <Fragment>
         <div class="shop-grid">
           {listings.map((item) => (
-            <a class="shop-card" data-shopcat={"all " + cardCats(item)} href={item.slug ? "/shop/" + item.slug : "#"}>
+            <a class="shop-card" data-shopcat={"all " + cardCats(item)} data-platform={(item.platform || "").toLowerCase()} href={item.slug ? "/shop/" + item.slug : "#"}>
               <div class="shop-thumb">
                 {item.image ? (
                   <img class="shop-thumb-fg" src={item.image} alt={item.title} loading="lazy" />
@@ -183,6 +185,22 @@ const cardCats = (i: any) => SHOP_CATS.filter((c) => c.key !== "all" && matchSho
   const colBtns = [...document.querySelectorAll<HTMLButtonElement>(".shop-colbtn")];
 
   let cat = "all", page = 1, pageSize = 24;
+  // Optional platform filter from the URL (?platform=Nintendo+64), set by the
+  // clickable platform breadcrumb on a product page.
+  let platformFilter = (new URLSearchParams(location.search).get("platform") || "").toLowerCase().trim();
+  const platChip = document.getElementById("shop-platfilter");
+  function renderPlatChip() {
+    if (!platChip) return;
+    if (platformFilter) {
+      platChip.hidden = false;
+      platChip.innerHTML = `<span class="shop-platlabel">${platformFilter}</span><button type="button" id="shop-platclear" aria-label="Clear platform filter">✕</button>`;
+      document.getElementById("shop-platclear")?.addEventListener("click", () => {
+        platformFilter = "";
+        history.replaceState(null, "", location.pathname);
+        renderPlatChip(); page = 1; applyView();
+      });
+    } else { platChip.hidden = true; platChip.innerHTML = ""; }
+  }
 
   const savedSize = Number(localStorage.getItem("shop-size"));
   if (savedSize) pageSize = savedSize;
@@ -197,7 +215,9 @@ const cardCats = (i: any) => SHOP_CATS.filter((c) => c.key !== "all" && matchSho
   }
 
   function applyView() {
-    const matching = cards.filter((c) => cat === "all" || (c.dataset.shopcat || "").split(" ").includes(cat));
+    const matching = cards.filter((c) =>
+      (cat === "all" || (c.dataset.shopcat || "").split(" ").includes(cat)) &&
+      (!platformFilter || (c.dataset.platform || "") === platformFilter));
     cards.forEach((c) => (c.hidden = true));
     const total = matching.length;
     const pages = Math.max(1, Math.ceil(total / pageSize));
@@ -223,6 +243,7 @@ const cardCats = (i: any) => SHOP_CATS.filter((c) => c.key !== "all" && matchSho
   pgSize?.addEventListener("change", () => { pageSize = Number(pgSize.value) || 24; localStorage.setItem("shop-size", String(pageSize)); page = 1; applyView(); });
   colBtns.forEach((b) => b.addEventListener("click", () => setCols(Number(b.dataset.cols))));
 
+  renderPlatChip();
   applyView();
 </script>
 
@@ -271,6 +292,13 @@ const cardCats = (i: any) => SHOP_CATS.filter((c) => c.key !== "all" && matchSho
   .shop-cat:hover { color: var(--text); border-color: var(--muted); }
   .shop-cat[aria-pressed="true"] { color: #06121a; background: var(--cyan); border-color: var(--cyan); }
   .shop-cat-n { font-family: var(--font-mono); font-size: 0.74rem; opacity: 0.7; }
+  .shop-platfilter { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1.2rem; }
+  .shop-platlabel {
+    display: inline-flex; align-items: center; padding: 0.35rem 0.7rem; font-size: 0.85rem; font-weight: 700;
+    color: #06121a; background: var(--cyan); text-transform: capitalize;
+  }
+  #shop-platclear { width: 1.9rem; height: 1.9rem; font: inherit; color: var(--muted); background: var(--panel); border: 1px solid var(--border); cursor: pointer; }
+  #shop-platclear:hover { color: var(--text); border-color: var(--cyan); }
   .shop-low {
     position: absolute; top: 0.5rem; left: 0.5rem; z-index: 2; padding: 0.2rem 0.55rem;
     background: var(--magenta); color: #fff; font-size: 0.72rem; font-weight: 800;

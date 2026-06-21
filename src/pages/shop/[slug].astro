@@ -9,15 +9,13 @@ import { listGallery } from "../../lib/storage";
 import { ebayItemUrl } from "../../lib/ebay";
 
 // Product detail page — the SEO surface. Server-rendered, indexable (no
-// noindex), with a Product JSON-LD block + auto description/trailer. Currently
-// gated behind login pre-launch (middleware gates /shop/*); the SEO machinery
-// is baked in and goes crawlable the moment that gate is removed at launch.
+// noindex) once /shop is ungated at launch. Product JSON-LD + details panel.
 const { slug } = Astro.params;
 const admin = createSupabaseAdminClient();
 const { data: product } = await admin
   .from("products")
   .select(
-    "id, title, slug, platform, franchise, genre, description, image_url, trailer_url, tags, product_variants(id, condition, completeness_code, grade_code, price_cents, online_price_cents, quantity, online_visible)",
+    "id, title, slug, platform, franchise, genre, description, image_url, trailer_url, release_year, brand, alternative_names, tags, category:categories(name), product_variants(id, condition, completeness_code, grade_code, price_cents, online_price_cents, quantity, online_visible, product_barcodes(barcode, label))",
   )
   .eq("slug", slug)
   .maybeSingle();
@@ -42,20 +40,16 @@ if (product) {
 const condLabel = (v: any) =>
   [comp[v.completeness_code], grade[v.grade_code]].filter(Boolean).join(" · ") || v.condition;
 
-// Image gallery — stored as a per-product folder in Storage (eBay imports copy
-// the full set there). Falls back to the single cover image.
+// Image gallery (per-product Storage folder; falls back to the cover).
 const gallery = product ? await listGallery(admin, product.id) : [];
 const images = gallery.length ? gallery : product?.image_url ? [product.image_url] : [];
 const mainImage = images[0] || product?.image_url || null;
 
-// "About this game" reads wrong for consoles/accessories — label by category.
-const aboutHeading =
-  product?.genre || product?.franchise ? "About this game" : "About this item";
+const categoryName = (product as any)?.category?.name ?? "";
+const aboutHeading = product?.genre || product?.franchise ? "About this game" : "About this item";
+const shopPlatformHref = product?.platform ? "/shop?platform=" + encodeURIComponent(product.platform) : "/shop";
 
-// "View on eBay" — reconstruct the listing URL from the ebay:<id> tag.
-const ebayId = product
-  ? (product.tags ?? []).find((t: string) => t.startsWith("ebay:"))?.slice(5)
-  : null;
+const ebayId = product ? (product.tags ?? []).find((t: string) => t.startsWith("ebay:"))?.slice(5) : null;
 const ebayUrl = ebayId ? ebayItemUrl(ebayId) : null;
 
 function ytEmbed(url: string | null | undefined) {
@@ -64,9 +58,37 @@ function ytEmbed(url: string | null | undefined) {
   return m ? `https://www.youtube.com/embed/${m[1]}` : null;
 }
 const trailer = ytEmbed(product?.trailer_url);
-
 const lowest = variants.length ? variants[0].displayCents : null;
-const tags = product ? [product.platform, product.genre, product.franchise].filter(Boolean) : [];
+
+// UPC — first UPC barcode across variants.
+let upc: string | null = null;
+for (const v of product?.product_variants ?? []) {
+  const b = (v.product_barcodes ?? []).find((bc: any) => bc.label === "UPC" && bc.barcode);
+  if (b) { upc = b.barcode; break; }
+}
+
+// Refurb / open-box badge from the raw eBay condition string.
+const refurbCond =
+  (product?.product_variants ?? []).map((v: any) => v.condition).find((c: string) => /refurb|open box|certified|seller refurb/i.test(c || "")) || null;
+
+const isElectronic = ["Consoles", "Accessories", "Video Games"].includes(categoryName);
+const isRefurb = !!refurbCond;
+
+// LaunchBox-style details (only the fields we actually have).
+const details: [string, any][] = product
+  ? ([
+      ["Platform", product.platform],
+      ["Release Year", product.release_year],
+      ["Publisher", product.brand],
+      ["Genre", product.genre],
+      ["Franchise", product.franchise],
+      ["Category", categoryName],
+      ["UPC", upc],
+      ["Condition", refurbCond || variants[0]?.condition],
+      ["Also known as", (product.alternative_names ?? []).join(", ")],
+    ].filter(([, v]) => v != null && String(v).trim() !== "") as [string, any][])
+  : [];
+
 const jsonLd = product
   ? {
       "@context": "https://schema.org",
@@ -74,17 +96,11 @@ const jsonLd = product
       name: product.title,
       ...(product.image_url ? { image: product.image_url } : {}),
       ...(product.description ? { description: product.description } : {}),
-      category: product.genre || "Video Games",
+      ...(upc ? { gtin: upc } : {}),
+      ...(product.brand ? { brand: { "@type": "Brand", name: product.brand } } : {}),
+      category: categoryName || product.genre || "Video Games",
       ...(lowest != null
-        ? {
-            offers: {
-              "@type": "Offer",
-              price: (lowest / 100).toFixed(2),
-              priceCurrency: "USD",
-              availability: "https://schema.org/InStock",
-              seller: { "@type": "Store", name: SITE.name },
-            },
-          }
+        ? { offers: { "@type": "Offer", price: (lowest / 100).toFixed(2), priceCurrency: "USD", availability: "https://schema.org/InStock", seller: { "@type": "Store", name: SITE.name } } }
         : {}),
     }
   : null;
@@ -111,21 +127,36 @@ const metaDesc = product?.description
     <Layout title={product.title} description={metaDesc} image={product.image_url || undefined}>
       <section class="section--tight pdp">
         <div class="container">
-          <a href="/shop" class="pdp-back">← All items</a>
+          <nav class="pdp-crumbs" aria-label="Breadcrumb">
+            <a href="/shop" class="pdp-back">← All items</a>
+            {product.platform && (
+              <Fragment>
+                <span class="pdp-crumb-sep">/</span>
+                <a href={shopPlatformHref} class="pdp-crumb">{product.platform}</a>
+              </Fragment>
+            )}
+          </nav>
+
           <div class="pdp-grid">
             <div class="pdp-media">
               {mainImage ? (
                 <div class="pdp-frame">
-                  <img class="pdp-cover-bg" id="pdp-main-bg" src={mainImage} alt="" aria-hidden="true" />
                   <img class="pdp-cover" id="pdp-main" src={mainImage} alt={product.title} />
+                  {images.length > 1 && (
+                    <Fragment>
+                      <button class="pdp-nav pdp-prev" id="pdp-prev" aria-label="Previous image" type="button">‹</button>
+                      <button class="pdp-nav pdp-next" id="pdp-next" aria-label="Next image" type="button">›</button>
+                      <span class="pdp-count" id="pdp-count">{"1 / " + images.length}</span>
+                    </Fragment>
+                  )}
                 </div>
               ) : (
                 <div class="pdp-frame pdp-ph" aria-hidden="true">🎮</div>
               )}
               {images.length > 1 && (
-                <div class="pdp-thumbs">
+                <div class="pdp-strip" id="pdp-strip">
                   {images.map((u, i) => (
-                    <button class:list={["pdp-thumb", { active: i === 0 }]} data-full={u} aria-label={`Photo ${i + 1}`}>
+                    <button class:list={["pdp-thumb", { active: i === 0 }]} data-full={u} aria-label={"Photo " + (i + 1)} type="button">
                       <img src={u} alt="" loading="lazy" />
                     </button>
                   ))}
@@ -134,13 +165,26 @@ const metaDesc = product?.description
             </div>
 
             <div class="pdp-info">
-              {product.platform && <span class="eyebrow">{product.platform}</span>}
+              {refurbCond && <span class="pdp-refurb">✓ {refurbCond}</span>}
               <h1 class="pdp-title">{product.title}</h1>
-              <div class="pdp-tags">
-                {tags.map((t) => <span class="pdp-tag">{t}</span>)}
+
+              {lowest != null && (
+                <div class="pdp-priceblock">
+                  {variants.length > 1 && <span class="pdp-pricefrom">from</span>}
+                  <span class="pdp-bigprice">{fmt(lowest)}</span>
+                  <span class="pdp-instock">In stock</span>
+                </div>
+              )}
+
+              <div class="pdp-buybox">
+                <a href={SITE.phoneHref} class="btn btn-primary pdp-buy">Reserve this item</a>
+                <div class="pdp-cta">
+                  {ebayUrl && <a href={ebayUrl} target="_blank" rel="noopener noreferrer" class="btn btn-ghost">View on eBay ↗</a>}
+                  <a href="/#journey" class="btn btn-ghost">Visit us in {SITE.location}</a>
+                </div>
               </div>
 
-              {variants.length > 0 ? (
+              {variants.length > 1 && (
                 <div class="pdp-prices">
                   {variants.map((v) => (
                     <div class="pdp-price-row">
@@ -150,24 +194,44 @@ const metaDesc = product?.description
                     </div>
                   ))}
                 </div>
-              ) : (
-                <p class="muted">Not currently listed online — ask us about availability.</p>
               )}
 
-              <div class="pdp-cta">
-                <a href={SITE.phoneHref} class="btn btn-primary">Call to reserve · {SITE.phoneDisplay}</a>
-                {ebayUrl && (
-                  <a href={ebayUrl} target="_blank" rel="noopener noreferrer" class="btn btn-ghost">View on eBay ↗</a>
-                )}
-                <a href="/#journey" class="btn btn-ghost">Visit us in {SITE.location}</a>
-              </div>
+              <ul class="pdp-trust">
+                <li><span class="pdp-trust-i">↩</span> 30-day free returns</li>
+                {isElectronic && <li><span class="pdp-trust-i">✓</span> Fully tested &amp; independently verified to work</li>}
+                {isRefurb && <li><span class="pdp-trust-i">🛡</span> 1-year warranty</li>}
+                <li><span class="pdp-trust-i">★</span> Top Rated Seller</li>
+              </ul>
             </div>
           </div>
 
           {product.description && (
             <div class="pdp-section">
               <h2>{aboutHeading}</h2>
-              <p class="pdp-desc">{product.description}</p>
+              <div class="pdp-about" id="pdp-about">
+                <p class="pdp-desc">{product.description}</p>
+              </div>
+              <button class="pdp-readmore" id="pdp-readmore" type="button" hidden>Read more ▾</button>
+            </div>
+          )}
+
+          {details.length > 0 && (
+            <div class="pdp-section pdp-detailsec">
+              <h2>Details</h2>
+              <dl class="pdp-dl">
+                {details.map(([label, value]) => (
+                  <div class="pdp-drow">
+                    <dt>{label}</dt>
+                    <dd class:list={[{ mono: label === "UPC" }]}>{value}</dd>
+                  </div>
+                ))}
+                {ebayUrl && (
+                  <div class="pdp-drow">
+                    <dt>eBay</dt>
+                    <dd><a href={ebayUrl} target="_blank" rel="noopener noreferrer">View original listing ↗</a></dd>
+                  </div>
+                )}
+              </dl>
             </div>
           )}
 
@@ -194,56 +258,122 @@ const metaDesc = product?.description
 }
 
 <script>
-  // Gallery: click a thumbnail to swap the main image (+ its blurred backdrop).
+  // Image carousel — click a thumb, use the ‹ › buttons, or the arrow keys.
   const main = document.getElementById("pdp-main") as HTMLImageElement | null;
-  const mainBg = document.getElementById("pdp-main-bg") as HTMLImageElement | null;
-  if (main) {
-    document.querySelectorAll<HTMLButtonElement>(".pdp-thumb").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        if (!btn.dataset.full) return;
-        main.src = btn.dataset.full;
-        if (mainBg) mainBg.src = btn.dataset.full;
-        document.querySelector(".pdp-thumb.active")?.classList.remove("active");
-        btn.classList.add("active");
-      });
+  const thumbs = [...document.querySelectorAll<HTMLButtonElement>(".pdp-thumb")];
+  const countEl = document.getElementById("pdp-count");
+  let idx = 0;
+  function show(i: number) {
+    if (!main || !thumbs.length) return;
+    idx = (i + thumbs.length) % thumbs.length;
+    const t = thumbs[idx];
+    if (t.dataset.full) main.src = t.dataset.full;
+    thumbs.forEach((x) => x.classList.remove("active"));
+    t.classList.add("active");
+    if (countEl) countEl.textContent = `${idx + 1} / ${thumbs.length}`;
+    t.scrollIntoView({ inline: "center", block: "nearest", behavior: "smooth" });
+  }
+  thumbs.forEach((t, i) => t.addEventListener("click", () => show(i)));
+  document.getElementById("pdp-prev")?.addEventListener("click", () => show(idx - 1));
+  document.getElementById("pdp-next")?.addEventListener("click", () => show(idx + 1));
+  if (thumbs.length > 1) {
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowLeft") show(idx - 1);
+      else if (e.key === "ArrowRight") show(idx + 1);
+    });
+  }
+
+  // Collapsible "About" — show a "Read more" toggle only if the text overflows.
+  const about = document.getElementById("pdp-about");
+  const readmore = document.getElementById("pdp-readmore") as HTMLButtonElement | null;
+  if (about && readmore) {
+    const desc = about.querySelector<HTMLElement>(".pdp-desc");
+    if (desc && desc.scrollHeight > desc.clientHeight + 4) readmore.hidden = false;
+    readmore.addEventListener("click", () => {
+      const expanded = about.classList.toggle("expanded");
+      readmore.textContent = expanded ? "Read less ▴" : "Read more ▾";
     });
   }
 </script>
 
 <style>
-  .pdp-back { display:inline-block; color:var(--muted); font-size:0.88rem; margin-bottom:1.2rem; }
+  .pdp-crumbs { display:flex; align-items:center; gap:0.55rem; flex-wrap:wrap; margin-bottom:1.2rem; font-size:0.88rem; }
+  .pdp-back { color:var(--muted); }
   .pdp-back:hover { color:var(--cyan); }
-  .pdp-grid { display:grid; gap:clamp(1.75rem, 1rem + 4vw, 3.5rem); align-items:start; }
-  /* Stacked (mobile / tablet / half-screen): cap + center the image so it reads
-     as a balanced hero with room to breathe before the text below. */
-  .pdp-media { display:flex; flex-direction:column; gap:0.7rem; width:100%; max-width:420px; margin-inline:auto; }
+  .pdp-crumb-sep { color:var(--muted-2); }
+  .pdp-crumb { color:var(--cyan); font-weight:700; }
+  .pdp-crumb:hover { text-decoration:underline; }
+
+  .pdp-grid { display:grid; grid-template-columns:minmax(0,1fr); gap:clamp(1.75rem, 1rem + 4vw, 3.5rem); align-items:start; }
+  .pdp-info { min-width:0; }
+  .pdp-media { display:flex; flex-direction:column; gap:0.7rem; width:100%; max-width:440px; margin-inline:auto; min-width:0; overflow-x:clip; }
+  .pdp-strip { max-width:100%; }
   @media (min-width:900px) {
-    .pdp-grid { grid-template-columns:minmax(0,0.9fr) minmax(0,1.1fr); }
-    .pdp-media { max-width:none; margin-inline:0; }
+    .pdp-grid { grid-template-columns:minmax(0,0.92fr) minmax(0,1.08fr); }
+    .pdp-media { max-width:none; margin-inline:0; position:sticky; top:1.5rem; }
   }
-  /* Blurred fill — whole cover (contain) over a soft blur of itself; no crop, no bars. */
-  .pdp-frame { position:relative; aspect-ratio:1/1; overflow:hidden; border:1px solid var(--border); background:#0b0b14; }
-  .pdp-cover-bg { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; filter:blur(26px) brightness(0.5) saturate(1.15); transform:scale(1.2); }
-  .pdp-cover { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; z-index:1; }
+
+  /* Main image — blends onto the page card; no blur, padded so edges show. */
+  .pdp-frame { position:relative; aspect-ratio:1/1; overflow:hidden; border:1px solid var(--border); background:var(--panel); }
+  .pdp-cover { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; padding:1rem; box-sizing:border-box; }
   .pdp-ph { display:grid; place-items:center; font-size:4rem; opacity:0.5; }
-  .pdp-thumbs { display:flex; flex-wrap:wrap; gap:0.45rem; }
-  .pdp-thumb { width:62px; height:62px; padding:0; border:1px solid var(--border); background:#0b0b14; cursor:pointer; overflow:hidden; transition:border-color .15s; }
+  .pdp-nav {
+    position:absolute; top:50%; transform:translateY(-50%); z-index:2; width:2.4rem; height:2.4rem;
+    display:grid; place-items:center; font-size:1.5rem; line-height:1; color:var(--text);
+    background:rgba(10,10,18,.62); border:1px solid var(--border); cursor:pointer; transition:background .15s;
+  }
+  .pdp-nav:hover { background:rgba(10,10,18,.9); border-color:var(--cyan); }
+  .pdp-prev { left:0.5rem; } .pdp-next { right:0.5rem; }
+  .pdp-count { position:absolute; bottom:0.5rem; right:0.5rem; z-index:2; padding:0.15rem 0.5rem; font-size:0.72rem; font-family:var(--font-mono); color:#fff; background:rgba(10,10,18,.7); }
+
+  /* Thumbnail strip — one scrollable row. */
+  .pdp-strip { display:flex; gap:0.45rem; overflow-x:auto; padding-bottom:0.25rem; scrollbar-width:thin; }
+  .pdp-thumb { flex:0 0 auto; width:60px; height:60px; padding:0; border:1px solid var(--border); background:var(--panel); cursor:pointer; overflow:hidden; transition:border-color .15s; }
   .pdp-thumb img { width:100%; height:100%; object-fit:cover; display:block; }
   .pdp-thumb:hover { border-color:var(--muted); }
   .pdp-thumb.active { border-color:var(--cyan); }
-  .pdp-title { font-size:clamp(1.9rem,1.4rem+2.4vw,3rem); margin:0.5rem 0 0.7rem; text-wrap:balance; }
-  .pdp-tags { display:flex; flex-wrap:wrap; gap:0.4rem; margin-bottom:1.3rem; }
-  .pdp-tag { font-size:0.78rem; padding:0.15rem 0.6rem; border-radius:999px; background:rgba(255,255,255,.06); color:var(--muted); }
-  .pdp-prices { display:grid; gap:0.5rem; margin-bottom:1.5rem; }
-  .pdp-price-row { display:flex; align-items:baseline; gap:0.8rem; padding:0.6rem 0.9rem; border:1px solid var(--border); border-radius:10px; background:rgba(255,255,255,.02); }
-  .pdp-cond { font-weight:600; }
-  .pdp-price { margin-left:auto; font-family:var(--font-mono); font-weight:800; font-size:1.2rem; }
-  .pdp-stock { color:var(--green); font-size:0.78rem; font-weight:700; }
-  .pdp-cta { display:flex; flex-wrap:wrap; gap:0.7rem; }
-  .pdp-section { margin-top:2.5rem; max-width:760px; }
-  .pdp-section h2 { font-size:clamp(1.3rem,1.1rem+1vw,1.8rem); margin-bottom:0.8rem; }
-  .pdp-desc { color:var(--muted); text-wrap:pretty; white-space:pre-line; line-height:1.65; }
-  .pdp-video { position:relative; aspect-ratio:16/9; border-radius:var(--radius); overflow:hidden; border:1px solid var(--border); }
+
+  .pdp-refurb { display:inline-block; margin-bottom:0.5rem; padding:0.2rem 0.6rem; font-size:0.76rem; font-weight:800; letter-spacing:0.02em; text-transform:uppercase; color:#06121a; background:var(--cyan); }
+  .pdp-title { font-size:clamp(1.7rem,1.3rem+2vw,2.7rem); margin:0 0 0.6rem; line-height:1.1; text-wrap:balance; }
+
+  .pdp-priceblock { display:flex; align-items:baseline; gap:0.6rem; margin-bottom:1.1rem; flex-wrap:wrap; }
+  .pdp-pricefrom { color:var(--muted-2); font-size:0.85rem; }
+  .pdp-bigprice { font-family:var(--font-mono); font-weight:800; font-size:clamp(2rem,1.6rem+2vw,2.8rem); color:var(--text); line-height:1; }
+  .pdp-instock { color:var(--green); font-size:0.85rem; font-weight:700; }
+
+  .pdp-buybox { display:flex; flex-direction:column; gap:0.6rem; margin-bottom:1.3rem; }
+  .pdp-buy { width:100%; justify-content:center; padding:0.95rem 1.4rem; font-size:1.05rem; font-weight:800; }
+  .pdp-cta { display:flex; flex-wrap:wrap; gap:0.6rem; }
+  .pdp-cta .btn { flex:1 1 9rem; justify-content:center; min-width:0; }
+
+  .pdp-prices { display:grid; gap:0.45rem; margin-bottom:1.3rem; }
+  .pdp-price-row { display:flex; align-items:baseline; gap:0.8rem; padding:0.55rem 0.85rem; border:1px solid var(--border); background:rgba(255,255,255,.02); }
+  .pdp-cond { font-weight:600; font-size:0.9rem; }
+  .pdp-price { margin-left:auto; font-family:var(--font-mono); font-weight:800; }
+  .pdp-stock { color:var(--green); font-size:0.74rem; font-weight:700; }
+
+  .pdp-trust { list-style:none; margin:0; padding:0.9rem 0 0; border-top:1px solid var(--border); display:grid; gap:0.5rem; }
+  .pdp-trust li { display:flex; align-items:center; gap:0.6rem; font-size:0.9rem; color:var(--muted); }
+  .pdp-trust-i { display:grid; place-items:center; width:1.5rem; height:1.5rem; flex:none; font-size:0.85rem; color:var(--cyan); background:rgba(44,230,224,.12); }
+
+  .pdp-section { margin-top:2.5rem; max-width:820px; }
+  .pdp-section h2 { font-size:clamp(1.25rem,1.1rem+0.8vw,1.7rem); margin-bottom:0.8rem; }
+  .pdp-about .pdp-desc { color:var(--muted); text-wrap:pretty; white-space:pre-line; line-height:1.65; margin:0; }
+  .pdp-about:not(.expanded) .pdp-desc { display:-webkit-box; -webkit-line-clamp:6; -webkit-box-orient:vertical; overflow:hidden; }
+  .pdp-readmore { margin-top:0.6rem; padding:0.35rem 0; font:inherit; font-weight:700; font-size:0.9rem; color:var(--cyan); background:none; border:none; cursor:pointer; }
+  .pdp-readmore:hover { text-decoration:underline; }
+
+  /* LaunchBox-style details panel */
+  .pdp-dl { margin:0; display:grid; grid-template-columns:1fr; gap:0; border:1px solid var(--border); }
+  @media (min-width:560px) { .pdp-dl { grid-template-columns:1fr 1fr; } }
+  .pdp-drow { display:flex; justify-content:space-between; gap:1rem; padding:0.6rem 0.9rem; border-bottom:1px solid var(--border); }
+  .pdp-drow:last-child, .pdp-drow:nth-last-child(2):nth-child(odd) { border-bottom:none; }
+  .pdp-drow dt { color:var(--muted-2); font-size:0.78rem; text-transform:uppercase; letter-spacing:0.04em; }
+  .pdp-drow dd { margin:0; font-weight:600; font-size:0.9rem; text-align:right; }
+  .pdp-drow dd.mono { font-family:var(--font-mono); font-weight:700; }
+  .pdp-drow dd a { color:var(--cyan); }
+
+  .pdp-video { position:relative; aspect-ratio:16/9; overflow:hidden; border:1px solid var(--border); }
   .pdp-video iframe { position:absolute; inset:0; width:100%; height:100%; border:0; }
   .narrow { max-width:680px; margin-inline:auto; }
 </style>
