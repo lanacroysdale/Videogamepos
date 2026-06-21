@@ -95,7 +95,7 @@ Stored as two axes **always** (clean data/filters); **presented** combined (one 
 | **Condition-based pricing engine** | ✅ | Settings-gated (`condition_pricing_enabled`) + multipliers (rules-as-data); `reprice_product()` RPC; wired into the edit modal's ↻ button |
 | **Smart find-or-create entry** | ✅ | Shared `src/lib/smartSearch.ts` parser used by BOTH inventory (find-or-create) and trade-in (typeahead + catalog-suggested resale). Alias/fuzzy, structured-config-driven |
 | **Image upload + auto-enrichment** | 🔜 | Supabase Storage; IGDB cover/description/trailer + alt-names |
-| **Product detail page + SEO** | 🔜 | `/shop/[slug]` SSR + indexable, JSON-LD, trailer; "View on website" links here |
+| **Product detail page + SEO** | ✅ | `/shop/[slug]` SSR + indexable, Product JSON-LD, auto description + YouTube trailer, condition/price, reserve CTA. Hub + POS "View on website" link here. Gated behind login pre-launch (SEO activates when the /shop gate is removed at launch) |
 | **Filters & collections** | 🔜 | Saved filters over metadata (Factory Sealed, No Manual, New Arrivals) |
 | Online accounts + unified history | 🔜 P2 | `auth_user_id`, `/account`, own-row RLS |
 | Online checkout | 🔜 P3 | Cart, Stripe, atomic order RPC, holds, fulfillment |

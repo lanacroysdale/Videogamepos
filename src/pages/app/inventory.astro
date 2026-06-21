@@ -13,13 +13,14 @@ const [{ data: categories }, { data: settings }, { data: completeness }, { data:
 const { data: products } = await supabase
   .from("products")
   .select(
-    "id, title, platform, franchise, genre, description, image_url, alternative_names, category_id, category:categories(name,color), product_variants(id, condition, completeness, completeness_code, grade_code, sku, barcode, price_cents, online_price_cents, cost_cents, quantity, online_visible, product_barcodes(id, barcode, label))",
+    "id, title, slug, platform, franchise, genre, description, image_url, alternative_names, category_id, category:categories(name,color), product_variants(id, condition, completeness, completeness_code, grade_code, sku, barcode, price_cents, online_price_cents, cost_cents, quantity, online_visible, product_barcodes(id, barcode, label))",
   )
   .order("title");
 
 const items = (products ?? []).map((p: any) => ({
   id: p.id,
   title: p.title,
+  slug: p.slug ?? "",
   platform: p.platform ?? "",
   franchise: p.franchise ?? "",
   genre: p.genre ?? "",
@@ -328,7 +329,7 @@ const posData = {
     const tags = [p.platform, p.genre, p.franchise].filter(Boolean).map((t: string) => `<span class="inv-tag">${esc(t)}</span>`).join("");
     const skus = p.variants.map((v: any) => v.sku).filter(Boolean);
     const webBtn = anyWeb(p)
-      ? `<a class="btn btn-ghost btn-sm icon-btn" href="/shop" target="_blank" rel="noopener">↗ Web</a>`
+      ? `<a class="btn btn-ghost btn-sm icon-btn" href="${p.slug ? `/shop/${p.slug}` : "/shop"}" target="_blank" rel="noopener">↗ Web</a>`
       : "";
     return `
       <div class="inv-card" data-p="${p.id}">
@@ -422,7 +423,7 @@ const posData = {
       </div>`;
 
     const link = $("m-weblink") as HTMLAnchorElement;
-    if (anyWeb(p)) { link.href = "/shop"; link.hidden = false; } else { link.hidden = true; }
+    if (anyWeb(p)) { link.href = p.slug ? `/shop/${p.slug}` : "/shop"; link.hidden = false; } else { link.hidden = true; }
 
     bindBarcodes(p);
     bindReprice(p);
@@ -619,7 +620,7 @@ const posData = {
     try {
       const j = await api(body);
       const cat = categories.find((c: any) => c.id === body.categoryId);
-      items.push({ id: j.productId, title: body.title, platform: body.platform, franchise: "", genre: "", description: "", imageUrl: "", altNames: [], categoryId: body.categoryId, categoryName: cat?.name ?? "", categoryColor: cat?.color ?? "#2ce6e0",
+      items.push({ id: j.productId, title: body.title, slug: body.title.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""), platform: body.platform, franchise: "", genre: "", description: "", imageUrl: "", altNames: [], categoryId: body.categoryId, categoryName: cat?.name ?? "", categoryColor: cat?.color ?? "#2ce6e0",
         variants: [{ id: j.variantId, condition, completeness: null, completenessCode: comp, gradeCode: grade, sku: null, priceCents: body.priceCents, onlinePriceCents: null, costCents: null, quantity: body.quantity, onlineVisible: false, barcodes: body.barcode ? [{ id: "primary:" + j.variantId, barcode: body.barcode, label: "Primary", primary: true }] : [] }] });
       ($("add-panel") as HTMLElement).hidden = true;
       ($("np-title") as HTMLInputElement).value = "";

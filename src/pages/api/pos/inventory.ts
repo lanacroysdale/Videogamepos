@@ -60,9 +60,10 @@ export const POST: APIRoute = async ({ locals, request }) => {
     }
     case "addProduct": {
       if (!String(b.title ?? "").trim() || !b.categoryId) return json({ error: "Title and category required" }, 400);
+      const slug = String(b.title).trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
       const { data: prod, error: pErr } = await sb
         .from("products")
-        .insert({ title: String(b.title).trim(), platform: b.platform || null, franchise: b.franchise || null, category_id: b.categoryId })
+        .insert({ title: String(b.title).trim(), platform: b.platform || null, franchise: b.franchise || null, category_id: b.categoryId, slug })
         .select()
         .single();
       if (pErr) return json({ error: pErr.message }, 500);

@@ -14,7 +14,7 @@ const admin = createSupabaseAdminClient();
 const { data: rows, error } = await admin
   .from("product_variants")
   .select(
-    "id, condition, completeness, price_cents, online_price_cents, quantity, product:products(id, title, platform, franchise, image_url, description)",
+    "id, condition, completeness, price_cents, online_price_cents, quantity, product:products(id, title, slug, platform, franchise, image_url, description)",
   )
   .eq("online_visible", true)
   .gt("quantity", 0)
@@ -23,6 +23,7 @@ const { data: rows, error } = await admin
 const listings = (rows ?? []).map((v: any) => ({
   id: v.id,
   title: v.product?.title ?? "Untitled",
+  slug: v.product?.slug ?? "",
   platform: v.product?.platform ?? "",
   franchise: v.product?.franchise ?? "",
   image: v.product?.image_url ?? null,
@@ -64,7 +65,7 @@ const listings = (rows ?? []).map((v: any) => ({
       {listings.length > 0 && (
         <div class="shop-grid">
           {listings.map((item) => (
-            <article class="shop-card">
+            <a class="shop-card" href={item.slug ? "/shop/" + item.slug : "#"}>
               <div class="shop-thumb">
                 {item.image ? (
                   <img src={item.image} alt={item.title} loading="lazy" />
@@ -82,7 +83,7 @@ const listings = (rows ?? []).map((v: any) => ({
                   <span class="shop-stock">In stock</span>
                 </div>
               </div>
-            </article>
+            </a>
           ))}
         </div>
       )}
@@ -117,6 +118,7 @@ const listings = (rows ?? []).map((v: any) => ({
     display: flex; flex-direction: column; overflow: hidden;
     background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
     transition: transform 0.15s ease, border-color 0.15s ease;
+    text-decoration: none; color: inherit;
   }
   .shop-card:hover { transform: translateY(-3px); border-color: var(--cyan); }
   .shop-thumb {
