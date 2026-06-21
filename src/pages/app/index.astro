@@ -101,7 +101,7 @@ const firstName = (profile?.full_name ?? "there").split(" ")[0];
         {(!openTx || openTx.length === 0) && <p class="empty">No suspended orders. Nice and tidy.</p>}
         {openTx && openTx.length > 0 && (
           <table class="tbl">
-            <thead><tr><th>#</th><th>Customer</th><th>Items</th><th class="num">Total</th></tr></thead>
+            <thead><tr><th>#</th><th>Customer</th><th>Items</th><th class="num">Total</th><th></th></tr></thead>
             <tbody>
               {openTx.map((t: any) => (
                 <tr>
@@ -110,6 +110,7 @@ const firstName = (profile?.full_name ?? "there").split(" ")[0];
                     {t.type === "trade_in" && <span class="pill cyan">trade-in</span>}</td>
                   <td>{t.transaction_items?.length ?? 0}</td>
                   <td class="num">{fmt(t.total_cents)}</td>
+                  <td class="num"><a href={`/app/checkout?resume=${t.id}`} class="link">Resume →</a></td>
                 </tr>
               ))}
             </tbody>

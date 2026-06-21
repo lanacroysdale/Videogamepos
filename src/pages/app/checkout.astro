@@ -272,6 +272,7 @@ const posData = { catalog, categories: categories ?? [], customer };
 
   // ---------- Held sales (hold / resume) ----------
   let heldId: string | null = null;
+  let heldCache: any[] = []; // last-loaded held sales (for ?resume= deep links)
 
   const timeAgo = (iso: string) => {
     const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
@@ -286,6 +287,7 @@ const posData = { catalog, categories: categories ?? [], customer };
     try {
       const j = await (await fetch("/api/pos/checkout")).json();
       const all: any[] = j.held || [];
+      heldCache = all;
       const held = all.filter((h) => h.id !== heldId); // hide the one being worked on
       $("held-list").innerHTML = held.map((h) => {
         const n = (h.transaction_items || []).reduce((s: number, it: any) => s + (it.qty || 1), 0);
@@ -388,5 +390,12 @@ const posData = { catalog, categories: categories ?? [], customer };
   // initial paint
   renderProducts();
   renderCart();
-  loadHeld();
+  loadHeld().then(() => {
+    // Deep link from the dashboard "Resume →" link auto-resumes that held sale.
+    const rp = new URLSearchParams(location.search).get("resume");
+    if (rp) {
+      const h = heldCache.find((x) => x.id === rp);
+      if (h) { resumeHeld(h); history.replaceState(null, "", location.pathname); }
+    }
+  });
 </script>
