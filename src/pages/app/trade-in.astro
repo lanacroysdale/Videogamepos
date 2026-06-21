@@ -5,8 +5,16 @@ import AppLayout from "../../layouts/AppLayout.astro";
 import { fmt, fullName } from "../../lib/money";
 
 const supabase = Astro.locals.supabase;
-const { data: margins } = await supabase.from("trade_margins").select("*").order("sort_order");
-const { data: categories } = await supabase.from("categories").select("id,name").order("sort_order");
+const [{ data: margins }, { data: categories }, { data: completeness }, { data: grades }, { data: products }] = await Promise.all([
+  supabase.from("trade_margins").select("*").order("sort_order"),
+  supabase.from("categories").select("id,name").order("sort_order"),
+  supabase.from("completeness_levels").select("code,label,aliases").eq("is_active", true).order("sort_order"),
+  supabase.from("condition_grades").select("code,label,aliases,icon").eq("is_active", true).order("rank"),
+  supabase
+    .from("products")
+    .select("id, title, platform, franchise, alternative_names, category_id, product_variants(price_cents, completeness_code, grade_code)")
+    .order("title"),
+]);
 
 const customerId = Astro.url.searchParams.get("customer");
 let customer = null;
@@ -15,7 +23,30 @@ if (customerId) {
   customer = data;
 }
 
-const posData = { margins: margins ?? [], categories: categories ?? [], customer };
+// Flat catalog the smart entry matches against (title/platform/aliases + the
+// variant prices that suggest a resale value per condition).
+const catalog = (products ?? []).map((p: any) => ({
+  id: p.id,
+  title: p.title,
+  platform: p.platform ?? "",
+  franchise: p.franchise ?? "",
+  altNames: p.alternative_names ?? [],
+  categoryId: p.category_id,
+  variants: (p.product_variants ?? []).map((v: any) => ({
+    priceCents: v.price_cents,
+    completenessCode: v.completeness_code ?? "",
+    gradeCode: v.grade_code ?? "",
+  })),
+}));
+
+const posData = {
+  margins: margins ?? [],
+  categories: categories ?? [],
+  completeness: completeness ?? [],
+  grades: grades ?? [],
+  catalog,
+  customer,
+};
 ---
 
 <AppLayout title="Trade-In / Buy" active="tradein">
@@ -87,15 +118,50 @@ const posData = { margins: margins ?? [], categories: categories ?? [], customer
   #ti-table input, #ti-table select { padding:0.4rem 0.5rem; }
 </style>
 
+<style is:global>
+  #ti-table input, #ti-table select { padding:0.4rem 0.5rem; }
+  .ti-desc-cell { position:relative; }
+  .ti-desc-cell input { width:100%; }
+  .ti-links a { font-size:0.78rem; margin-right:0.5rem; white-space:nowrap; }
+  .ti-suggest { position:absolute; left:0; right:0; top:100%; z-index:30; background:var(--panel, #14101d); border:1px solid var(--border-strong); border-radius:8px; margin-top:2px; max-height:240px; overflow:auto; box-shadow:0 12px 30px rgba(0,0,0,.5); }
+  .ti-sug { display:flex; align-items:center; gap:0.5rem; padding:0.45rem 0.6rem; cursor:pointer; font-size:0.85rem; border-bottom:1px solid var(--border); }
+  .ti-sug:last-child { border-bottom:0; }
+  .ti-sug:hover { background:rgba(44,230,224,.1); }
+  .ti-sug-title { font-weight:600; }
+  .ti-sug-meta { color:var(--muted-2); font-size:0.78rem; }
+  .ti-sug-price { margin-left:auto; color:var(--green); font-weight:700; font-family:var(--font-mono); }
+</style>
+
 <script>
+  import { buildPlatforms, parseQuery as parseQ, smartMatches } from "../../lib/smartSearch";
+
   type Row = { key: string; description: string; categoryId: string | null; resaleCents: number };
   const data = JSON.parse(document.getElementById("pos-data")!.textContent!);
   const margins: any[] = data.margins;
   const categories: any[] = data.categories;
+  const completeness: any[] = data.completeness || [];
+  const grades: any[] = data.grades || [];
+  const catalog: any[] = data.catalog || [];
   const customer: any = data.customer;
   const $ = (id: string) => document.getElementById(id)!;
   const money = (c: number) => (c / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
   const esc = (s: string) => String(s).replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m] as string));
+
+  // Smart entry (shared with the inventory screen).
+  const PLATFORMS = buildPlatforms(catalog.map((p) => p.platform));
+  const parseQuery = (raw: string) => parseQ(raw, { completeness, grades, platforms: PLATFORMS });
+  const complLabel = (code: string) => completeness.find((c) => c.code === code)?.label || code;
+  const gradeLabel = (code: string) => { const g = grades.find((x) => x.code === code); return g ? (g.icon ? g.icon + " " : "") + g.label : code; };
+  // Suggested resale = what we'd sell that exact condition for (falls back to top variant).
+  function suggestResale(p: any, parsed: any): number | null {
+    if (!p.variants.length) return null;
+    if (parsed.completenessCode) {
+      const v = p.variants.find((x: any) => x.completenessCode === parsed.completenessCode && (!parsed.gradeCode || x.gradeCode === parsed.gradeCode))
+        || p.variants.find((x: any) => x.completenessCode === parsed.completenessCode);
+      if (v) return v.priceCents;
+    }
+    return Math.max(...p.variants.map((x: any) => x.priceCents));
+  }
 
   let rows: Row[] = [];
 
@@ -126,12 +192,46 @@ const posData = { margins: margins ?? [], categories: categories ?? [], customer
     return base;
   }
 
+  // Typeahead: as the employee types, suggest catalog matches + a resale value.
+  function showSuggest(tr: HTMLElement, r: Row) {
+    const inp = tr.querySelector<HTMLInputElement>("[data-desc]")!;
+    const box = tr.querySelector<HTMLElement>("[data-suggest]")!;
+    const q = inp.value.trim();
+    if (q.length < 2) { box.hidden = true; return; }
+    const parsed = parseQuery(q);
+    const matches = smartMatches(catalog, parsed).slice(0, 6);
+    if (!matches.length) { box.hidden = true; return; }
+    const cond = parsed.completenessCode ? " · " + complLabel(parsed.completenessCode) : "";
+    box.innerHTML = matches.map((m: any, i: number) => {
+      const sug = suggestResale(m.p, parsed);
+      return `<div class="ti-sug" data-i="${i}">
+        <span class="ti-sug-title">${esc(m.p.title)}</span>
+        <span class="ti-sug-meta">${esc(m.p.platform || "")}${cond}</span>
+        ${sug != null ? `<span class="ti-sug-price">${money(sug)}</span>` : ""}
+      </div>`;
+    }).join("");
+    box.hidden = false;
+    box.querySelectorAll<HTMLElement>("[data-i]").forEach((el) => el.addEventListener("mousedown", (e) => {
+      e.preventDefault(); // pick before the input blurs
+      pickSuggestion(r, matches[+el.dataset.i!].p, parsed);
+      box.hidden = true;
+      render();
+    }));
+  }
+  function pickSuggestion(r: Row, p: any, parsed: any) {
+    const cond = [complLabel(parsed.completenessCode), gradeLabel(parsed.gradeCode)].filter(Boolean).join(" · ");
+    r.description = p.title + (p.platform ? ` (${p.platform})` : "") + (cond ? ` — ${cond}` : "");
+    r.categoryId = p.categoryId || r.categoryId;
+    const sug = suggestResale(p, parsed);
+    if (sug != null) r.resaleCents = sug;
+  }
+
   function render() {
     if (rows.length === 0) addRow();
     const offers = computeOffers();
     $("ti-body").innerHTML = rows.map((r, idx) => `
       <tr data-key="${r.key}">
-        <td><input data-desc value="${esc(r.description)}" placeholder="e.g. Super Mario 64 (N64)" style="width:100%"></td>
+        <td class="ti-desc-cell"><input data-desc autocomplete="off" value="${esc(r.description)}" placeholder="Type to find — e.g. zelda botw switch cib"><div class="ti-suggest" data-suggest hidden></div></td>
         <td><select data-cat>
           <option value="">—</option>
           ${categories.map((c) => `<option value="${c.id}" ${r.categoryId === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}
@@ -145,8 +245,10 @@ const posData = { margins: margins ?? [], categories: categories ?? [], customer
 
     $("ti-body").querySelectorAll<HTMLElement>("tr").forEach((tr) => {
       const r = rows.find((x) => x.key === tr.dataset.key)!;
-      tr.querySelector<HTMLInputElement>("[data-desc]")!.addEventListener("input", (e) => { r.description = (e.target as HTMLInputElement).value; });
-      tr.querySelector<HTMLInputElement>("[data-desc]")!.addEventListener("change", render);
+      const descInp = tr.querySelector<HTMLInputElement>("[data-desc]")!;
+      descInp.addEventListener("input", (e) => { r.description = (e.target as HTMLInputElement).value; showSuggest(tr, r); });
+      descInp.addEventListener("blur", () => setTimeout(() => { const b = tr.querySelector<HTMLElement>("[data-suggest]"); if (b) b.hidden = true; }, 150));
+      descInp.addEventListener("change", render);
       tr.querySelector<HTMLSelectElement>("[data-cat]")!.addEventListener("change", (e) => { r.categoryId = (e.target as HTMLSelectElement).value || null; });
       tr.querySelector<HTMLInputElement>("[data-resale]")!.addEventListener("input", (e) => { r.resaleCents = Math.max(0, Math.round(parseFloat((e.target as HTMLInputElement).value) * 100) || 0); recalc(); });
       tr.querySelector("[data-remove]")!.addEventListener("click", () => { rows = rows.filter((x) => x.key !== r.key); render(); });

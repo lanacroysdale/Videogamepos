@@ -4,10 +4,17 @@ export const prerender = false;
 import AppLayout from "../../layouts/AppLayout.astro";
 
 const supabase = Astro.locals.supabase;
-const { data: categories } = await supabase.from("categories").select("id, name").order("sort_order");
+const [{ data: categories }, { data: settings }, { data: completeness }, { data: grades }] = await Promise.all([
+  supabase.from("categories").select("id, name, color, default_completeness").order("sort_order"),
+  supabase.from("store_settings").select("condition_pricing_enabled, condition_entry_mode").eq("id", 1).maybeSingle(),
+  supabase.from("completeness_levels").select("code, label, aliases, sort_order").eq("is_active", true).order("sort_order"),
+  supabase.from("condition_grades").select("code, label, icon, aliases, rank").eq("is_active", true).order("rank"),
+]);
 const { data: products } = await supabase
   .from("products")
-  .select("id, title, platform, franchise, category_id, category:categories(name,color), product_variants(id, condition, completeness, sku, barcode, price_cents, quantity, product_barcodes(id, barcode, label))")
+  .select(
+    "id, title, platform, franchise, genre, description, image_url, alternative_names, category_id, category:categories(name,color), product_variants(id, condition, completeness, completeness_code, grade_code, sku, barcode, price_cents, online_price_cents, cost_cents, quantity, online_visible, product_barcodes(id, barcode, label))",
+  )
   .order("title");
 
 const items = (products ?? []).map((p: any) => ({
@@ -15,6 +22,10 @@ const items = (products ?? []).map((p: any) => ({
   title: p.title,
   platform: p.platform ?? "",
   franchise: p.franchise ?? "",
+  genre: p.genre ?? "",
+  description: p.description ?? "",
+  imageUrl: p.image_url ?? "",
+  altNames: p.alternative_names ?? [],
   categoryId: p.category_id,
   categoryName: p.category?.name ?? "",
   categoryColor: p.category?.color ?? "#2ce6e0",
@@ -22,16 +33,27 @@ const items = (products ?? []).map((p: any) => ({
     id: v.id,
     condition: v.condition,
     completeness: v.completeness,
+    completenessCode: v.completeness_code ?? "",
+    gradeCode: v.grade_code ?? "",
     sku: v.sku,
     priceCents: v.price_cents,
+    onlinePriceCents: v.online_price_cents,
+    costCents: v.cost_cents,
     quantity: v.quantity,
+    onlineVisible: v.online_visible ?? false,
     barcodes: [
       ...(v.barcode ? [{ id: "primary:" + v.id, barcode: v.barcode, label: "Primary", primary: true }] : []),
       ...(v.product_barcodes ?? []).map((b: any) => ({ id: b.id, barcode: b.barcode, label: b.label, primary: false })),
     ],
   })),
 }));
-const posData = { items, categories: categories ?? [] };
+const posData = {
+  items,
+  categories: categories ?? [],
+  completeness: completeness ?? [],
+  grades: grades ?? [],
+  conditionPricing: settings?.condition_pricing_enabled ?? false,
+};
 ---
 
 <AppLayout title="Inventory" active="inventory">
@@ -43,7 +65,8 @@ const posData = { items, categories: categories ?? [] };
       <label>Title<input id="np-title" placeholder="e.g. Donkey Kong 64" /></label>
       <label>Platform<input id="np-platform" placeholder="Nintendo 64" /></label>
       <label>Category<select id="np-cat">{categories?.map((c) => <option value={c.id}>{c.name}</option>)}</select></label>
-      <label>Condition<input id="np-cond" value="Complete" /></label>
+      <label>Completeness<select id="np-comp"><option value="">—</option>{completeness?.map((c) => <option value={c.code}>{c.label}</option>)}</select></label>
+      <label>Grade<select id="np-grade"><option value="">—</option>{grades?.map((g) => <option value={g.code}>{g.label}</option>)}</select></label>
       <label>Price $<input id="np-price" type="number" min="0" step="0.01" value="0" /></label>
       <label>Qty<input id="np-qty" type="number" min="0" value="1" /></label>
       <label>Barcode (optional)<input id="np-barcode" /></label>
@@ -51,11 +74,11 @@ const posData = { items, categories: categories ?? [] };
     <button id="np-save" class="btn btn-primary btn-sm" style="margin-top:0.7rem;">Save product</button>
   </div>
 
-  <div class="pos-panel">
+  <div class="pos-panel inv-shell">
     <div class="inv-toolbar">
-      <div class="search" style="flex:1;min-width:220px;">
+      <div class="search">
         <span class="mag" aria-hidden="true">🔎</span>
-        <input id="inv-search" type="search" placeholder="Search title, platform, SKU, or barcode…" autocomplete="off" />
+        <input id="inv-search" type="search" placeholder="Search or add — e.g. zelda botw switch cib good" autocomplete="off" />
       </div>
       <select id="inv-cat"><option value="">All categories</option>{categories?.map((c) => <option value={c.id}>{c.name}</option>)}</select>
       <select id="inv-sort">
@@ -63,40 +86,203 @@ const posData = { items, categories: categories ?? [] };
         <option value="price">Sort: Price</option>
         <option value="qty">Sort: Quantity</option>
       </select>
-      <label class="chk"><input id="inv-instock" type="checkbox" checked /> In-stock first</label>
+      <button class="chip filt" data-filt="instock">In stock</button>
+      <button class="chip filt" data-filt="web">On web</button>
     </div>
-    <div id="inv-list" style="margin-top:0.8rem;"></div>
+    <div id="smart-bar" class="smart-bar" hidden></div>
+    <p class="inv-count" id="inv-count"></p>
+    <div id="inv-list" class="inv-list"></div>
   </div>
+
+  <div id="edit-modal" class="modal-wrap" hidden>
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="m-heading">
+      <header class="modal-head">
+        <h2 id="m-heading">Edit product</h2>
+        <button class="modal-x" data-close aria-label="Close">✕</button>
+      </header>
+      <div class="modal-body" id="modal-body"></div>
+      <footer class="modal-foot">
+        <a id="m-weblink" class="weblink" target="_blank" rel="noopener" hidden>↗ View on website</a>
+        <div class="foot-actions">
+          <button class="btn btn-ghost btn-sm" data-close>Cancel</button>
+          <button id="m-save" class="btn btn-primary btn-sm">Save changes</button>
+        </div>
+      </footer>
+    </div>
+  </div>
+
+  <div id="toast" class="inv-toast" hidden></div>
 
   <script type="application/json" id="pos-data" set:html={JSON.stringify(posData)}></script>
 </AppLayout>
 
-<style>
+<style is:global>
+  .inv-shell { display:flex; flex-direction:column; }
   .inv-toolbar { display:flex; flex-wrap:wrap; gap:0.6rem; align-items:center; }
-  .chk { display:flex; align-items:center; gap:0.4rem; font-size:0.9rem; color:var(--muted); white-space:nowrap; }
+  .inv-toolbar .search { flex:1; min-width:200px; }
+  .inv-toolbar select { min-width:140px; }
+  .chip.filt { cursor:pointer; }
+  .chip.filt.active { border-color:var(--cyan); color:var(--cyan); }
+  .inv-count { color:var(--muted-2); font-size:0.82rem; margin:0.7rem 0 0.3rem; }
+  .smart-bar { display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; margin-top:0.7rem; padding:0.5rem 0.8rem; background:rgba(44,230,224,.07); border:1px solid rgba(44,230,224,.28); border-radius:10px; font-size:0.86rem; }
+  .smart-bar .sb-label { color:var(--muted-2); font-size:0.68rem; text-transform:uppercase; letter-spacing:0.06em; }
+  .smart-bar .sb-chip { background:rgba(255,255,255,.08); padding:0.1rem 0.55rem; border-radius:999px; font-size:0.78rem; }
+  .smart-bar .sb-count { color:var(--muted-2); font-size:0.78rem; margin-left:auto; }
+  .smart-bar strong { font-family:var(--font-display); }
+  .smart-bar .btn { padding:0.25rem 0.7rem; }
+
+  /* ---- Rich product cards ---- */
+  .inv-list { display:grid; gap:0.7rem; }
+  .inv-card {
+    display:grid; grid-template-columns:auto 1fr auto; gap:0.9rem; align-items:start;
+    border:1px solid var(--border); border-radius:14px; padding:0.85rem 1rem;
+    background:linear-gradient(180deg, rgba(255,255,255,.025), rgba(255,255,255,0));
+    transition:border-color .15s ease, transform .15s ease;
+  }
+  .inv-card:hover { border-color:var(--border-strong); }
+  .inv-cover {
+    width:62px; height:62px; flex:none; border-radius:10px; overflow:hidden;
+    display:grid; place-items:center; background:rgba(0,0,0,.28); font-size:1.7rem;
+    border:1px solid var(--border);
+  }
+  .inv-cover img { width:100%; height:100%; object-fit:cover; }
+  .inv-main { min-width:0; }
+  .inv-titlerow { display:flex; align-items:center; gap:0.55rem; flex-wrap:wrap; }
+  .inv-title { font-family:var(--font-display); font-weight:600; font-size:1.08rem; line-height:1.2; }
+  .inv-catpill { font-size:0.72rem; font-weight:700; padding:0.1rem 0.55rem; border-radius:999px; }
+  .inv-tags { display:flex; flex-wrap:wrap; gap:0.35rem; margin:0.35rem 0; }
+  .inv-tag { font-size:0.72rem; padding:0.1rem 0.5rem; border-radius:999px; background:rgba(255,255,255,.06); color:var(--muted); }
+  .inv-sku { font-family:var(--font-mono); font-size:0.74rem; color:var(--muted-2); }
+  .inv-variants { display:flex; flex-wrap:wrap; gap:0.4rem; margin-top:0.5rem; }
+  .vchip {
+    display:inline-flex; align-items:center; gap:0.45rem; font-size:0.78rem;
+    padding:0.25rem 0.6rem; border-radius:8px; background:rgba(44,230,224,.08);
+    border:1px solid rgba(44,230,224,.22); color:var(--text);
+  }
+  .vchip.oos { background:rgba(255,255,255,.04); border-color:var(--border); color:var(--muted); }
+  .vchip .cond { font-weight:700; font-family:var(--font-mono); }
+  .vchip .web { color:var(--green); font-size:0.82rem; }
+  .vchip .nweb { color:var(--muted-2); }
+  .inv-actions { display:flex; flex-direction:column; gap:0.4rem; align-items:stretch; }
+  .inv-actions .tot { font-size:0.74rem; color:var(--muted-2); text-align:right; }
+  .icon-btn { display:inline-flex; align-items:center; justify-content:center; gap:0.35rem; white-space:nowrap; }
+
+  @media (max-width:720px) {
+    .inv-card { grid-template-columns:auto 1fr; }
+    .inv-actions { grid-column:1 / -1; flex-direction:row; flex-wrap:wrap; }
+    .inv-actions .tot { width:100%; text-align:left; order:-1; }
+    .inv-actions .icon-btn { flex:1; }
+    .inv-toolbar select { flex:1; }
+  }
+
+  /* ---- Edit modal ---- */
+  .modal-wrap { position:fixed; inset:0; z-index:80; display:grid; place-items:center; padding:1rem; }
+  .modal-wrap[hidden] { display:none; }
+  .modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,.6); backdrop-filter:blur(2px); }
+  .modal-card {
+    position:relative; width:min(740px, 100%); max-height:92vh; display:flex; flex-direction:column;
+    background:var(--panel, #14101d); border:1px solid var(--border-strong); border-radius:16px; overflow:hidden;
+    box-shadow:0 24px 60px rgba(0,0,0,.5);
+  }
+  .modal-head { display:flex; align-items:center; justify-content:space-between; padding:0.9rem 1.1rem; border-bottom:1px solid var(--border); }
+  .modal-head h2 { font-size:1.15rem; margin:0; }
+  .modal-x { background:none; border:none; color:var(--muted); font-size:1.1rem; cursor:pointer; padding:0.2rem 0.4rem; }
+  .modal-x:hover { color:var(--text); }
+  .modal-body { padding:1rem 1.1rem; overflow:auto; display:flex; flex-direction:column; gap:1.2rem; }
+  .modal-foot { display:flex; align-items:center; justify-content:space-between; gap:0.8rem; padding:0.8rem 1.1rem; border-top:1px solid var(--border); }
+  .modal-foot .foot-actions { display:flex; gap:0.5rem; margin-left:auto; }
+  .weblink { color:var(--cyan); font-size:0.85rem; font-weight:600; text-decoration:none; }
+  .weblink:hover { text-decoration:underline; }
+
+  .m-section > .m-label { font-size:0.72rem; letter-spacing:0.05em; text-transform:uppercase; color:var(--muted-2); margin-bottom:0.5rem; }
+  .m-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:0.6rem; }
+  .m-grid label, .m-field label { display:grid; gap:0.25rem; font-size:0.82rem; font-weight:600; color:var(--muted); }
+  .m-field { margin-top:0.6rem; }
+  .modal-card input, .modal-card select, .modal-card textarea { padding:0.45rem 0.6rem; width:100%; }
+
+  .cond-table { width:100%; border-collapse:collapse; font-size:0.82rem; }
+  .cond-table th { text-align:left; color:var(--muted-2); font-weight:600; font-size:0.72rem; padding:0 0.4rem 0.4rem; white-space:nowrap; }
+  .cond-table td { padding:0.3rem 0.4rem; border-top:1px solid var(--border); vertical-align:middle; }
+  .cond-table input { padding:0.35rem 0.45rem; }
+  .cond-table .c-cond { width:7rem; }
+  .cond-table .c-num input { text-align:right; }
+  .cond-table .c-web { text-align:center; }
+  .cond-table .c-web input { width:auto; }
+  .cond-table select { padding:0.35rem 0.4rem; width:100%; }
+  .price-cell { display:flex; gap:4px; align-items:center; }
+  .reprice-btn { flex:none; width:26px; height:30px; border:none; border-radius:6px; background:var(--cyan); color:#06232b; font-size:0.95rem; cursor:pointer; line-height:1; }
+  .reprice-btn:hover { filter:brightness(1.12); }
+  .cp-on { font-size:0.68rem; color:var(--cyan); font-weight:800; }
+  .web-hint { font-size:0.74rem; color:var(--muted-2); margin-top:0.4rem; }
+
+  .bc-block { border:1px solid var(--border); border-radius:10px; padding:0.5rem 0.7rem; margin-bottom:0.5rem; }
+  .bc-block .bc-head { font-size:0.78rem; font-weight:700; font-family:var(--font-mono); color:var(--muted); margin-bottom:0.35rem; }
+  .bc-chip { display:inline-flex; align-items:center; gap:0.4rem; padding:0.2rem 0.55rem; margin:0.15rem 0.3rem 0.15rem 0; border:1px solid var(--border-strong); border-radius:999px; font-size:0.76rem; font-family:var(--font-mono); }
+  .bc-chip button { background:none; border:none; color:var(--magenta); cursor:pointer; padding:0; }
+  .bc-add { display:flex; gap:0.35rem; flex-wrap:wrap; margin-top:0.3rem; }
+  .bc-add input { width:9rem; padding:0.3rem 0.45rem; }
+
+  .inv-toast { position:fixed; bottom:1.2rem; left:50%; transform:translateX(-50%); z-index:90; background:var(--green); color:#062a12; font-weight:700; padding:0.55rem 1.1rem; border-radius:999px; box-shadow:0 8px 24px rgba(0,0,0,.4); font-size:0.88rem; }
+
   .add-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:0.7rem; }
   .add-grid label { display:grid; gap:0.3rem; font-size:0.85rem; font-weight:600; }
-  .prod-block { border:1px solid var(--border); border-radius:12px; margin-bottom:0.7rem; overflow:hidden; }
-  .prod-head { display:flex; align-items:center; gap:0.6rem; padding:0.6rem 0.9rem; background:rgba(255,255,255,.03); }
-  .prod-head .dot { width:10px;height:10px;border-radius:3px; }
-  .prod-head .plat { color:var(--muted-2); font-size:0.85rem; }
-  .prod-head .tot { margin-left:auto; font-size:0.8rem; color:var(--muted); }
-  .var-row { display:grid; grid-template-columns:1.4fr 1fr 0.9fr 0.8fr auto; gap:0.6rem; align-items:center; padding:0.5rem 0.9rem; border-top:1px solid var(--border); font-size:0.9rem; }
-  .var-row input { padding:0.35rem 0.5rem; width:100%; }
-  .var-row .saved { color:var(--green); font-size:0.75rem; }
-  .bc-panel { padding:0.6rem 0.9rem 0.9rem; border-top:1px dashed var(--border); background:rgba(0,0,0,.15); }
-  .bc-chip { display:inline-flex; align-items:center; gap:0.4rem; padding:0.25rem 0.6rem; margin:0.2rem 0.3rem 0.2rem 0; border:1px solid var(--border-strong); border-radius:999px; font-size:0.8rem; font-family:var(--font-mono); }
-  .bc-chip button { background:none;border:none;color:var(--magenta);cursor:pointer; }
-  @media (max-width:720px){ .var-row{ grid-template-columns:1fr 1fr; } }
 </style>
 
 <script>
+  import { buildPlatforms, parseQuery as _parseQuery, smartMatches as _smartMatches, matchScore } from "../../lib/smartSearch";
+
   const data = JSON.parse(document.getElementById("pos-data")!.textContent!);
   let items: any[] = data.items;
+  const categories: any[] = data.categories;
+  const completeness: any[] = data.completeness || [];
+  const grades: any[] = data.grades || [];
+  const conditionPricing: boolean = !!data.conditionPricing;
   const $ = (id: string) => document.getElementById(id)!;
+  const esc = (s: any) => String(s ?? "").replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m] as string));
   const money = (c: number) => (c / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
-  const esc = (s: string) => String(s ?? "").replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m] as string));
-  const state = { q: "", cat: "", sort: "title", inStockFirst: true };
+  const toCents = (v: string) => Math.max(0, Math.round(parseFloat(v) * 100) || 0);
+  const state = { q: "", cat: "", sort: "title", instock: false, web: false, parsed: null as any };
+
+  /* ---------- Smart find-or-create (shared module: src/lib/smartSearch.ts) ---------- */
+  const PLATFORMS = buildPlatforms(items.map((p) => p.platform));
+  const parseQuery = (raw: string) => _parseQuery(raw, { completeness, grades, platforms: PLATFORMS });
+  const smartMatches = (parsed: any) => _smartMatches(items, parsed);
+  const complLabel = (code: string) => completeness.find((c) => c.code === code)?.label || code;
+  const gradeLabel = (code: string) => { const g = grades.find((x) => x.code === code); return g ? (g.icon ? g.icon + " " : "") + g.label : code; };
+
+  function renderSmart() {
+    const bar = $("smart-bar");
+    const parsed = state.parsed;
+    if (!parsed || (!parsed.title && !parsed.platform && !parsed.completenessCode && !parsed.gradeCode)) { bar.hidden = true; return; }
+    const chips: string[] = [];
+    if (parsed.platform) chips.push(`<span class="sb-chip">${esc(parsed.platform)}</span>`);
+    if (parsed.completenessCode) chips.push(`<span class="sb-chip">${esc(complLabel(parsed.completenessCode))}</span>`);
+    if (parsed.gradeCode) chips.push(`<span class="sb-chip">${esc(gradeLabel(parsed.gradeCode))}</span>`);
+    const matches = smartMatches(parsed);
+    const exact = matches.length > 0 && matches[0].s >= 0.99;
+    bar.innerHTML = `
+      <span class="sb-label">Understood</span>
+      ${parsed.title ? `<strong>${esc(parsed.title)}</strong>` : `<em>any title</em>`}
+      ${chips.join("")}
+      <span class="sb-count">${matches.length} match${matches.length === 1 ? "" : "es"}</span>
+      ${parsed.title && !exact ? `<button class="btn btn-primary btn-sm" id="sb-create">＋ Create this</button>` : ""}`;
+    bar.hidden = false;
+    document.getElementById("sb-create")?.addEventListener("click", createFromSmart);
+  }
+
+  function createFromSmart() {
+    const parsed = state.parsed;
+    if (!parsed) return;
+    const panel = $("add-panel") as HTMLElement;
+    panel.hidden = false;
+    ($("np-title") as HTMLInputElement).value = parsed.title.replace(/\b\w/g, (c: string) => c.toUpperCase());
+    ($("np-platform") as HTMLInputElement).value = parsed.platform || "";
+    ($("np-comp") as HTMLSelectElement).value = parsed.completenessCode || "";
+    ($("np-grade") as HTMLSelectElement).value = parsed.gradeCode || "3";
+    panel.scrollIntoView({ behavior: "smooth", block: "center" });
+    ($("np-price") as HTMLInputElement).focus();
+  }
 
   async function api(body: any) {
     const r = await fetch("/api/pos/inventory", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -104,115 +290,327 @@ const posData = { items, categories: categories ?? [] };
     if (!r.ok || !j.ok) throw new Error(j.error || "Failed");
     return j;
   }
+  let toastT: any;
+  function toast(msg: string) {
+    const t = $("toast"); t.textContent = msg; t.hidden = false;
+    clearTimeout(toastT); toastT = setTimeout(() => (t.hidden = true), 2000);
+  }
 
-  function totalQty(p: any) { return p.variants.reduce((s: number, v: any) => s + v.quantity, 0); }
-  function maxPrice(p: any) { return Math.max(0, ...p.variants.map((v: any) => v.priceCents)); }
+  const totalQty = (p: any) => p.variants.reduce((s: number, v: any) => s + v.quantity, 0);
+  const maxPrice = (p: any) => Math.max(0, ...p.variants.map((v: any) => v.priceCents));
+  const anyWeb = (p: any) => p.variants.some((v: any) => v.onlineVisible);
+
+  // Display label for a variant from the structured condition codes (falls back
+  // to the legacy free-text condition).
+  function condLabel(v: any) {
+    const c = completeness.find((x) => x.code === v.completenessCode);
+    const g = grades.find((x) => x.code === v.gradeCode);
+    if (c || g) return [c ? c.label : null, g ? (g.icon || g.label) : null].filter(Boolean).join(" · ");
+    return v.condition || "—";
+  }
+  const compOpts = (sel: string) =>
+    `<option value="">—</option>` + completeness.map((c) => `<option value="${c.code}"${c.code === sel ? " selected" : ""}>${esc(c.label)}</option>`).join("");
+  const gradeOpts = (sel: string) =>
+    `<option value="">—</option>` + grades.map((g) => `<option value="${g.code}"${g.code === sel ? " selected" : ""}>${esc((g.icon ? g.icon + " " : "") + g.label)}</option>`).join("");
+
+  function vchip(v: any) {
+    const cls = v.quantity > 0 ? "" : "oos";
+    const web = v.onlineVisible
+      ? `<span class="web" title="On website">🌐</span>`
+      : `<span class="nweb" title="In store only">·</span>`;
+    return `<span class="vchip ${cls}"><span class="cond">${esc(condLabel(v))}</span> ${money(v.priceCents)} · ${v.quantity} ${web}</span>`;
+  }
+
+  function cardHtml(p: any) {
+    const cover = p.imageUrl
+      ? `<div class="inv-cover"><img src="${esc(p.imageUrl)}" alt=""></div>`
+      : `<div class="inv-cover" style="color:${esc(p.categoryColor)}">🎮</div>`;
+    const tags = [p.platform, p.genre, p.franchise].filter(Boolean).map((t: string) => `<span class="inv-tag">${esc(t)}</span>`).join("");
+    const skus = p.variants.map((v: any) => v.sku).filter(Boolean);
+    const webBtn = anyWeb(p)
+      ? `<a class="btn btn-ghost btn-sm icon-btn" href="/shop" target="_blank" rel="noopener">↗ Web</a>`
+      : "";
+    return `
+      <div class="inv-card" data-p="${p.id}">
+        ${cover}
+        <div class="inv-main">
+          <div class="inv-titlerow">
+            <span class="inv-title">${esc(p.title)}</span>
+            <span class="inv-catpill" style="background:${esc(p.categoryColor)}22;color:${esc(p.categoryColor)}">${esc(p.categoryName)}</span>
+          </div>
+          <div class="inv-tags">${tags}</div>
+          ${skus.length ? `<div class="inv-sku">${esc(skus[0])}${skus.length > 1 ? ` +${skus.length - 1}` : ""}</div>` : ""}
+          <div class="inv-variants">${p.variants.map(vchip).join("")}</div>
+        </div>
+        <div class="inv-actions">
+          <span class="tot">${totalQty(p)} in stock</span>
+          <button class="btn btn-primary btn-sm icon-btn" data-edit="${p.id}">✎ Edit</button>
+          ${webBtn}
+        </div>
+      </div>`;
+  }
 
   function visible() {
-    const q = state.q.toLowerCase();
     let list = items.filter((p) => {
       if (state.cat && p.categoryId !== state.cat) return false;
-      if (!q) return true;
-      const hay = `${p.title} ${p.platform} ${p.franchise} ` +
-        p.variants.map((v: any) => `${v.condition} ${v.sku ?? ""} ${v.barcodes.map((b: any) => b.barcode).join(" ")}`).join(" ");
-      return hay.toLowerCase().includes(q);
+      if (state.instock && totalQty(p) <= 0) return false;
+      if (state.web && !anyWeb(p)) return false;
+      return true;
     });
-    list.sort((a, b) =>
-      state.sort === "price" ? maxPrice(b) - maxPrice(a)
-      : state.sort === "qty" ? totalQty(b) - totalQty(a)
-      : a.title.localeCompare(b.title));
-    if (state.inStockFirst) list.sort((a, b) => (totalQty(b) > 0 ? 1 : 0) - (totalQty(a) > 0 ? 1 : 0));
+    const parsed = state.parsed;
+    if (parsed && (parsed.title || parsed.platform || parsed.completenessCode || parsed.gradeCode)) {
+      list = list.map((p) => ({ p, s: matchScore(p, parsed) })).filter((x) => x.s > 0).sort((a, b) => b.s - a.s).map((x) => x.p);
+    } else {
+      list.sort((a, b) =>
+        state.sort === "price" ? maxPrice(b) - maxPrice(a)
+        : state.sort === "qty" ? totalQty(b) - totalQty(a)
+        : a.title.localeCompare(b.title));
+    }
     return list;
   }
 
   function render() {
     const list = visible();
-    $("inv-list").innerHTML = list.length ? list.map((p) => `
-      <div class="prod-block" data-p="${p.id}">
-        <div class="prod-head">
-          <span class="dot" style="background:${p.categoryColor}"></span>
-          <strong>${esc(p.title)}</strong>
-          <span class="plat">${esc(p.platform)}${p.franchise ? " · " + esc(p.franchise) : ""} · ${esc(p.categoryName)}</span>
-          <span class="tot">${totalQty(p)} in stock</span>
+    $("inv-count").textContent = `${list.length} product${list.length === 1 ? "" : "s"}`;
+    $("inv-list").innerHTML = list.length ? list.map(cardHtml).join("") : `<p class="empty">No products match.</p>`;
+    document.querySelectorAll<HTMLElement>("[data-edit]").forEach((b) => b.addEventListener("click", () => openModal(b.dataset.edit!)));
+  }
+
+  /* ---------- Edit modal ---------- */
+  const modal = $("edit-modal");
+  function closeModal() { modal.hidden = true; }
+  modal.querySelectorAll("[data-close]").forEach((el) => el.addEventListener("click", closeModal));
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !modal.hidden) closeModal(); });
+
+  function openModal(pid: string) {
+    const p = items.find((x) => x.id === pid);
+    if (!p) return;
+    modal.dataset.pid = pid;
+    $("m-heading").textContent = "Edit · " + p.title;
+    const catOpts = categories.map((c) => `<option value="${c.id}"${c.id === p.categoryId ? " selected" : ""}>${esc(c.name)}</option>`).join("");
+
+    const condRows = p.variants.map(condRowHtml).join("");
+    const bcBlocks = p.variants.map(bcBlockHtml).join("");
+
+    $("modal-body").innerHTML = `
+      <div class="m-section">
+        <div class="m-label">Product</div>
+        <div class="m-grid">
+          <label>Title<input id="m-title" value="${esc(p.title)}"></label>
+          <label>Platform<input id="m-platform" value="${esc(p.platform)}"></label>
+          <label>Genre / set<input id="m-genre" value="${esc(p.genre)}"></label>
+          <label>Franchise<input id="m-franchise" value="${esc(p.franchise)}"></label>
+          <label>Category<select id="m-category">${catOpts}</select></label>
+          <label>Image URL<input id="m-image" value="${esc(p.imageUrl)}" placeholder="https://…"></label>
         </div>
-        ${p.variants.map((v: any) => `
-          <div class="var-row" data-v="${v.id}">
-            <span><strong>${esc(v.condition)}</strong>${v.completeness ? ` <span class="plat">${esc(v.completeness)}</span>` : ""}<br><span class="plat" style="font-family:var(--font-mono);">${esc(v.sku ?? "—")}</span></span>
-            <label class="plat">Price <input type="number" min="0" step="0.01" value="${(v.priceCents/100).toFixed(2)}" data-field="price"></label>
-            <label class="plat">Qty <input type="number" min="0" value="${v.quantity}" data-field="qty"></label>
-            <span class="saved" data-saved></span>
-            <button class="btn btn-ghost btn-sm" data-bc>${v.barcodes.length} barcode${v.barcodes.length === 1 ? "" : "s"}</button>
-          </div>
-          <div class="bc-panel" data-bcpanel="${v.id}" hidden>
-            <div data-bclist>${v.barcodes.map((b: any) => bcChip(b)).join("")}</div>
-            <div style="margin-top:0.5rem;display:flex;gap:0.4rem;flex-wrap:wrap;">
-              <input data-bcnew placeholder="New barcode" style="width:11rem;padding:0.35rem 0.5rem;">
-              <input data-bclabel placeholder="Label (e.g. Target)" style="width:9rem;padding:0.35rem 0.5rem;">
-              <button class="btn btn-ghost btn-sm" data-bcadd>Add barcode</button>
-            </div>
-          </div>`).join("")}
-      </div>`).join("") : `<p class="empty">No products match.</p>`;
-    attach();
+        <div class="m-field"><label>Description (web)<textarea id="m-desc" rows="2" placeholder="Shown on the website listing">${esc(p.description)}</textarea></label></div>
+      </div>
+
+      <div class="m-section">
+        <div class="m-label">Pricing &amp; web — per condition${conditionPricing ? ` <span class="cp-on">↻ condition pricing on</span>` : ""}</div>
+        <table class="cond-table">
+          <thead><tr><th>Completeness</th><th>Grade</th><th>SKU</th><th>In‑store $</th><th>Online $</th><th>Qty</th><th>Web</th></tr></thead>
+          <tbody id="cond-body">${condRows}</tbody>
+        </table>
+        <button type="button" class="btn btn-ghost btn-sm" id="add-cond" style="margin-top:0.5rem;">＋ Add condition</button>
+        <p class="web-hint">${conditionPricing ? "Set one condition's price and tap ↻ to re‑price the others by your rule. " : ""}Leave “Online $” blank to use the in‑store price; “Web” publishes that condition to the shop.</p>
+      </div>
+
+      <div class="m-section">
+        <div class="m-label">Barcodes</div>
+        <div id="bc-blocks">${bcBlocks}</div>
+      </div>`;
+
+    const link = $("m-weblink") as HTMLAnchorElement;
+    if (anyWeb(p)) { link.href = "/shop"; link.hidden = false; } else { link.hidden = true; }
+
+    bindBarcodes(p);
+    bindReprice(p);
+    $("add-cond").addEventListener("click", () => addCondition(p));
+    modal.hidden = false;
+  }
+
+  function condRowHtml(v: any) {
+    const repriceBtn = conditionPricing
+      ? `<button type="button" class="reprice-btn" data-reprice="${v.id}" title="Set this price and re‑price the other conditions">↻</button>`
+      : "";
+    return `
+      <tr data-vrow="${v.id}">
+        <td><select data-vf="comp">${compOpts(v.completenessCode)}</select></td>
+        <td><select data-vf="grade">${gradeOpts(v.gradeCode)}</select></td>
+        <td><input data-vf="sku" value="${esc(v.sku ?? "")}" placeholder="SKU" style="font-family:var(--font-mono);"></td>
+        <td class="c-num"><div class="price-cell"><input data-vf="instore" type="number" min="0" step="0.01" value="${(v.priceCents / 100).toFixed(2)}">${repriceBtn}</div></td>
+        <td class="c-num"><input data-vf="online" type="number" min="0" step="0.01" value="${v.onlinePriceCents != null ? (v.onlinePriceCents / 100).toFixed(2) : ""}" placeholder="${(v.priceCents / 100).toFixed(2)}"></td>
+        <td class="c-num"><input data-vf="qty" type="number" min="0" value="${v.quantity}"></td>
+        <td class="c-web"><input data-vf="web" type="checkbox"${v.onlineVisible ? " checked" : ""}></td>
+      </tr>`;
+  }
+
+  function bcBlockHtml(v: any) {
+    return `
+      <div class="bc-block" data-bcv="${v.id}">
+        <div class="bc-head">${esc(condLabel(v))}${v.sku ? " · " + esc(v.sku) : ""}</div>
+        <div data-bclist>${v.barcodes.map(bcChip).join("") || `<span style="color:var(--muted-2);font-size:0.76rem;">No barcodes</span>`}</div>
+        <div class="bc-add">
+          <input data-bcnew placeholder="New barcode">
+          <input data-bclabel placeholder="Label (e.g. Target)">
+          <button class="btn btn-ghost btn-sm" data-bcadd>Add</button>
+        </div>
+      </div>`;
   }
 
   function bcChip(b: any) {
     return `<span class="bc-chip">${esc(b.barcode)}${b.label ? ` · ${esc(b.label)}` : ""}${b.primary ? "" : ` <button data-bcdel="${b.id}" title="Remove">✕</button>`}</span>`;
   }
 
-  function attach() {
-    document.querySelectorAll<HTMLElement>(".var-row").forEach((row) => {
-      const vid = row.dataset.v!;
-      const prod = items.find((p) => p.variants.some((v: any) => v.id === vid));
-      const v = prod.variants.find((x: any) => x.id === vid);
-      const saved = row.querySelector<HTMLElement>("[data-saved]")!;
-      row.querySelectorAll<HTMLInputElement>("input[data-field]").forEach((inp) => {
-        inp.addEventListener("change", async () => {
-          try {
-            if (inp.dataset.field === "price") { const c = Math.max(0, Math.round(parseFloat(inp.value) * 100) || 0); await api({ action: "updateVariant", id: vid, priceCents: c }); v.priceCents = c; }
-            else { const q = Math.max(0, Math.round(parseInt(inp.value)) || 0); await api({ action: "updateVariant", id: vid, quantity: q }); v.quantity = q; }
-            saved.textContent = "✓ saved"; setTimeout(() => (saved.textContent = ""), 1500);
-            prod && (row.closest(".prod-block")!.querySelector(".tot")!.textContent = `${totalQty(prod)} in stock`);
-          } catch (e: any) { saved.textContent = "✕ " + e.message; }
-        });
-      });
-      row.querySelector("[data-bc]")!.addEventListener("click", () => {
-        const panel = document.querySelector<HTMLElement>(`[data-bcpanel="${vid}"]`)!;
-        panel.hidden = !panel.hidden;
-      });
-    });
-
-    document.querySelectorAll<HTMLElement>("[data-bcpanel]").forEach((panel) => {
-      const vid = panel.dataset.bcpanel!;
-      const prod = items.find((p) => p.variants.some((v: any) => v.id === vid));
-      const v = prod.variants.find((x: any) => x.id === vid);
-      const list = panel.querySelector<HTMLElement>("[data-bclist]")!;
-      const redraw = () => { list.innerHTML = v.barcodes.map((b: any) => bcChip(b)).join(""); bindDel(); };
-      const bindDel = () => list.querySelectorAll<HTMLElement>("[data-bcdel]").forEach((btn) => btn.addEventListener("click", async () => {
-        try { await api({ action: "removeBarcode", id: btn.dataset.bcdel }); v.barcodes = v.barcodes.filter((b: any) => b.id !== btn.dataset.bcdel); redraw(); } catch (e: any) { alert(e.message); }
-      }));
-      bindDel();
-      panel.querySelector("[data-bcadd]")!.addEventListener("click", async () => {
-        const code = panel.querySelector<HTMLInputElement>("[data-bcnew]")!.value.trim();
-        const label = panel.querySelector<HTMLInputElement>("[data-bclabel]")!.value.trim();
-        if (!code) return;
-        try { const j = await api({ action: "addBarcode", variantId: vid, barcode: code, label }); v.barcodes.push({ id: j.barcode.id, barcode: j.barcode.barcode, label: j.barcode.label, primary: false }); redraw(); panel.querySelector<HTMLInputElement>("[data-bcnew]")!.value = ""; panel.querySelector<HTMLInputElement>("[data-bclabel]")!.value = ""; } catch (e: any) { alert(e.message); }
-      });
+  function bindBcBlock(block: HTMLElement, p: any) {
+    const vid = block.dataset.bcv!;
+    const v = p.variants.find((x: any) => x.id === vid);
+    const list = block.querySelector<HTMLElement>("[data-bclist]")!;
+    const redraw = () => { list.innerHTML = v.barcodes.map(bcChip).join("") || `<span style="color:var(--muted-2);font-size:0.76rem;">No barcodes</span>`; bindDel(); };
+    const bindDel = () => list.querySelectorAll<HTMLElement>("[data-bcdel]").forEach((btn) => btn.addEventListener("click", async () => {
+      try { await api({ action: "removeBarcode", id: btn.dataset.bcdel }); v.barcodes = v.barcodes.filter((b: any) => b.id !== btn.dataset.bcdel); redraw(); } catch (e: any) { alert(e.message); }
+    }));
+    bindDel();
+    block.querySelector("[data-bcadd]")!.addEventListener("click", async () => {
+      const code = block.querySelector<HTMLInputElement>("[data-bcnew]")!.value.trim();
+      const label = block.querySelector<HTMLInputElement>("[data-bclabel]")!.value.trim();
+      if (!code) return;
+      try {
+        const j = await api({ action: "addBarcode", variantId: vid, barcode: code, label });
+        v.barcodes.push({ id: j.barcode.id, barcode: j.barcode.barcode, label: j.barcode.label, primary: false });
+        redraw();
+        block.querySelector<HTMLInputElement>("[data-bcnew]")!.value = "";
+        block.querySelector<HTMLInputElement>("[data-bclabel]")!.value = "";
+      } catch (e: any) { alert(e.message); }
     });
   }
+  function bindBarcodes(p: any) {
+    $("bc-blocks").querySelectorAll<HTMLElement>("[data-bcv]").forEach((block) => bindBcBlock(block, p));
+  }
 
-  $("inv-search").addEventListener("input", (e) => { state.q = (e.target as HTMLInputElement).value; render(); });
+  // Condition-pricing engine: set one condition's price, the siblings follow.
+  function bindRow(row: HTMLElement, p: any) {
+    const rbtn = row.querySelector<HTMLElement>("[data-reprice]");
+    if (!rbtn) return;
+    rbtn.addEventListener("click", async () => {
+      const vid = row.dataset.vrow!;
+      const v = p.variants.find((x: any) => x.id === vid);
+      const f = (n: string) => row.querySelector<HTMLInputElement>(`[data-vf="${n}"]`)!;
+      const comp = f("comp").value, grade = f("grade").value, price = toCents(f("instore").value);
+      try {
+        await api({ action: "updateVariant", id: vid, priceCents: price, completenessCode: comp, gradeCode: grade });
+        Object.assign(v, { priceCents: price, completenessCode: comp, gradeCode: grade });
+        const j = await api({ action: "repriceProduct", variantId: vid });
+        (j.updated || []).forEach((u: any) => {
+          const sv = p.variants.find((x: any) => x.id === u.variant_id);
+          if (sv) sv.priceCents = u.new_price_cents;
+          const inp = $("cond-body").querySelector<HTMLInputElement>(`[data-vrow="${u.variant_id}"] [data-vf="instore"]`);
+          if (inp) inp.value = (u.new_price_cents / 100).toFixed(2);
+        });
+        toast(`↻ Re‑priced ${(j.updated || []).length} condition${(j.updated || []).length === 1 ? "" : "s"}`);
+      } catch (e: any) { alert(e.message); }
+    });
+  }
+  function bindReprice(p: any) {
+    $("cond-body").querySelectorAll<HTMLElement>("[data-vrow]").forEach((row) => bindRow(row, p));
+  }
+
+  async function addCondition(p: any) {
+    const defComp = categories.find((c) => c.id === p.categoryId)?.default_completeness || "";
+    const compLabel = completeness.find((c) => c.code === defComp)?.label || "New";
+    try {
+      const j = await api({ action: "addVariant", productId: p.id, completenessCode: defComp, gradeCode: "3", condition: compLabel, priceCents: 0, quantity: 0 });
+      const nv: any = { id: j.variant.id, condition: compLabel, completeness: null, completenessCode: defComp, gradeCode: "3", sku: null, priceCents: 0, onlinePriceCents: null, costCents: null, quantity: 0, onlineVisible: false, barcodes: [] };
+      p.variants.push(nv);
+      $("cond-body").insertAdjacentHTML("beforeend", condRowHtml(nv));
+      $("bc-blocks").insertAdjacentHTML("beforeend", bcBlockHtml(nv));
+      bindRow($("cond-body").querySelector<HTMLElement>(`[data-vrow="${nv.id}"]`)!, p);
+      bindBcBlock($("bc-blocks").querySelector<HTMLElement>(`[data-bcv="${nv.id}"]`)!, p);
+      toast("Condition added — set its price");
+    } catch (e: any) { alert(e.message); }
+  }
+
+  $("m-save").addEventListener("click", async () => {
+    const pid = modal.dataset.pid!;
+    const p = items.find((x) => x.id === pid);
+    const btn = $("m-save") as HTMLButtonElement;
+    const get = (id: string) => ($(id) as HTMLInputElement).value;
+    if (!get("m-title").trim()) { alert("Title is required"); return; }
+    btn.disabled = true; const orig = btn.textContent; btn.textContent = "Saving…";
+    try {
+      await api({
+        action: "updateProduct", id: pid,
+        title: get("m-title").trim(), platform: get("m-platform").trim(), genre: get("m-genre").trim(),
+        franchise: get("m-franchise").trim(), categoryId: get("m-category"), imageUrl: get("m-image").trim(),
+        description: ($("m-desc") as HTMLTextAreaElement).value.trim(),
+      });
+      Object.assign(p, {
+        title: get("m-title").trim(), platform: get("m-platform").trim(), genre: get("m-genre").trim(),
+        franchise: get("m-franchise").trim(), categoryId: get("m-category"), imageUrl: get("m-image").trim(),
+        description: ($("m-desc") as HTMLTextAreaElement).value.trim(),
+        categoryName: categories.find((c) => c.id === get("m-category"))?.name ?? p.categoryName,
+        categoryColor: categories.find((c) => c.id === get("m-category"))?.color ?? p.categoryColor,
+      });
+
+      for (const row of Array.from(document.querySelectorAll<HTMLElement>("[data-vrow]"))) {
+        const vid = row.dataset.vrow!;
+        const v = p.variants.find((x: any) => x.id === vid);
+        const f = (name: string) => row.querySelector<HTMLInputElement>(`[data-vf="${name}"]`)!;
+        const onlineRaw = f("online").value.trim();
+        const comp = f("comp").value, grade = f("grade").value;
+        const derived = [completeness.find((c) => c.code === comp)?.label, grades.find((g) => g.code === grade)?.label].filter(Boolean).join(" ") || v.condition;
+        const payload = {
+          action: "updateVariant", id: vid,
+          condition: derived,
+          completenessCode: comp,
+          gradeCode: grade,
+          sku: f("sku").value.trim(),
+          priceCents: toCents(f("instore").value),
+          onlinePriceCents: onlineRaw === "" ? null : toCents(onlineRaw),
+          quantity: Math.max(0, Math.round(parseInt(f("qty").value)) || 0),
+          onlineVisible: f("web").checked,
+        };
+        await api(payload);
+        Object.assign(v, {
+          condition: derived, completenessCode: comp, gradeCode: grade,
+          sku: f("sku").value.trim() || null, priceCents: payload.priceCents,
+          onlinePriceCents: payload.onlinePriceCents, quantity: payload.quantity, onlineVisible: payload.onlineVisible,
+        });
+      }
+      render(); closeModal(); toast("✓ Saved to POS + website");
+    } catch (e: any) {
+      alert(e.message);
+    } finally { btn.disabled = false; btn.textContent = orig; }
+  });
+
+  /* ---------- Toolbar ---------- */
+  $("inv-search").addEventListener("input", (e) => {
+    state.q = (e.target as HTMLInputElement).value;
+    state.parsed = state.q.trim() ? parseQuery(state.q) : null;
+    renderSmart();
+    render();
+  });
   $("inv-cat").addEventListener("change", (e) => { state.cat = (e.target as HTMLSelectElement).value; render(); });
   $("inv-sort").addEventListener("change", (e) => { state.sort = (e.target as HTMLSelectElement).value; render(); });
-  $("inv-instock").addEventListener("change", (e) => { state.inStockFirst = (e.target as HTMLInputElement).checked; render(); });
+  document.querySelectorAll<HTMLElement>(".chip.filt").forEach((chip) => chip.addEventListener("click", () => {
+    chip.classList.toggle("active");
+    (state as any)[chip.dataset.filt!] = chip.classList.contains("active");
+    render();
+  }));
 
+  /* ---------- Add product ---------- */
   $("toggle-add").addEventListener("click", () => { ($("add-panel") as HTMLElement).hidden = !($("add-panel") as HTMLElement).hidden; });
   $("np-save").addEventListener("click", async () => {
+    const comp = ($("np-comp") as HTMLSelectElement).value;
+    const grade = ($("np-grade") as HTMLSelectElement).value;
+    const condition = [completeness.find((c) => c.code === comp)?.label, grades.find((g) => g.code === grade)?.label].filter(Boolean).join(" ") || "Used";
     const body = {
       action: "addProduct",
       title: ($("np-title") as HTMLInputElement).value,
       platform: ($("np-platform") as HTMLInputElement).value,
       categoryId: ($("np-cat") as HTMLSelectElement).value,
-      condition: ($("np-cond") as HTMLInputElement).value,
+      condition, completenessCode: comp, gradeCode: grade,
       priceCents: Math.round(parseFloat(($("np-price") as HTMLInputElement).value) * 100) || 0,
       quantity: parseInt(($("np-qty") as HTMLInputElement).value) || 0,
       barcode: ($("np-barcode") as HTMLInputElement).value || null,
@@ -220,12 +618,14 @@ const posData = { items, categories: categories ?? [] };
     if (!body.title || !body.categoryId) { alert("Title and category required"); return; }
     try {
       const j = await api(body);
-      const cat = data.categories.find((c: any) => c.id === body.categoryId);
-      items.push({ id: j.productId, title: body.title, platform: body.platform, franchise: "", categoryId: body.categoryId, categoryName: cat?.name ?? "", categoryColor: "#2ce6e0",
-        variants: [{ id: j.variantId, condition: body.condition, completeness: null, sku: null, priceCents: body.priceCents, quantity: body.quantity, barcodes: body.barcode ? [{ id: "primary:" + j.variantId, barcode: body.barcode, label: "Primary", primary: true }] : [] }] });
+      const cat = categories.find((c: any) => c.id === body.categoryId);
+      items.push({ id: j.productId, title: body.title, platform: body.platform, franchise: "", genre: "", description: "", imageUrl: "", altNames: [], categoryId: body.categoryId, categoryName: cat?.name ?? "", categoryColor: cat?.color ?? "#2ce6e0",
+        variants: [{ id: j.variantId, condition, completeness: null, completenessCode: comp, gradeCode: grade, sku: null, priceCents: body.priceCents, onlinePriceCents: null, costCents: null, quantity: body.quantity, onlineVisible: false, barcodes: body.barcode ? [{ id: "primary:" + j.variantId, barcode: body.barcode, label: "Primary", primary: true }] : [] }] });
       ($("add-panel") as HTMLElement).hidden = true;
       ($("np-title") as HTMLInputElement).value = "";
+      ($("inv-search") as HTMLInputElement).value = ""; state.q = ""; state.parsed = null; renderSmart();
       render();
+      toast("✓ Product added");
     } catch (e: any) { alert(e.message); }
   });
 

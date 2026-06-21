@@ -30,6 +30,7 @@ export interface Category {
   color: string;
   is_trackable: boolean;
   sort_order: number;
+  default_completeness: string | null;
 }
 
 export interface Product {
@@ -41,6 +42,13 @@ export interface Product {
   rating: string | null;
   brand: string | null;
   category_id: string | null;
+  // Rich metadata (website listing + search)
+  description: string | null;
+  image_url: string | null;
+  tags: string[];
+  alternative_names: string[];
+  release_year: number | null;
+  trailer_url: string | null;
   created_at: string;
 }
 
@@ -51,9 +59,13 @@ export interface ProductVariant {
   completeness: string | null;
   sku: string | null;
   barcode: string | null;
+  internal_code: string | null;
   price_cents: number;
   cost_cents: number;
+  online_price_cents: number | null;
+  online_visible: boolean;
   quantity: number;
+  restocked_at: string | null;
   created_at: string;
 }
 
@@ -72,6 +84,61 @@ export interface ProductBarcode {
   variant_id: string;
   barcode: string;
   label: string | null;
+  created_at: string;
+}
+
+export interface ProductSku {
+  id: string;
+  variant_id: string;
+  sku: string;
+  label: string | null;
+  created_at: string;
+}
+
+// ---- Catalog foundation (settings + configurable condition taxonomy) ----
+export interface StoreSettings {
+  id: number;
+  store_name: string;
+  condition_pricing_enabled: boolean;
+  condition_entry_mode: "separate" | "combined";
+  enrichment_provider: string | null;
+  receipt_config: Record<string, unknown>;
+  settings: Record<string, unknown>;
+  updated_at: string;
+}
+
+export interface CompletenessLevel {
+  id: string;
+  code: string;
+  label: string;
+  aliases: string[];
+  sort_order: number;
+  badge_label: string | null;
+  badge_color: string | null;
+  banner_on_thumbnail: boolean;
+  use_as_filter: boolean;
+  is_active: boolean;
+}
+
+export interface ConditionGrade {
+  id: string;
+  code: string;
+  label: string;
+  icon: string | null;
+  rank: number;
+  aliases: string[];
+  use_as_filter: boolean;
+  is_active: boolean;
+}
+
+export interface StockMovement {
+  id: string;
+  variant_id: string;
+  delta: number;
+  reason: "sale" | "return" | "receive" | "manual" | "adjust" | "initial";
+  channel: "in_store" | "online";
+  transaction_id: string | null;
+  employee_id: string | null;
   created_at: string;
 }
 
