@@ -61,12 +61,21 @@ const posData = {
 
 <AppLayout title="Inventory" active="inventory">
   <div slot="actions" style="display:flex;gap:0.5rem;">
+    {isManager && <button id="ebay-bulk" class="btn btn-ghost btn-sm" title="Import your eBay store listings as draft products (skips ones already imported)">🛒 Import eBay store</button>}
     {isManager && <button id="resync-img" class="btn btn-ghost btn-sm" title="Fetch covers for items with no image (only fills empties)">🔄 Resync images</button>}
     <button id="toggle-add" class="btn btn-primary btn-sm">＋ Add product</button>
   </div>
 
   <div id="add-panel" class="pos-panel" hidden style="margin-bottom:1rem;">
     <h2>Add a product</h2>
+    <div class="ebay-import">
+      <div class="ebay-row">
+        <span class="ebay-tag">🛒 eBay</span>
+        <input id="np-ebay" placeholder="Paste an eBay item number or listing URL to auto-fill…" />
+        <button type="button" id="np-ebay-go" class="btn btn-ghost btn-sm">⬇ Pull data</button>
+      </div>
+      <div id="np-ebay-note" class="ebay-note" hidden></div>
+    </div>
     <div class="add-grid">
       <label>Title<input id="np-title" placeholder="e.g. Donkey Kong 64" /></label>
       <label>Platform<input id="np-platform" placeholder="Nintendo 64" /></label>
@@ -243,6 +252,14 @@ const posData = {
 
   .add-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:0.7rem; }
   .add-grid label { display:grid; gap:0.3rem; font-size:0.85rem; font-weight:600; }
+
+  /* eBay import row */
+  .ebay-import { margin-bottom:0.9rem; padding-bottom:0.9rem; border-bottom:1px dashed var(--line); }
+  .ebay-row { display:flex; gap:0.5rem; align-items:center; }
+  .ebay-row input { flex:1; min-width:0; }
+  .ebay-tag { font-size:0.78rem; font-weight:800; letter-spacing:0.02em; padding:0.35rem 0.55rem; background:#e53238; color:#fff; white-space:nowrap; }
+  .ebay-note { display:flex; gap:0.6rem; align-items:center; margin-top:0.6rem; padding:0.5rem 0.6rem; background:var(--surface-2,rgba(255,255,255,0.03)); border:1px solid var(--line); font-size:0.82rem; line-height:1.35; }
+  .ebay-note img { flex:none; }
 </style>
 
 <script>
@@ -731,19 +748,89 @@ const posData = {
       ($("np-title") as HTMLInputElement).value = "";
       ($("inv-search") as HTMLInputElement).value = ""; state.q = ""; state.parsed = null; renderSmart();
       render();
-      toast("✓ Product added — fetching cover…");
-      // Auto-enrich from IGDB: cover art, description, trailer, alt-names.
-      try {
-        const e = await enrich({ productId: newItem.id, title: newItem.title, platform: newItem.platform });
-        if (e.ok && e.found) {
-          if (e.imageUrl) newItem.imageUrl = e.imageUrl;
-          if (e.altNames?.length) newItem.altNames = e.altNames;
-          if (e.description) newItem.description = e.description;
-          render();
-          toast(e.imageUrl ? "🎮 Cover added from IGDB" : "✓ Details added from IGDB");
-        } else { toast("✓ Product added"); }
-      } catch { toast("✓ Product added"); }
+      if (pendingEbay) {
+        // eBay-imported: pull the real listing's photo + description/specifics
+        // (eBay is the source of truth, so skip the IGDB lookup).
+        toast("✓ Product added — pulling eBay photos…");
+        try {
+          const r = await fetch("/api/pos/ebay-import", { method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ mode: "attach", productId: newItem.id, variantId: j.variantId, input: pendingEbay.input }) });
+          const e = await r.json();
+          if (r.ok && e.ok) {
+            if (e.imageUrl) newItem.imageUrl = e.imageUrl;
+            if (pendingEbay.description) newItem.description = pendingEbay.description;
+            render();
+            toast(e.imageUrl ? "🛒 Imported from eBay with photo" : "✓ Imported from eBay");
+          } else { toast("✓ Added (eBay media failed: " + (e.error || "?") + ")"); }
+        } catch { toast("✓ Product added"); }
+        pendingEbay = null;
+        ($("np-ebay") as HTMLInputElement).value = "";
+        ($("np-ebay-note") as HTMLElement).hidden = true;
+      } else {
+        toast("✓ Product added — fetching cover…");
+        // Auto-enrich from IGDB: cover art, description, trailer, alt-names.
+        try {
+          const e = await enrich({ productId: newItem.id, title: newItem.title, platform: newItem.platform });
+          if (e.ok && e.found) {
+            if (e.imageUrl) newItem.imageUrl = e.imageUrl;
+            if (e.altNames?.length) newItem.altNames = e.altNames;
+            if (e.description) newItem.description = e.description;
+            render();
+            toast(e.imageUrl ? "🎮 Cover added from IGDB" : "✓ Details added from IGDB");
+          } else { toast("✓ Product added"); }
+        } catch { toast("✓ Product added"); }
+      }
     } catch (e: any) { alert(e.message); }
+  });
+
+  /* ---------- eBay import ---------- */
+  let pendingEbay: any = null;
+
+  // Paste a listing → pull its data into the add form for review.
+  $("np-ebay-go")?.addEventListener("click", async () => {
+    const input = ($("np-ebay") as HTMLInputElement).value.trim();
+    if (!input) { alert("Paste an eBay item number or listing URL first"); return; }
+    const btn = $("np-ebay-go") as HTMLButtonElement; btn.disabled = true; const o = btn.textContent; btn.textContent = "Pulling…";
+    try {
+      const r = await fetch("/api/pos/ebay-import", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ mode: "preview", input }) });
+      const j = await r.json();
+      if (!r.ok || !j.ok) throw new Error(j.error || "Couldn't pull that listing");
+      const it = j.item;
+      ($("np-title") as HTMLInputElement).value = it.title;
+      ($("np-platform") as HTMLInputElement).value = it.platform || "";
+      if (it.completenessCode) ($("np-comp") as HTMLSelectElement).value = it.completenessCode;
+      if (it.gradeCode) ($("np-grade") as HTMLSelectElement).value = it.gradeCode;
+      ($("np-price") as HTMLInputElement).value = (it.priceCents / 100).toFixed(2);
+      if (it.upc) ($("np-barcode") as HTMLInputElement).value = it.upc;
+      const sel = $("np-cat") as HTMLSelectElement;
+      const opt = [...sel.options].find((op) => op.textContent?.toLowerCase() === String(it.categoryName).toLowerCase());
+      if (opt) sel.value = opt.value;
+      pendingEbay = { input, description: it.description, primaryImage: it.primaryImage, images: it.images };
+      const note = $("np-ebay-note") as HTMLElement; note.hidden = false;
+      note.innerHTML = `${it.primaryImage ? `<img src="${it.primaryImage}" alt="" style="width:46px;height:46px;object-fit:cover;border:1px solid var(--line);">` : ""}<div><strong>✓ Pulled from eBay</strong> · ${it.conditionLabel || "—"} · ${it.images.length} photo(s)${it.upc ? " · UPC " + it.upc : ""}<br><span style="color:var(--muted-2);">${it.title.slice(0, 72)}</span></div>`;
+      toast("✓ Filled from eBay — review & Save");
+    } catch (e: any) { alert(e.message); } finally { btn.disabled = false; btn.textContent = o; }
+  });
+
+  // Manager-only: import the whole eBay store as draft products, a page at a
+  // time. Skips listings already imported; never overwrites existing products.
+  document.getElementById("ebay-bulk")?.addEventListener("click", async () => {
+    if (!confirm("Import your eBay store listings as draft products?\n\nAlready-imported listings are skipped and nothing existing is overwritten. You can edit prices/conditions afterward.")) return;
+    const btn = document.getElementById("ebay-bulk") as HTMLButtonElement; btn.disabled = true; const o = btn.textContent;
+    let offset = 0, created = 0, skipped = 0, total = 0, guard = 0;
+    try {
+      do {
+        const r = await fetch("/api/pos/ebay-import", { method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ mode: "bulk", offset, limit: 8 }) });
+        const j = await r.json();
+        if (!r.ok || !j.ok) throw new Error(j.error || "Bulk import failed");
+        created += j.created; skipped += j.skipped; total = j.total; offset = j.nextOffset;
+        btn.textContent = `Importing ${created + skipped}/${total}…`;
+      } while (offset != null && ++guard < 60);
+      toast(`✓ eBay import complete — ${created} added, ${skipped} already present`);
+      setTimeout(() => location.reload(), 1400);
+    } catch (e: any) { alert(e.message); btn.disabled = false; btn.textContent = o; }
   });
 
   render();

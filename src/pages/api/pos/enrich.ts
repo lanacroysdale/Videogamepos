@@ -2,30 +2,13 @@ import type { APIRoute } from "astro";
 import { createSupabaseAdminClient } from "../../../lib/supabase";
 import { searchGame, igdbConfigured } from "../../../lib/igdb";
 import { lbPlatform, lbImageUrl } from "../../../lib/launchbox";
+import { copyImageToStorage } from "../../../lib/storage";
 
 export const prerender = false;
 const json = (d: unknown, s = 200) =>
   new Response(JSON.stringify(d), { status: s, headers: { "content-type": "application/json" } });
 
-// Copy an external image into our public bucket so we own a stable URL.
-async function intoStorage(admin: any, url: string): Promise<string | null> {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const res = await fetch(url);
-      if (!res.ok) { await new Promise((r) => setTimeout(r, 600)); continue; }
-      const ct = res.headers.get("content-type") || "image/jpeg";
-      const ext = ct.includes("png") ? "png" : ct.includes("webp") ? "webp" : "jpg";
-      const bytes = new Uint8Array(await res.arrayBuffer());
-      const path = `products/cover-${crypto.randomUUID()}.${ext}`;
-      const { error } = await admin.storage.from("product-images").upload(path, bytes, { contentType: ct });
-      if (error) { await new Promise((r) => setTimeout(r, 600)); continue; }
-      return admin.storage.from("product-images").getPublicUrl(path).data.publicUrl;
-    } catch {
-      await new Promise((r) => setTimeout(r, 700));
-    }
-  }
-  return null;
-}
+const intoStorage = (admin: any, url: string) => copyImageToStorage(admin, url, "cover");
 
 // POST { title, platform?, productId? }
 // Cover image prefers the LaunchBox retail box-front; falls back to the IGDB

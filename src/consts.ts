@@ -37,8 +37,8 @@ export const EBAY = {
   storeUrl: 'https://www.ebay.com/str/timelaggaming',
 
   // Fallback link that searches everything listed under your seller name.
-  // TODO: confirm your eBay seller username.
-  sellerSearchUrl: 'https://www.ebay.com/sch/i.html?_ssn=timelaggaming',
+  // NOTE: the seller USERNAME is "timelag" (the store NAME is "timelaggaming").
+  sellerSearchUrl: 'https://www.ebay.com/sch/i.html?_ssn=timelag',
 
   // Quick-browse category buttons in the store section; each links straight to
   // that category on the eBay store.
