@@ -3,8 +3,12 @@ export const prerender = false;
 
 import AppLayout from "../../layouts/AppLayout.astro";
 import { fmt, fullName } from "../../lib/money";
+import { themeSettings } from "../../lib/themeSettings";
 
 const supabase = Astro.locals.supabase;
+
+const { data: storeRow } = await supabase.from("store_settings").select("settings").eq("id", 1).maybeSingle();
+const gemGlow = themeSettings(storeRow?.settings).gemEffectEnabled;
 
 const { data: categories } = await supabase.from("categories").select("*").order("sort_order");
 
@@ -60,7 +64,7 @@ const posData = { catalog, categories: categories ?? [], customer };
         <button id="scan-btn" class="btn btn-ghost btn-sm" type="button" title="Scan a barcode" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);">📷 Scan</button>
       </div>
 
-      <div class="tiles" id="cat-tiles"></div>
+      <div class="tiles" id="cat-tiles" data-gem-glow={gemGlow ? "on" : "off"}></div>
       <div id="prod-list" style="margin-top:0.9rem;display:grid;gap:0.4rem;"></div>
     </div>
 
@@ -196,10 +200,48 @@ const posData = { catalog, categories: categories ?? [], customer };
   const tilesEl = $("cat-tiles");
   tilesEl.innerHTML = categories
     .map((c) => `<button class="tile-btn" data-cat="${c.id}" data-track="${c.is_trackable}">
-        ${catGem(c.name, c.color)}<span class="tile-name">${esc(c.name)}</span>
+        <span class="gem-box">${catGem(c.name, c.color)}<span class="gem-shine" aria-hidden="true"></span></span>
+        <span class="tile-name">${esc(c.name)}</span>
         <small>${c.is_trackable ? catalog.filter((v) => v.categoryId === c.id).length + " items" : "custom / service"}</small>
       </button>`)
     .join("");
+
+  // Mouse-reactive gem glisten: track the cursor over the tile grid (rAF-throttled)
+  // and feed its position to the hovered gem as CSS vars so the highlight follows.
+  // Honours the store "gem effect" setting (data-gem-glow) + reduced-motion.
+  const glowOn = tilesEl.dataset.gemGlow !== "off" &&
+    !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (glowOn) {
+    let rafPending = false, lastEv: PointerEvent | null = null;
+    tilesEl.addEventListener("pointermove", (e) => {
+      lastEv = e as PointerEvent;
+      if (rafPending) return;
+      rafPending = true;
+      requestAnimationFrame(() => {
+        rafPending = false;
+        const tile = (lastEv!.target as HTMLElement).closest<HTMLElement>(".tile-btn");
+        if (!tile) return;
+        const box = tile.querySelector<HTMLElement>(".gem-box");
+        if (!box) return;
+        const r = box.getBoundingClientRect();
+        box.style.setProperty("--gx", `${((lastEv!.clientX - r.left) / r.width) * 100}%`);
+        box.style.setProperty("--gy", `${((lastEv!.clientY - r.top) / r.height) * 100}%`);
+        const dx = (lastEv!.clientX - (r.left + r.width / 2)) / r.width;
+        const dy = (lastEv!.clientY - (r.top + r.height / 2)) / r.height;
+        box.style.setProperty("--tilt", `perspective(240px) rotateX(${(-dy * 14).toFixed(2)}deg) rotateY(${(dx * 14).toFixed(2)}deg)`);
+      });
+    });
+    tilesEl.addEventListener("pointerleave", () => {
+      tilesEl.querySelectorAll<HTMLElement>(".gem-box").forEach((b) => {
+        b.style.removeProperty("--tilt");
+        b.style.removeProperty("--gx");
+        b.style.removeProperty("--gy");
+      });
+    });
+  } else {
+    tilesEl.classList.add("gem-flat");
+  }
+
   tilesEl.querySelectorAll<HTMLButtonElement>(".tile-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       const id = btn.dataset.cat!;

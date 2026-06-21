@@ -136,19 +136,38 @@
 .notice { border:1px solid rgba(232,162,74,.4); background:rgba(232,162,74,.08); color:#ffe08a; padding:.7rem 1rem; border-radius:10px; margin-bottom:1rem; font-weight:600; font-size:.9rem; }
 
 /* ---------- Tiles (checkout categories) ---------- */
-.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 0.7rem; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 0.7rem; }
 .tile-btn {
-  border: 1px solid var(--border-strong); border-radius: 12px; padding: 1rem 0.75rem;
+  position: relative; border: 1px solid var(--border-strong); padding: 0.9rem 0.7rem 0.8rem;
   background: rgba(255, 255, 255, 0.03); color: var(--text); font-weight: 700; cursor: pointer;
-  display: flex; flex-direction: column; gap: 0.35rem; align-items: flex-start; text-align: left;
+  display: flex; flex-direction: column; gap: 0.4rem; align-items: center; text-align: center;
   transition: transform .12s ease, border-color .15s ease;
 }
 .tile-btn:hover { transform: translateY(-2px); }
-.tile-btn:hover .cat-gem { transform: rotate(-4deg) scale(1.08); }
-.tile-btn .dot { width: 12px; height: 12px; border-radius: 3px; }
-.tile-btn .cat-gem { width: 26px; height: 26px; display: block; filter: drop-shadow(0 1.5px 1.5px rgba(0,0,0,.5)); transition: transform .15s ease; }
-.tile-name { line-height: 1.1; }
-.tile-btn small { color: var(--muted-2); font-weight: 600; }
+.tile-btn.active { border-color: var(--cyan); }
+
+/* Big "glass gem" that nearly fills the tile, with a cursor-tracked glint. */
+.gem-box { position: relative; width: clamp(58px, 72%, 86px); aspect-ratio: 1 / 1; display: grid; place-items: center; }
+.tile-btn .cat-gem {
+  width: 100%; height: 100%; display: block;
+  filter: drop-shadow(0 4px 5px rgba(0, 0, 0, .45));
+  transform: var(--tilt,) translateZ(0);
+  transition: transform .18s ease;
+}
+.tile-btn:hover .cat-gem { transform: var(--tilt,) scale(1.05); }
+.gem-shine {
+  position: absolute; inset: -6%; pointer-events: none; opacity: 0; transition: opacity .18s ease;
+  background: radial-gradient(circle at var(--gx, 50%) var(--gy, 28%),
+    rgba(255, 255, 255, .9), rgba(255, 255, 255, .25) 20%, transparent 46%);
+  mix-blend-mode: screen;
+}
+.tile-btn:hover .gem-shine { opacity: .9; }
+/* Effect off (store setting / reduced motion): flat, no glint, no tilt. */
+.tiles.gem-flat .gem-shine, .tiles[data-gem-glow="off"] .gem-shine { display: none; }
+.tiles.gem-flat .cat-gem, .tiles[data-gem-glow="off"] .cat-gem { transform: translateZ(0) !important; }
+
+.tile-name { line-height: 1.15; font-size: 0.92rem; }
+.tile-btn small { color: var(--muted-2); font-weight: 600; font-size: 0.72rem; }
 
 /* ---------- Cart ---------- */
 .cart { display: flex; flex-direction: column; gap: 0.5rem; }
