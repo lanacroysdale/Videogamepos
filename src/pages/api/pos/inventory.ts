@@ -101,6 +101,18 @@ export const POST: APIRoute = async ({ locals, request }) => {
       if (error) return json({ error: error.message }, 500);
       return json({ ok: true, variant: data });
     }
+    case "bulkSetOnline": {
+      // Publish/unpublish many products at once (all of their variants).
+      const ids = Array.isArray(b.productIds) ? b.productIds.filter(Boolean) : [];
+      if (!ids.length) return json({ error: "No items selected" }, 400);
+      const { data, error } = await sb
+        .from("product_variants")
+        .update({ online_visible: !!b.online })
+        .in("product_id", ids)
+        .select("id");
+      if (error) return json({ error: error.message }, 500);
+      return json({ ok: true, updated: data?.length ?? 0 });
+    }
     case "repriceProduct": {
       // Condition-pricing engine: re-price the product's other conditions from
       // this one. Gated server-side by store_settings.condition_pricing_enabled.

@@ -113,6 +113,16 @@ const posData = {
     <div id="inv-list" class="inv-list"></div>
   </div>
 
+  <div id="bulk-bar" class="bulk-bar" hidden>
+    <span class="bulk-count"><strong id="bulk-n">0</strong> selected</span>
+    <div class="bulk-actions">
+      <button id="bulk-selall" class="btn btn-ghost btn-sm" type="button">Select all shown</button>
+      <button id="bulk-offline" class="btn btn-ghost btn-sm" type="button">Unpublish</button>
+      <button id="bulk-online" class="btn btn-primary btn-sm" type="button">🌐 Publish to web</button>
+      <button id="bulk-clear" class="btn btn-ghost btn-sm" type="button">✕ Clear</button>
+    </div>
+  </div>
+
   <div id="edit-modal" class="modal-wrap" hidden>
     <div class="modal-backdrop" data-close></div>
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="m-heading">
@@ -160,9 +170,21 @@ const posData = {
     background:linear-gradient(180deg, rgba(255,255,255,.025), rgba(255,255,255,0));
     transition:border-color .15s ease, transform .15s ease;
   }
-  .inv-card { cursor:pointer; }
+  .inv-card { cursor:pointer; position:relative; }
   .inv-card:hover { border-color:var(--border-strong); }
+  .inv-card.selected { border-color:var(--cyan); box-shadow:inset 0 0 0 1px var(--cyan); }
   .inv-card .inv-actions, .inv-card .vchip, .inv-card .inv-warn { cursor:auto; }
+  .inv-check { position:absolute; top:0.55rem; left:0.55rem; z-index:3; width:1.25rem; height:1.25rem; cursor:pointer; accent-color:var(--cyan); }
+
+  /* Bulk-edit action bar */
+  .bulk-bar {
+    position:sticky; bottom:1rem; z-index:20; display:flex; flex-wrap:wrap; align-items:center;
+    justify-content:space-between; gap:0.8rem; margin-top:1rem; padding:0.7rem 1rem;
+    background:var(--panel); border:1px solid var(--cyan); box-shadow:0 6px 24px rgba(0,0,0,.4);
+  }
+  .bulk-count { font-weight:700; }
+  .bulk-count strong { color:var(--cyan); font-family:var(--font-mono); }
+  .bulk-actions { display:flex; flex-wrap:wrap; gap:0.5rem; }
   .inv-warn { margin-top:0.5rem; font-size:0.76rem; color:var(--yellow,#ffd23f); font-weight:600; }
   .chip.warn-chip.active { border-color:var(--yellow,#ffd23f); color:var(--yellow,#ffd23f); }
   .inv-cover {
@@ -281,6 +303,7 @@ const posData = {
   const money = (c: number) => (c / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
   const toCents = (v: string) => Math.max(0, Math.round(parseFloat(v) * 100) || 0);
   const state = { q: "", cat: "", sort: "title", instock: false, web: false, ebay: false, attention: false, parsed: null as any };
+  const selected = new Set<string>(); // product ids selected for bulk edit
 
   /* ---------- Smart find-or-create (shared module: src/lib/smartSearch.ts) ---------- */
   const PLATFORMS = buildPlatforms(items.map((p) => p.platform));
@@ -381,7 +404,8 @@ const posData = {
       ? `<a class="btn btn-ghost btn-sm icon-btn" href="${p.slug ? `/shop/${p.slug}` : "/shop"}" target="_blank" rel="noopener">↗ Web</a>`
       : "";
     return `
-      <div class="inv-card" data-p="${p.id}">
+      <div class="inv-card${selected.has(p.id) ? " selected" : ""}" data-p="${p.id}">
+        <input type="checkbox" class="inv-check" data-sel="${p.id}"${selected.has(p.id) ? " checked" : ""} aria-label="Select ${esc(p.title)}">
         ${cover}
         <div class="inv-main">
           <div class="inv-titlerow">
@@ -436,11 +460,47 @@ const posData = {
         if (p?.slug) window.open(`/shop/${p.slug}`, "tl-preview", "popup=yes,width=540,height=820");
       });
     });
+    // Bulk-select checkboxes.
+    document.querySelectorAll<HTMLInputElement>(".inv-check").forEach((cb) => {
+      cb.addEventListener("change", () => {
+        if (cb.checked) selected.add(cb.dataset.sel!); else selected.delete(cb.dataset.sel!);
+        cb.closest(".inv-card")?.classList.toggle("selected", cb.checked);
+        updateBulkBar();
+      });
+    });
     // Live count on the "needs attention" chip.
     const attn = items.filter((p) => issues(p).length).length;
     const chip = document.getElementById("attn-chip");
     if (chip) chip.textContent = `⚠ Needs attention${attn ? ` (${attn})` : ""}`;
+    updateBulkBar();
   }
+
+  /* ---------- Bulk edit ---------- */
+  function updateBulkBar() {
+    const bar = $("bulk-bar") as HTMLElement;
+    bar.hidden = selected.size === 0;
+    $("bulk-n").textContent = String(selected.size);
+  }
+  $("bulk-clear").addEventListener("click", () => { selected.clear(); render(); });
+  $("bulk-selall").addEventListener("click", () => { visible().forEach((p) => selected.add(p.id)); render(); });
+
+  async function bulkSetOnline(online: boolean) {
+    const ids = [...selected];
+    if (!ids.length) return;
+    const btn = $("bulk-online") as HTMLButtonElement; const oTxt = btn.textContent; btn.disabled = true; btn.textContent = "Saving…";
+    try {
+      const j = await api({ action: "bulkSetOnline", productIds: ids, online });
+      // Reflect locally so the cards update without a reload.
+      const set = new Set(ids);
+      items.forEach((p) => { if (set.has(p.id)) p.variants.forEach((v: any) => (v.onlineVisible = online)); });
+      selected.clear();
+      render();
+      toast(`✓ ${online ? "Published" : "Unpublished"} ${j.updated ?? ids.length} variant${(j.updated ?? 1) === 1 ? "" : "s"} across ${ids.length} item${ids.length === 1 ? "" : "s"}`);
+    } catch (e: any) { alert(e.message); }
+    finally { btn.disabled = false; btn.textContent = oTxt; }
+  }
+  $("bulk-online").addEventListener("click", () => bulkSetOnline(true));
+  $("bulk-offline").addEventListener("click", () => bulkSetOnline(false));
 
   /* ---------- Edit modal ---------- */
   const modal = $("edit-modal");
