@@ -14,7 +14,7 @@ const admin = createSupabaseAdminClient();
 const { data: rows, error } = await admin
   .from("product_variants")
   .select(
-    "id, condition, completeness, price_cents, online_price_cents, quantity, product:products(id, title, slug, platform, franchise, image_url, description)",
+    "id, condition, completeness, price_cents, online_price_cents, quantity, product:products(id, title, slug, platform, franchise, image_url, description, category:categories(name))",
   )
   .eq("online_visible", true)
   .gt("quantity", 0)
@@ -26,6 +26,7 @@ const listings = (rows ?? []).map((v: any) => ({
   slug: v.product?.slug ?? "",
   platform: v.product?.platform ?? "",
   franchise: v.product?.franchise ?? "",
+  category: v.product?.category?.name ?? "",
   image: v.product?.image_url ?? null,
   description: v.product?.description ?? "",
   condition: v.condition,
@@ -33,6 +34,34 @@ const listings = (rows ?? []).map((v: any) => ({
   priceCents: v.online_price_cents ?? v.price_cents,
   quantity: v.quantity,
 }));
+
+// Storefront category nav. Each tab maps the POS taxonomy / platform / title to
+// a shopper-facing department; "data-shopcat" on each card drives client-side
+// filtering. Adjust the predicates here as the catalogue grows.
+const matchShopCat = (i: any, key: string): boolean => {
+  const t = (i.title || "").toLowerCase();
+  switch (key) {
+    case "consoles": return i.category === "Consoles";
+    case "games": return i.category === "Video Games";
+    case "accessories": return i.category === "Accessories";
+    case "collectibles": return i.category === "Collectibles";
+    case "merch": return i.category === "Toys" || i.category === "Books" || /\b(keychain|pin|poster|figure|amiibo|statue)\b/.test(t);
+    case "plushies": return /\b(plush|plushie|cushion|stuffed)\b/.test(t);
+    default: return true;
+  }
+};
+const SHOP_CATS = [
+  { key: "all", label: "All" },
+  { key: "consoles", label: "Game Consoles" },
+  { key: "games", label: "Nintendo Games" },
+  { key: "accessories", label: "Accessories" },
+  { key: "collectibles", label: "Collectibles" },
+  { key: "merch", label: "Game Merch" },
+  { key: "plushies", label: "Plushies" },
+];
+const catCount = (key: string) => (key === "all" ? listings.length : listings.filter((i) => matchShopCat(i, key)).length);
+// The shop-category keys each card belongs to (space-separated for the filter).
+const cardCats = (i: any) => SHOP_CATS.filter((c) => c.key !== "all" && matchShopCat(i, c.key)).map((c) => c.key).join(" ");
 ---
 
 <Layout
@@ -63,12 +92,26 @@ const listings = (rows ?? []).map((v: any) => ({
       )}
 
       {listings.length > 0 && (
+        <nav class="shop-cats" aria-label="Shop categories">
+          {SHOP_CATS.map((c) => catCount(c.key) > 0 && (
+            <button class="shop-cat" data-shopcat={c.key} aria-pressed={c.key === "all" ? "true" : "false"}>
+              {c.label}<span class="shop-cat-n">{catCount(c.key)}</span>
+            </button>
+          ))}
+        </nav>
+      )}
+
+      {listings.length > 0 && (
+        <Fragment>
         <div class="shop-grid">
           {listings.map((item) => (
-            <a class="shop-card" href={item.slug ? "/shop/" + item.slug : "#"}>
+            <a class="shop-card" data-shopcat={"all " + cardCats(item)} href={item.slug ? "/shop/" + item.slug : "#"}>
               <div class="shop-thumb">
                 {item.image ? (
-                  <img src={item.image} alt={item.title} loading="lazy" />
+                  <Fragment>
+                    <img class="shop-thumb-bg" src={item.image} alt="" aria-hidden="true" loading="lazy" />
+                    <img class="shop-thumb-fg" src={item.image} alt={item.title} loading="lazy" />
+                  </Fragment>
                 ) : (
                   <span class="shop-thumb-ph" aria-hidden="true">🎮</span>
                 )}
@@ -86,6 +129,8 @@ const listings = (rows ?? []).map((v: any) => ({
             </a>
           ))}
         </div>
+        <p class="shop-empty" id="shop-noresults" hidden>Nothing in this category yet.</p>
+        </Fragment>
       )}
     </div>
   </section>
@@ -99,6 +144,24 @@ const listings = (rows ?? []).map((v: any) => ({
     </div>
   </section>
 </Layout>
+
+<script>
+  // Storefront category filter — show/hide cards by their data-shopcat keys.
+  const tabs = [...document.querySelectorAll<HTMLButtonElement>(".shop-cat")];
+  const cards = [...document.querySelectorAll<HTMLElement>(".shop-card")];
+  const noResults = document.getElementById("shop-noresults");
+  tabs.forEach((tab) => tab.addEventListener("click", () => {
+    const key = tab.dataset.shopcat!;
+    tabs.forEach((t) => t.setAttribute("aria-pressed", String(t === tab)));
+    let shown = 0;
+    cards.forEach((c) => {
+      const match = key === "all" || (c.dataset.shopcat || "").split(" ").includes(key);
+      c.hidden = !match;
+      if (match) shown++;
+    });
+    if (noResults) noResults.hidden = shown > 0;
+  }));
+</script>
 
 <style>
   .shop-hero { padding-top: clamp(2.5rem, 2rem + 3vw, 4.5rem); }
@@ -122,11 +185,28 @@ const listings = (rows ?? []).map((v: any) => ({
   }
   .shop-card:hover { transform: translateY(-3px); border-color: var(--cyan); }
   .shop-thumb {
-    position: relative; aspect-ratio: 4 / 3; display: grid; place-items: center;
-    background: rgba(0, 0, 0, 0.25); overflow: hidden;
+    position: relative; aspect-ratio: 1 / 1; display: grid; place-items: center;
+    background: #0b0b14; overflow: hidden;
   }
-  .shop-thumb img { width: 100%; height: 100%; object-fit: cover; }
+  /* Blurred fill: show the WHOLE cover (contain) over a soft, scaled blur of
+     itself — no cropping, no black bars, consistent square tiles. */
+  .shop-thumb-bg {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; filter: blur(20px) brightness(0.5) saturate(1.15); transform: scale(1.2);
+  }
+  .shop-thumb-fg { position: relative; z-index: 1; width: 100%; height: 100%; object-fit: contain; }
   .shop-thumb-ph { font-size: 2.6rem; opacity: 0.5; }
+
+  /* Category nav */
+  .shop-cats { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1.4rem; }
+  .shop-cat {
+    display: inline-flex; align-items: center; gap: 0.45rem; padding: 0.5rem 0.9rem;
+    font-size: 0.9rem; font-weight: 700; color: var(--muted); background: var(--panel);
+    border: 1px solid var(--border); cursor: pointer; transition: color .15s, background .15s, border-color .15s;
+  }
+  .shop-cat:hover { color: var(--text); border-color: var(--muted); }
+  .shop-cat[aria-pressed="true"] { color: #06121a; background: var(--cyan); border-color: var(--cyan); }
+  .shop-cat-n { font-family: var(--font-mono); font-size: 0.74rem; opacity: 0.7; }
   .shop-low {
     position: absolute; top: 0.5rem; left: 0.5rem; padding: 0.2rem 0.55rem;
     background: var(--magenta); color: #fff; font-size: 0.72rem; font-weight: 800; border-radius: 999px;

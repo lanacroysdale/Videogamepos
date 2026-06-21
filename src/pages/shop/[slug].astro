@@ -115,9 +115,12 @@ const metaDesc = product?.description
           <div class="pdp-grid">
             <div class="pdp-media">
               {mainImage ? (
-                <img id="pdp-main" src={mainImage} alt={product.title} class="pdp-cover" />
+                <div class="pdp-frame">
+                  <img class="pdp-cover-bg" id="pdp-main-bg" src={mainImage} alt="" aria-hidden="true" />
+                  <img class="pdp-cover" id="pdp-main" src={mainImage} alt={product.title} />
+                </div>
               ) : (
-                <div class="pdp-cover pdp-ph" aria-hidden="true">🎮</div>
+                <div class="pdp-frame pdp-ph" aria-hidden="true">🎮</div>
               )}
               {images.length > 1 && (
                 <div class="pdp-thumbs">
@@ -191,13 +194,15 @@ const metaDesc = product?.description
 }
 
 <script>
-  // Gallery: click a thumbnail to swap the main image.
+  // Gallery: click a thumbnail to swap the main image (+ its blurred backdrop).
   const main = document.getElementById("pdp-main") as HTMLImageElement | null;
+  const mainBg = document.getElementById("pdp-main-bg") as HTMLImageElement | null;
   if (main) {
     document.querySelectorAll<HTMLButtonElement>(".pdp-thumb").forEach((btn) => {
       btn.addEventListener("click", () => {
         if (!btn.dataset.full) return;
         main.src = btn.dataset.full;
+        if (mainBg) mainBg.src = btn.dataset.full;
         document.querySelector(".pdp-thumb.active")?.classList.remove("active");
         btn.classList.add("active");
       });
@@ -211,7 +216,10 @@ const metaDesc = product?.description
   .pdp-grid { display:grid; gap:clamp(1.5rem,1rem+3vw,3rem); align-items:start; }
   @media (min-width:760px) { .pdp-grid { grid-template-columns:0.9fr 1.1fr; } }
   .pdp-media { display:flex; flex-direction:column; gap:0.7rem; }
-  .pdp-cover { width:100%; border:1px solid var(--border); background:#0b0b14; aspect-ratio:4/3; object-fit:contain; }
+  /* Blurred fill — whole cover (contain) over a soft blur of itself; no crop, no bars. */
+  .pdp-frame { position:relative; aspect-ratio:1/1; overflow:hidden; border:1px solid var(--border); background:#0b0b14; }
+  .pdp-cover-bg { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; filter:blur(26px) brightness(0.5) saturate(1.15); transform:scale(1.2); }
+  .pdp-cover { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; z-index:1; }
   .pdp-ph { display:grid; place-items:center; font-size:4rem; opacity:0.5; }
   .pdp-thumbs { display:flex; flex-wrap:wrap; gap:0.45rem; }
   .pdp-thumb { width:62px; height:62px; padding:0; border:1px solid var(--border); background:#0b0b14; cursor:pointer; overflow:hidden; transition:border-color .15s; }
