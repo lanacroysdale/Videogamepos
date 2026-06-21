@@ -1,4 +1,5 @@
 import type { APIRoute } from "astro";
+import { createSupabaseAdminClient } from "../../lib/supabase";
 
 // Runs as an on-demand serverless function (not prerendered).
 export const prerender = false;
@@ -43,16 +44,35 @@ export const POST: APIRoute = async ({ request, redirect }) => {
     return fail("Please enter a valid email address.");
   }
 
-  // Not configured at all: log the signup so it isn't lost, then report success.
-  if (!API_KEY) {
-    console.warn(
-      "[subscribe] RESEND_API_KEY not set — logging signup instead:\n" +
-        `${first} ${last} <${email}> ${phone || "—"}`,
-    );
-    return ok();
+  let captured = false;
+
+  // Capture the signup into the POS Leads inbox (staff-only) as a 'free_club'
+  // lead — the primary record. Best-effort; Resend below is optional notify/list.
+  try {
+    const admin = createSupabaseAdminClient();
+    const { error: leadErr } = await admin.from("leads").insert({
+      type: "free_club",
+      first_name: first,
+      last_name: last,
+      email,
+      phone: phone || null,
+      source: "club_form",
+    });
+    if (leadErr) console.error("[subscribe] lead insert failed:", leadErr.message);
+    else captured = true;
+  } catch (err) {
+    console.error("[subscribe] lead insert threw:", err);
   }
 
-  let captured = false;
+  // No email provider configured: the DB capture above is the record — report success.
+  if (!API_KEY) {
+    if (!captured)
+      console.warn(
+        "[subscribe] RESEND_API_KEY not set and DB capture failed — logging signup:\n" +
+          `${first} ${last} <${email}> ${phone || "—"}`,
+      );
+    return ok();
+  }
 
   // 1) Add the subscriber to the Resend Audience (mailing list), if configured.
   //    Best-effort: a bad/missing audience ID or a send-only key shouldn't break

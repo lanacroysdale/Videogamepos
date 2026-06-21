@@ -5,7 +5,7 @@ import "../styles/app.css";
 interface Props {
   title: string;
   active?:
-    | "dashboard" | "checkout" | "tradein" | "inventory" | "returns"
+    | "dashboard" | "leads" | "checkout" | "tradein" | "inventory" | "returns"
     | "repairs" | "schedule" | "customers" | "reports" | "pricing";
 }
 const { title, active } = Astro.props;
@@ -15,6 +15,7 @@ const isManager = !!profile && ["owner", "manager"].includes(profile.role);
 
 const nav = [
   { key: "dashboard", label: "Dashboard", href: "/app", icon: "🏠" },
+  { key: "leads", label: "Leads", href: "/app/leads", icon: "📥" },
   { key: "checkout", label: "Checkout", href: "/app/checkout", icon: "🧾" },
   { key: "tradein", label: "Trade-In", href: "/app/trade-in", icon: "🔁" },
   { key: "returns", label: "Returns", href: "/app/returns", icon: "↩️" },
@@ -50,6 +51,7 @@ const nav = [
               <a href={item.href} class={active === item.key ? "active" : ""}>
                 <span class="ico" aria-hidden="true">{item.icon}</span>
                 <span class="label">{item.label}</span>
+                {item.key === "leads" && <span class="nav-badge" id="leads-badge" hidden>0</span>}
               </a>
             ))
           }
@@ -57,6 +59,7 @@ const nav = [
         <div class="app-user">
           <div class="who">{profile?.full_name ?? "—"}</div>
           <div class="role">{profile?.role ?? ""}</div>
+          <button id="alerts-btn" class="btn btn-ghost btn-sm" type="button">🔔 Enable alerts</button>
           <form method="POST" action="/app/logout">
             <button class="btn btn-ghost btn-sm" type="submit">Log out</button>
           </form>
@@ -73,5 +76,84 @@ const nav = [
         </div>
       </main>
     </div>
+
+    <style>
+      .app-nav a { display: flex; align-items: center; }
+      .nav-badge {
+        margin-left: auto;
+        min-width: 1.5em;
+        padding: 0 0.45em;
+        border-radius: 999px;
+        background: var(--magenta, #ff49d0);
+        color: #fff;
+        font-size: 0.72rem;
+        font-weight: 800;
+        line-height: 1.55;
+        text-align: center;
+      }
+      #alerts-btn { margin-bottom: 0.4rem; width: 100%; }
+    </style>
+
+    <script is:inline>
+      // In-app lead alerts: poll for new leads while the POS is open, update the
+      // nav badge with the count of unworked ('new') leads, and fire a desktop
+      // notification for each lead that arrived since this browser last checked.
+      (function () {
+        var KEY = "tl_leads_seen_id";
+        var badge = document.getElementById("leads-badge");
+        var alertsBtn = document.getElementById("alerts-btn");
+        var seen = function () { return parseInt(localStorage.getItem(KEY) || "0", 10) || 0; };
+        var setSeen = function (v) { localStorage.setItem(KEY, String(v)); };
+
+        function syncBtn() {
+          if (!alertsBtn) return;
+          if (!("Notification" in window)) { alertsBtn.style.display = "none"; return; }
+          if (Notification.permission === "granted") { alertsBtn.textContent = "🔔 Alerts on"; alertsBtn.disabled = true; }
+          else if (Notification.permission === "denied") { alertsBtn.textContent = "🔕 Alerts blocked"; alertsBtn.disabled = true; }
+          else { alertsBtn.textContent = "🔔 Enable alerts"; alertsBtn.disabled = false; }
+        }
+        if (alertsBtn) {
+          syncBtn();
+          alertsBtn.addEventListener("click", function () {
+            if (!("Notification" in window)) return;
+            Notification.requestPermission().then(syncBtn);
+          });
+        }
+
+        function notify(lead) {
+          if (!("Notification" in window) || Notification.permission !== "granted") return;
+          var who = ((lead.first_name || "") + " " + (lead.last_name || "")).trim() || "Someone";
+          var kind = lead.type === "sell_request" ? "Sell request" : "Free Club signup";
+          var n = new Notification("🎮 New " + kind, { body: who, tag: "tl-lead-" + lead.human_id });
+          n.onclick = function () { window.focus(); window.location.href = "/app/leads"; n.close(); };
+        }
+
+        function paint(count) {
+          if (!badge) return;
+          if (count > 0) { badge.textContent = String(count); badge.hidden = false; }
+          else { badge.hidden = true; }
+        }
+
+        var firstRun = seen() === 0; // don't replay the whole backlog as notifications
+
+        function poll() {
+          fetch("/api/pos/leads?since=" + seen(), { headers: { "x-requested-with": "fetch" } })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (j) {
+              if (!j || !j.ok) return;
+              paint(j.newCount || 0);
+              if (j.maxId > seen()) {
+                if (!firstRun) (j.fresh || []).forEach(notify);
+                setSeen(j.maxId);
+              }
+              firstRun = false;
+            })
+            .catch(function () {});
+        }
+
+        poll();
+        setInterval(poll, 30000);
+      })();
+    </script>
   </body>
 </html>

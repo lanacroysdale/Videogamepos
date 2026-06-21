@@ -1,4 +1,5 @@
 import type { APIRoute } from "astro";
+import { createSupabaseAdminClient } from "../../lib/supabase";
 
 // Run as an on-demand Vercel serverless function (not prerendered).
 export const prerender = false;
@@ -89,6 +90,31 @@ export const POST: APIRoute = async ({ request, redirect }) => {
     attachLine = uploads.map((f) => f.name).join(", ");
   } else if (uploads.length) {
     attachLine = `${uploads.length} file(s) too large to attach (${(totalBytes / 1048576).toFixed(1)}MB) — ask the customer to email them`;
+  }
+
+  // Capture the lead into the POS database — the primary record, shown in the
+  // staff-only Leads inbox. Best-effort: a DB hiccup shouldn't lose the lead,
+  // so we still email below. Uses the service-role client (server-only).
+  const first = String(form.get("first") || "").trim();
+  const last = String(form.get("last") || "").trim();
+  const [splitFirst, ...splitRest] = name.split(/\s+/);
+  try {
+    const admin = createSupabaseAdminClient();
+    const { error: leadErr } = await admin.from("leads").insert({
+      type: "sell_request",
+      first_name: first || splitFirst || name,
+      last_name: last || splitRest.join(" "),
+      email,
+      phone: phone || null,
+      condition: condition || null,
+      items,
+      photos: photos || null,
+      source: "sell_form",
+      payload: { attachments: attachLine },
+    });
+    if (leadErr) console.error("[contact] lead insert failed:", leadErr.message);
+  } catch (err) {
+    console.error("[contact] lead insert threw:", err);
   }
 
   const rows: Array<[string, string]> = [

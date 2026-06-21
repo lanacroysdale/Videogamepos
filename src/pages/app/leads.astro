@@ -1,0 +1,154 @@
+---
+export const prerender = false;
+import AppLayout from "../../layouts/AppLayout.astro";
+
+const supabase = Astro.locals.supabase;
+const { data: leads } = await supabase
+  .from("leads")
+  .select(
+    "id, human_id, type, status, first_name, last_name, email, phone, condition, items, photos, source, customer_id, created_at",
+  )
+  .order("created_at", { ascending: false });
+
+const STATUSES = ["new", "contacted", "closed"];
+const typeLabel = (t: string) => (t === "sell_request" ? "Sell Request" : "Free Club");
+const typeClass = (t: string) => (t === "sell_request" ? "magenta" : "cyan");
+const statusClass = (s: string) => (s === "contacted" ? "cyan" : s === "closed" ? "muted" : "green");
+const fullName = (l: any) => `${l.first_name ?? ""} ${l.last_name ?? ""}`.trim() || "—";
+const when = (s: string) =>
+  new Date(s).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+---
+
+<AppLayout title="Leads" active="leads">
+  <div class="pos-panel">
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.8rem;align-items:center;">
+      <strong style="margin-right:0.3rem;">Status:</strong>
+      <button class="chip filt-status active" data-filt="">All</button>
+      {STATUSES.map((s) => <button class="chip filt-status" data-filt={s}>{s}</button>)}
+      <span style="width:1px;height:1.4rem;background:var(--border-strong);margin:0 0.3rem;"></span>
+      <strong style="margin-right:0.3rem;">Type:</strong>
+      <button class="chip filt-type active" data-filt="">All</button>
+      <button class="chip filt-type" data-filt="sell_request">Sell Request</button>
+      <button class="chip filt-type" data-filt="free_club">Free Club</button>
+    </div>
+
+    <table class="tbl">
+      <thead>
+        <tr><th>#</th><th>Type</th><th>Name</th><th>Contact</th><th>Details</th><th>Received</th><th>Status</th><th></th></tr>
+      </thead>
+      <tbody id="leads-body">
+        {(leads ?? []).map((l: any) => (
+          <tr data-status={l.status} data-type={l.type}>
+            <td>#{l.human_id}</td>
+            <td><span class={`pill ${typeClass(l.type)}`}>{typeLabel(l.type)}</span></td>
+            <td><strong>{fullName(l)}</strong></td>
+            <td>
+              {l.email ? <a href={`mailto:${l.email}`}>{l.email}</a> : "—"}
+              <span style="display:block;color:var(--muted-2);font-size:0.8rem;">{l.phone ?? ""}</span>
+            </td>
+            <td style="max-width:24rem;">
+              {l.type === "sell_request" ? (
+                <>
+                  <span style="white-space:pre-wrap;">{l.items ?? "—"}</span>
+                  {l.condition && <span style="display:block;color:var(--muted-2);font-size:0.8rem;">Condition: {l.condition}</span>}
+                  {l.photos && <span style="display:block;color:var(--muted-2);font-size:0.8rem;">Photos: {l.photos}</span>}
+                </>
+              ) : (
+                <span style="color:var(--muted-2);">Newsletter / club signup</span>
+              )}
+            </td>
+            <td style="white-space:nowrap;">{when(l.created_at)}</td>
+            <td>
+              <select data-lead={l.id} data-pill class={`pill ${statusClass(l.status)}`}>
+                {STATUSES.map((s) => <option value={s} selected={s === l.status}>{s}</option>)}
+              </select>
+            </td>
+            <td style="white-space:nowrap;">
+              {l.customer_id ? (
+                <span class="pill green" title="Customer record created">✓ Customer</span>
+              ) : (
+                <button class="btn btn-ghost btn-sm conv" data-lead={l.id}>＋ Customer</button>
+              )}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+    {(leads ?? []).length === 0 && <p class="empty">No leads yet. Submissions from the site’s “Sell your games” and “Join the Club” forms will show up here.</p>}
+  </div>
+</AppLayout>
+
+<style>
+  .chip.filt-status, .chip.filt-type { cursor:pointer; text-transform:capitalize; }
+  .chip.filt-status.active, .chip.filt-type.active { border-color:var(--cyan); color:var(--cyan); }
+  select[data-pill] { background:rgba(255,255,255,.04); }
+  .tbl td a { color:var(--cyan); }
+</style>
+
+<script>
+  const body = document.getElementById("leads-body")!;
+  let fStatus = "";
+  let fType = "";
+
+  function applyFilters() {
+    body.querySelectorAll<HTMLElement>("tr").forEach((tr) => {
+      const okS = !fStatus || tr.dataset.status === fStatus;
+      const okT = !fType || tr.dataset.type === fType;
+      tr.style.display = okS && okT ? "" : "none";
+    });
+  }
+
+  document.querySelectorAll<HTMLElement>(".chip.filt-status").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      document.querySelectorAll(".chip.filt-status").forEach((c) => c.classList.remove("active"));
+      chip.classList.add("active");
+      fStatus = chip.dataset.filt || "";
+      applyFilters();
+    });
+  });
+  document.querySelectorAll<HTMLElement>(".chip.filt-type").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      document.querySelectorAll(".chip.filt-type").forEach((c) => c.classList.remove("active"));
+      chip.classList.add("active");
+      fType = chip.dataset.filt || "";
+      applyFilters();
+    });
+  });
+
+  // Inline status change
+  document.querySelectorAll<HTMLSelectElement>("select[data-lead]").forEach((sel) => {
+    sel.addEventListener("change", async () => {
+      const id = sel.dataset.lead!;
+      const status = sel.value;
+      const r = await fetch("/api/pos/leads", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "updateStatus", id, status }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j.ok) { alert(j.error || "Failed"); return; }
+      sel.className = "pill " + (status === "contacted" ? "cyan" : status === "closed" ? "muted" : "green");
+      sel.closest("tr")!.dataset.status = status;
+      applyFilters();
+    });
+  });
+
+  // Convert a lead into a customer record
+  document.querySelectorAll<HTMLButtonElement>(".conv").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      const r = await fetch("/api/pos/leads", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "convertToCustomer", id: btn.dataset.lead }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j.ok) { alert(j.error || "Failed"); btn.disabled = false; return; }
+      const span = document.createElement("span");
+      span.className = "pill green";
+      span.title = "Customer record created";
+      span.textContent = "✓ Customer";
+      btn.replaceWith(span);
+    });
+  });
+</script>
