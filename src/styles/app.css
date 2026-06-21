@@ -168,10 +168,13 @@ td > .comp-combo { width: 100%; min-width: 7rem; }
 }
 .tile-btn:hover .cat-gem { transform: var(--tilt,) scale(1.05); }
 .gem-shine {
-  position: absolute; inset: -12%; pointer-events: none; opacity: .6; transition: opacity .2s ease;
-  background:
-    radial-gradient(circle at var(--gx, 50%) var(--gy, 30%), rgba(255, 255, 255, 1), rgba(255, 255, 255, .35) 16%, transparent 42%),
-    radial-gradient(circle at var(--gx, 50%) var(--gy, 30%), rgba(255, 255, 255, .35), transparent 60%);
+  position: absolute; inset: 0; pointer-events: none; opacity: .7; transition: opacity .2s ease;
+  background: radial-gradient(circle at var(--gx, 50%) var(--gy, 28%),
+    rgba(255, 255, 255, .95), rgba(255, 255, 255, .3) 18%, transparent 52%);
+  /* Clip the moving glint to the gem's exact silhouette — no square outline. */
+  -webkit-mask-image: var(--gem-mask); mask-image: var(--gem-mask);
+  -webkit-mask-size: 100% 100%; mask-size: 100% 100%;
+  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
   mix-blend-mode: screen;
 }
 /* All gems stay lit by the cursor (a single moving light source); brighter on the

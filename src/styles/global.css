@@ -167,27 +167,32 @@
    Sidebar accent (data-sidebar) — recolors ONLY the POS sidebar, layered on
    top of whatever palette is active. Bright fill + dark ink for legibility.
    ========================================================================= */
+/* Bright fills use near-solid dark ink for strong, legible contrast. */
 :root[data-sidebar="blue"] {
-  --sb-bg: linear-gradient(180deg, #5aa6b8, #3c8295);
-  --sb-ink: #06202a; --sb-ink-dim: rgba(6, 32, 42, 0.74); --sb-brand: #06202a;
-  --sb-hover: rgba(255, 255, 255, 0.22);
-  --sb-active-bg: rgba(255, 255, 255, 0.55); --sb-active-ink: #06202a; --sb-active-border: rgba(6, 32, 42, 0.28);
-  --sb-border: rgba(6, 32, 42, 0.22);
+  --sb-bg: linear-gradient(180deg, #5aa6b8, #38798c);
+  --sb-ink: #04161d; --sb-ink-dim: rgba(4, 22, 29, 0.96); --sb-brand: #04161d;
+  --sb-hover: rgba(255, 255, 255, 0.24);
+  --sb-active-bg: rgba(255, 255, 255, 0.62); --sb-active-ink: #04161d; --sb-active-border: rgba(4, 22, 29, 0.3);
+  --sb-border: rgba(4, 22, 29, 0.24);
 }
 :root[data-sidebar="pink"] {
-  --sb-bg: linear-gradient(180deg, #f6a8d4, #e77fbb);
-  --sb-ink: #3a0f28; --sb-ink-dim: rgba(58, 15, 40, 0.74); --sb-brand: #3a0f28;
-  --sb-hover: rgba(255, 255, 255, 0.30);
-  --sb-active-bg: rgba(255, 255, 255, 0.6); --sb-active-ink: #3a0f28; --sb-active-border: rgba(58, 15, 40, 0.25);
-  --sb-border: rgba(58, 15, 40, 0.18);
+  --sb-bg: linear-gradient(180deg, #f6a8d4, #e576b4);
+  --sb-ink: #2a0a1d; --sb-ink-dim: rgba(42, 10, 29, 0.96); --sb-brand: #2a0a1d;
+  --sb-hover: rgba(255, 255, 255, 0.32);
+  --sb-active-bg: rgba(255, 255, 255, 0.66); --sb-active-ink: #2a0a1d; --sb-active-border: rgba(42, 10, 29, 0.28);
+  --sb-border: rgba(42, 10, 29, 0.2);
 }
 :root[data-sidebar="orange"] {
-  --sb-bg: linear-gradient(180deg, #ef6a40, #cf4e29);
-  --sb-ink: #2a0d04; --sb-ink-dim: rgba(42, 13, 4, 0.74); --sb-brand: #2a0d04;
-  --sb-hover: rgba(255, 255, 255, 0.20);
-  --sb-active-bg: rgba(255, 255, 255, 0.5); --sb-active-ink: #2a0d04; --sb-active-border: rgba(42, 13, 4, 0.28);
-  --sb-border: rgba(42, 13, 4, 0.22);
+  --sb-bg: linear-gradient(180deg, #ef6a40, #cb4824);
+  --sb-ink: #1f0902; --sb-ink-dim: rgba(31, 9, 2, 0.96); --sb-brand: #1f0902;
+  --sb-hover: rgba(255, 255, 255, 0.22);
+  --sb-active-bg: rgba(255, 255, 255, 0.6); --sb-active-ink: #1f0902; --sb-active-border: rgba(31, 9, 2, 0.3);
+  --sb-border: rgba(31, 9, 2, 0.24);
 }
+/* Slightly heavier nav weight on bright sidebars for legibility. */
+:root[data-sidebar="blue"] .app-nav a,
+:root[data-sidebar="pink"] .app-nav a,
+:root[data-sidebar="orange"] .app-nav a { font-weight: 700; }
 
 /* ---------- Reset ---------- */
 *, *::before, *::after { box-sizing: border-box; }
