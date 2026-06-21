@@ -5,6 +5,7 @@ import Layout from "../../layouts/Layout.astro";
 import { SITE } from "../../consts";
 import { fmt } from "../../lib/money";
 import { createSupabaseAdminClient } from "../../lib/supabase";
+import { listGallery } from "../../lib/storage";
 
 // Product detail page — the SEO surface. Server-rendered, indexable (no
 // noindex), with a Product JSON-LD block + auto description/trailer. Currently
@@ -39,6 +40,16 @@ if (product) {
 }
 const condLabel = (v: any) =>
   [comp[v.completeness_code], grade[v.grade_code]].filter(Boolean).join(" · ") || v.condition;
+
+// Image gallery — stored as a per-product folder in Storage (eBay imports copy
+// the full set there). Falls back to the single cover image.
+const gallery = product ? await listGallery(admin, product.id) : [];
+const images = gallery.length ? gallery : product?.image_url ? [product.image_url] : [];
+const mainImage = images[0] || product?.image_url || null;
+
+// "About this game" reads wrong for consoles/accessories — label by category.
+const aboutHeading =
+  product?.genre || product?.franchise ? "About this game" : "About this item";
 
 function ytEmbed(url: string | null | undefined) {
   if (!url) return null;
@@ -96,10 +107,19 @@ const metaDesc = product?.description
           <a href="/shop" class="pdp-back">← All items</a>
           <div class="pdp-grid">
             <div class="pdp-media">
-              {product.image_url ? (
-                <img src={product.image_url} alt={product.title} class="pdp-cover" />
+              {mainImage ? (
+                <img id="pdp-main" src={mainImage} alt={product.title} class="pdp-cover" />
               ) : (
                 <div class="pdp-cover pdp-ph" aria-hidden="true">🎮</div>
+              )}
+              {images.length > 1 && (
+                <div class="pdp-thumbs">
+                  {images.map((u, i) => (
+                    <button class:list={["pdp-thumb", { active: i === 0 }]} data-full={u} aria-label={`Photo ${i + 1}`}>
+                      <img src={u} alt="" loading="lazy" />
+                    </button>
+                  ))}
+                </div>
               )}
             </div>
 
@@ -133,7 +153,7 @@ const metaDesc = product?.description
 
           {product.description && (
             <div class="pdp-section">
-              <h2>About this game</h2>
+              <h2>{aboutHeading}</h2>
               <p class="pdp-desc">{product.description}</p>
             </div>
           )}
@@ -160,13 +180,34 @@ const metaDesc = product?.description
   )
 }
 
+<script>
+  // Gallery: click a thumbnail to swap the main image.
+  const main = document.getElementById("pdp-main") as HTMLImageElement | null;
+  if (main) {
+    document.querySelectorAll<HTMLButtonElement>(".pdp-thumb").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        if (!btn.dataset.full) return;
+        main.src = btn.dataset.full;
+        document.querySelector(".pdp-thumb.active")?.classList.remove("active");
+        btn.classList.add("active");
+      });
+    });
+  }
+</script>
+
 <style>
   .pdp-back { display:inline-block; color:var(--muted); font-size:0.88rem; margin-bottom:1.2rem; }
   .pdp-back:hover { color:var(--cyan); }
   .pdp-grid { display:grid; gap:clamp(1.5rem,1rem+3vw,3rem); align-items:start; }
   @media (min-width:760px) { .pdp-grid { grid-template-columns:0.9fr 1.1fr; } }
-  .pdp-cover { width:100%; border-radius:var(--radius); border:1px solid var(--border); background:rgba(0,0,0,.25); aspect-ratio:4/3; object-fit:cover; }
+  .pdp-media { display:flex; flex-direction:column; gap:0.7rem; }
+  .pdp-cover { width:100%; border:1px solid var(--border); background:#0b0b14; aspect-ratio:4/3; object-fit:contain; }
   .pdp-ph { display:grid; place-items:center; font-size:4rem; opacity:0.5; }
+  .pdp-thumbs { display:flex; flex-wrap:wrap; gap:0.45rem; }
+  .pdp-thumb { width:62px; height:62px; padding:0; border:1px solid var(--border); background:#0b0b14; cursor:pointer; overflow:hidden; transition:border-color .15s; }
+  .pdp-thumb img { width:100%; height:100%; object-fit:cover; display:block; }
+  .pdp-thumb:hover { border-color:var(--muted); }
+  .pdp-thumb.active { border-color:var(--cyan); }
   .pdp-title { font-size:clamp(1.9rem,1.4rem+2.4vw,3rem); margin:0.5rem 0 0.7rem; text-wrap:balance; }
   .pdp-tags { display:flex; flex-wrap:wrap; gap:0.4rem; margin-bottom:1.3rem; }
   .pdp-tag { font-size:0.78rem; padding:0.15rem 0.6rem; border-radius:999px; background:rgba(255,255,255,.06); color:var(--muted); }
@@ -178,7 +219,7 @@ const metaDesc = product?.description
   .pdp-cta { display:flex; flex-wrap:wrap; gap:0.7rem; }
   .pdp-section { margin-top:2.5rem; max-width:760px; }
   .pdp-section h2 { font-size:clamp(1.3rem,1.1rem+1vw,1.8rem); margin-bottom:0.8rem; }
-  .pdp-desc { color:var(--muted); text-wrap:pretty; }
+  .pdp-desc { color:var(--muted); text-wrap:pretty; white-space:pre-line; line-height:1.65; }
   .pdp-video { position:relative; aspect-ratio:16/9; border-radius:var(--radius); overflow:hidden; border:1px solid var(--border); }
   .pdp-video iframe { position:absolute; inset:0; width:100%; height:100%; border:0; }
   .narrow { max-width:680px; margin-inline:auto; }

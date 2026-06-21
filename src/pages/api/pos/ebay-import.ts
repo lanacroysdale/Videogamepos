@@ -1,9 +1,10 @@
 import type { APIRoute } from "astro";
 import { createSupabaseAdminClient } from "../../../lib/supabase";
-import { copyImageToStorage } from "../../../lib/storage";
+import { copyImageToStorage, copyGallery } from "../../../lib/storage";
 import {
   ebayConfigured, ebaySeller, extractItemId, getItem, searchSeller, mapItem, type MappedItem,
 } from "../../../lib/ebay";
+import { syncEbayStock } from "../../../lib/ebaySync";
 
 export const prerender = false;
 const json = (d: unknown, s = 200) =>
@@ -22,10 +23,13 @@ const resolveCat = (m: Map<string, string>, name: string) =>
   m.get(name.toLowerCase()) || m.get("video games") || [...m.values()][0] || null;
 
 // Persist a mapped eBay item onto a product + variant that already exist.
-// Copies the primary photo into our storage, fills metadata, tags the eBay id.
-async function attachMedia(admin: any, productId: string, variantId: string | null, mi: MappedItem) {
+// Copies the primary photo + image gallery into our storage, fills metadata,
+// tags the eBay id. `galleryMax` caps how many gallery photos to copy.
+async function attachMedia(admin: any, productId: string, variantId: string | null, mi: MappedItem, galleryMax = 16) {
   let imageUrl: string | null = null;
   if (mi.primaryImage) imageUrl = await copyImageToStorage(admin, mi.primaryImage, "ebay");
+  // Full gallery → per-product folder (the PDP lists it; no DB column needed).
+  if (mi.images.length && galleryMax > 0) await copyGallery(admin, mi.images, productId, galleryMax);
 
   const patch: Record<string, unknown> = { tags: [`ebay:${mi.ebayItemId}`] };
   if (imageUrl) patch.image_url = imageUrl;
@@ -70,6 +74,13 @@ export const POST: APIRoute = async ({ locals, request }) => {
       return json({ ok: true, imageUrl });
     }
 
+    // -- Sync stock down from eBay (out of stock / ended → 0 on website) -----
+    if (mode === "sync") {
+      const role = locals.profile?.role ?? "";
+      if (!["owner", "manager"].includes(role)) return json({ error: "Managers only" }, 403);
+      return json({ ok: true, ...(await syncEbayStock(admin)) });
+    }
+
     // -- Bulk: import a page of the seller's store ---------------------------
     if (mode === "bulk") {
       const role = locals.profile?.role ?? "";
@@ -109,7 +120,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
             quantity: 1,
           }).select("id").single();
 
-          const imageUrl = await attachMedia(admin, prod.id, variant?.id || null, mi);
+          const imageUrl = await attachMedia(admin, prod.id, variant?.id || null, mi, 6);
           created++;
           results.push({ title: mi.title, imageUrl, priceCents: mi.priceCents });
         } catch (e: any) {

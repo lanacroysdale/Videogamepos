@@ -62,6 +62,31 @@ export function extractItemId(input: string): string | null {
 export const getItem = (legacyItemId: string) =>
   ebayGet(`/item/get_item_by_legacy_id?legacy_item_id=${encodeURIComponent(legacyItemId)}`);
 
+// ---- availability (for stock sync) -----------------------------------------
+// 404 = listing ended/sold; OUT_OF_STOCK / qty 0 = out of stock. A transient
+// error returns "error" so callers can SKIP rather than wrongly zero stock.
+export async function checkAvailability(
+  legacyItemId: string,
+): Promise<{ status: "in_stock" | "out_of_stock" | "ended" | "error"; quantity: number; priceCents?: number }> {
+  try {
+    const token = await appToken();
+    const res = await fetch(`${API}/item/get_item_by_legacy_id?legacy_item_id=${encodeURIComponent(legacyItemId)}`, {
+      headers: { authorization: `Bearer ${token}`, "X-EBAY-C-MARKETPLACE-ID": MARKETPLACE },
+    });
+    if (res.status === 404) return { status: "ended", quantity: 0 };
+    if (!res.ok) return { status: "error", quantity: 0 };
+    const item = await res.json();
+    const av = item.estimatedAvailabilities?.[0];
+    const qty = av?.estimatedAvailableQuantity ?? av?.estimatedRemainingQuantity ?? null;
+    const priceCents = Math.round(parseFloat(item.price?.value || "0") * 100) || undefined;
+    if (av?.estimatedAvailabilityStatus === "OUT_OF_STOCK" || qty === 0)
+      return { status: "out_of_stock", quantity: 0, priceCents };
+    return { status: "in_stock", quantity: qty ?? 1, priceCents };
+  } catch {
+    return { status: "error", quantity: 0 };
+  }
+}
+
 // ---- seller's store (bulk) — paginated summaries ---------------------------
 export async function searchSeller(
   username: string,
@@ -85,6 +110,21 @@ export async function searchSeller(
 const strip = (s: string) =>
   String(s || "").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&")
     .replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, " ").trim();
+
+// Turn eBay's HTML description into readable plain text, preserving paragraph
+// and list breaks (block tags → newlines) so it renders cleanly on the PDP.
+function htmlToText(html: string): string {
+  return String(html || "")
+    .replace(/<\s*li[^>]*>/gi, "\n• ")
+    .replace(/<\s*\/?(br|p|div|h[1-6]|tr|ul|ol)[^>]*>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/&#0?39;|&apos;/gi, "'")
+    .replace(/&quot;/gi, '"').replace(/&lt;/gi, "<").replace(/&gt;/gi, ">")
+    .replace(/[ \t]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
 
 function aspectDict(item: any): Record<string, string> {
   const d: Record<string, string> = {};
@@ -158,7 +198,7 @@ export function mapItem(item: any): MappedItem {
     item.image?.imageUrl,
     ...(item.additionalImages || []).map((i: any) => i?.imageUrl),
   ].filter(Boolean).filter((u, i, a) => a.indexOf(u) === i).slice(0, 24);
-  const desc = strip(item.shortDescription || "") || strip(item.description || "");
+  const desc = htmlToText(item.description || "") || strip(item.shortDescription || "");
 
   return {
     ebayItemId: String(item.legacyItemId || item.itemId || ""),
@@ -175,7 +215,7 @@ export function mapItem(item: any): MappedItem {
     completenessCode: deriveCompleteness(title, aspects, conditionId),
     gradeCode: deriveGrade(conditionId),
     categoryName: mapCategoryName(item),
-    description: desc.slice(0, 800),
+    description: desc.slice(0, 3000),
     primaryImage: item.image?.imageUrl || images[0] || null,
     images,
     aspects,

@@ -62,6 +62,7 @@ const posData = {
 <AppLayout title="Inventory" active="inventory">
   <div slot="actions" style="display:flex;gap:0.5rem;">
     {isManager && <button id="ebay-bulk" class="btn btn-ghost btn-sm" title="Import your eBay store listings as draft products (skips ones already imported)">🛒 Import eBay store</button>}
+    {isManager && <button id="ebay-sync" class="btn btn-ghost btn-sm" title="Check eBay for ended / out-of-stock listings and zero them on the website (never raises local stock)">🔁 Sync eBay stock</button>}
     {isManager && <button id="resync-img" class="btn btn-ghost btn-sm" title="Fetch covers for items with no image (only fills empties)">🔄 Resync images</button>}
     <button id="toggle-add" class="btn btn-primary btn-sm">＋ Add product</button>
   </div>
@@ -810,6 +811,19 @@ const posData = {
       const note = $("np-ebay-note") as HTMLElement; note.hidden = false;
       note.innerHTML = `${it.primaryImage ? `<img src="${it.primaryImage}" alt="" style="width:46px;height:46px;object-fit:cover;border:1px solid var(--line);">` : ""}<div><strong>✓ Pulled from eBay</strong> · ${it.conditionLabel || "—"} · ${it.images.length} photo(s)${it.upc ? " · UPC " + it.upc : ""}<br><span style="color:var(--muted-2);">${it.title.slice(0, 72)}</span></div>`;
       toast("✓ Filled from eBay — review & Save");
+    } catch (e: any) { alert(e.message); } finally { btn.disabled = false; btn.textContent = o; }
+  });
+
+  // Manager-only: pull stock down from eBay — listings that ended or sold out
+  // on eBay get zeroed + hidden on the website. Never raises local stock.
+  document.getElementById("ebay-sync")?.addEventListener("click", async () => {
+    const btn = document.getElementById("ebay-sync") as HTMLButtonElement; btn.disabled = true; const o = btn.textContent; btn.textContent = "Syncing…";
+    try {
+      const r = await fetch("/api/pos/ebay-import", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode: "sync" }) });
+      const j = await r.json();
+      if (!r.ok || !j.ok) throw new Error(j.error || "Sync failed");
+      toast(`✓ eBay sync — ${j.checked} checked · ${j.zeroed} sold/out → zeroed · ${j.inStock} in stock${j.errors ? ` · ${j.errors} skipped` : ""}`);
+      if (j.zeroed) setTimeout(() => location.reload(), 1700);
     } catch (e: any) { alert(e.message); } finally { btn.disabled = false; btn.textContent = o; }
   });
 
