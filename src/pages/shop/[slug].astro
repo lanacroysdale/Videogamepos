@@ -37,8 +37,6 @@ if (product) {
   (cl ?? []).forEach((c: any) => (comp[c.code] = c.label));
   (cg ?? []).forEach((g: any) => (grade[g.code] = (g.icon ? g.icon + " " : "") + g.label));
 }
-const condLabel = (v: any) =>
-  [comp[v.completeness_code], grade[v.grade_code]].filter(Boolean).join(" · ") || v.condition;
 
 // Image gallery (per-product Storage folder; falls back to the cover).
 const gallery = product ? await listGallery(admin, product.id) : [];
@@ -73,6 +71,12 @@ const refurbCond =
 
 const isElectronic = ["Consoles", "Accessories", "Video Games"].includes(categoryName);
 const isRefurb = !!refurbCond;
+const titleLong = (product?.title?.length ?? 0) > 52;
+
+// Completeness and grade are SEPARATE axes — show them as distinct fields.
+const primaryV = variants[0] || (product?.product_variants ?? [])[0];
+const compStr = primaryV ? comp[primaryV.completeness_code] : null;
+const gradeStr = primaryV ? grade[primaryV.grade_code] : null;
 
 // LaunchBox-style details (only the fields we actually have).
 const details: [string, any][] = product
@@ -84,7 +88,9 @@ const details: [string, any][] = product
       ["Franchise", product.franchise],
       ["Category", categoryName],
       ["UPC", upc],
-      ["Condition", refurbCond || variants[0]?.condition],
+      ["Completeness", compStr],
+      ["Grade", gradeStr],
+      ...(!compStr && !gradeStr ? ([["Condition", refurbCond || primaryV?.condition]] as [string, any][]) : []),
       ["Also known as", (product.alternative_names ?? []).join(", ")],
     ].filter(([, v]) => v != null && String(v).trim() !== "") as [string, any][])
   : [];
@@ -153,20 +159,25 @@ const metaDesc = product?.description
               ) : (
                 <div class="pdp-frame pdp-ph" aria-hidden="true">🎮</div>
               )}
-              {images.length > 1 && (
+              {(images.length > 1 || ebayUrl) && (
                 <div class="pdp-strip" id="pdp-strip">
                   {images.map((u, i) => (
                     <button class:list={["pdp-thumb", { active: i === 0 }]} data-full={u} aria-label={"Photo " + (i + 1)} type="button">
                       <img src={u} alt="" loading="lazy" />
                     </button>
                   ))}
+                  {ebayUrl && (
+                    <a class="pdp-thumb pdp-thumb-more" href={ebayUrl} target="_blank" rel="noopener noreferrer" aria-label="View more images on eBay">
+                      <span>＋ More<br />on eBay</span>
+                    </a>
+                  )}
                 </div>
               )}
             </div>
 
             <div class="pdp-info">
               {refurbCond && <span class="pdp-refurb">✓ {refurbCond}</span>}
-              <h1 class="pdp-title">{product.title}</h1>
+              <h1 class:list={["pdp-title", { "pdp-title--long": titleLong }]}>{product.title}</h1>
 
               {lowest != null && (
                 <div class="pdp-priceblock">
@@ -179,7 +190,6 @@ const metaDesc = product?.description
               <div class="pdp-buybox">
                 <a href={SITE.phoneHref} class="btn btn-primary pdp-buy">Reserve this item</a>
                 <div class="pdp-cta">
-                  {ebayUrl && <a href={ebayUrl} target="_blank" rel="noopener noreferrer" class="btn btn-ghost">View on eBay ↗</a>}
                   <a href="/#journey" class="btn btn-ghost">Visit us in {SITE.location}</a>
                 </div>
               </div>
@@ -188,7 +198,11 @@ const metaDesc = product?.description
                 <div class="pdp-prices">
                   {variants.map((v) => (
                     <div class="pdp-price-row">
-                      <span class="pdp-cond">{condLabel(v)}</span>
+                      <span class="pdp-cond">
+                        {comp[v.completeness_code] && <span class="pdp-comp">{comp[v.completeness_code]}</span>}
+                        {grade[v.grade_code] && <span class="pdp-grade">{grade[v.grade_code]}</span>}
+                        {!comp[v.completeness_code] && !grade[v.grade_code] && <span class="pdp-comp">{v.condition}</span>}
+                      </span>
                       <span class="pdp-price">{fmt(v.displayCents)}</span>
                       <span class="pdp-stock">{v.quantity <= 3 ? "Only " + v.quantity + " left" : "In stock"}</span>
                     </div>
@@ -259,8 +273,10 @@ const metaDesc = product?.description
 
 <script>
   // Image carousel — click a thumb, use the ‹ › buttons, or the arrow keys.
+  // The ‹ › / counter stay hidden until the shopper navigates (clean hero).
   const main = document.getElementById("pdp-main") as HTMLImageElement | null;
-  const thumbs = [...document.querySelectorAll<HTMLButtonElement>(".pdp-thumb")];
+  const frame = document.querySelector(".pdp-frame");
+  const thumbs = [...document.querySelectorAll<HTMLButtonElement>("button.pdp-thumb")];
   const countEl = document.getElementById("pdp-count");
   let idx = 0;
   function show(i: number) {
@@ -271,6 +287,7 @@ const metaDesc = product?.description
     thumbs.forEach((x) => x.classList.remove("active"));
     t.classList.add("active");
     if (countEl) countEl.textContent = `${idx + 1} / ${thumbs.length}`;
+    frame?.classList.add("nav-on");
     t.scrollIntoView({ inline: "center", block: "nearest", behavior: "smooth" });
   }
   thumbs.forEach((t, i) => t.addEventListener("click", () => show(i)));
@@ -313,18 +330,22 @@ const metaDesc = product?.description
     .pdp-media { max-width:none; margin-inline:0; position:sticky; top:1.5rem; }
   }
 
-  /* Main image — blends onto the page card; no blur, padded so edges show. */
-  .pdp-frame { position:relative; aspect-ratio:1/1; overflow:hidden; border:1px solid var(--border); background:var(--panel); }
-  .pdp-cover { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; padding:1rem; box-sizing:border-box; }
+  /* Main image — blends onto the panel exactly like the shop tiles; no blur,
+     no frame border, padded so the cover floats with a little room. */
+  .pdp-frame { position:relative; aspect-ratio:1/1; overflow:hidden; background:var(--panel); }
+  .pdp-cover { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; padding:0.85rem; box-sizing:border-box; }
   .pdp-ph { display:grid; place-items:center; font-size:4rem; opacity:0.5; }
+  /* ‹ › appear only on hover; the counter only after the shopper navigates. */
   .pdp-nav {
-    position:absolute; top:50%; transform:translateY(-50%); z-index:2; width:2.4rem; height:2.4rem;
-    display:grid; place-items:center; font-size:1.5rem; line-height:1; color:var(--text);
-    background:rgba(10,10,18,.62); border:1px solid var(--border); cursor:pointer; transition:background .15s;
+    position:absolute; top:50%; transform:translateY(-50%); z-index:2; width:2rem; height:2.6rem;
+    display:grid; place-items:center; font-size:1.3rem; line-height:1; color:#fff;
+    background:rgba(10,10,18,.4); border:none; cursor:pointer; opacity:0; transition:opacity .2s, background .15s;
   }
-  .pdp-nav:hover { background:rgba(10,10,18,.9); border-color:var(--cyan); }
-  .pdp-prev { left:0.5rem; } .pdp-next { right:0.5rem; }
-  .pdp-count { position:absolute; bottom:0.5rem; right:0.5rem; z-index:2; padding:0.15rem 0.5rem; font-size:0.72rem; font-family:var(--font-mono); color:#fff; background:rgba(10,10,18,.7); }
+  .pdp-frame:hover .pdp-nav, .pdp-frame:focus-within .pdp-nav { opacity:0.8; }
+  .pdp-nav:hover { background:rgba(10,10,18,.78); opacity:1; }
+  .pdp-prev { left:0; } .pdp-next { right:0; }
+  .pdp-count { position:absolute; bottom:0.5rem; right:0.5rem; z-index:2; padding:0.1rem 0.45rem; font-size:0.68rem; font-family:var(--font-mono); color:#fff; background:rgba(10,10,18,.5); opacity:0; transition:opacity .2s; }
+  .pdp-frame.nav-on .pdp-count { opacity:0.7; }
 
   /* Thumbnail strip — one scrollable row. */
   .pdp-strip { display:flex; gap:0.45rem; overflow-x:auto; padding-bottom:0.25rem; scrollbar-width:thin; }
@@ -332,9 +353,12 @@ const metaDesc = product?.description
   .pdp-thumb img { width:100%; height:100%; object-fit:cover; display:block; }
   .pdp-thumb:hover { border-color:var(--muted); }
   .pdp-thumb.active { border-color:var(--cyan); }
+  .pdp-thumb-more { display:grid; place-items:center; text-align:center; font-size:0.6rem; font-weight:800; line-height:1.15; color:var(--cyan); text-decoration:none; }
+  .pdp-thumb-more:hover { border-color:var(--cyan); }
 
   .pdp-refurb { display:inline-block; margin-bottom:0.5rem; padding:0.2rem 0.6rem; font-size:0.76rem; font-weight:800; letter-spacing:0.02em; text-transform:uppercase; color:#06121a; background:var(--cyan); }
   .pdp-title { font-size:clamp(1.7rem,1.3rem+2vw,2.7rem); margin:0 0 0.6rem; line-height:1.1; text-wrap:balance; }
+  .pdp-title--long { font-size:clamp(1.35rem,1.05rem+1.5vw,2rem); }
 
   .pdp-priceblock { display:flex; align-items:baseline; gap:0.6rem; margin-bottom:1.1rem; flex-wrap:wrap; }
   .pdp-pricefrom { color:var(--muted-2); font-size:0.85rem; }
@@ -348,7 +372,9 @@ const metaDesc = product?.description
 
   .pdp-prices { display:grid; gap:0.45rem; margin-bottom:1.3rem; }
   .pdp-price-row { display:flex; align-items:baseline; gap:0.8rem; padding:0.55rem 0.85rem; border:1px solid var(--border); background:rgba(255,255,255,.02); }
-  .pdp-cond { font-weight:600; font-size:0.9rem; }
+  .pdp-cond { display:inline-flex; align-items:baseline; gap:0.5rem; font-size:0.9rem; }
+  .pdp-comp { font-weight:700; }
+  .pdp-grade { color:var(--muted); font-weight:600; }
   .pdp-price { margin-left:auto; font-family:var(--font-mono); font-weight:800; }
   .pdp-stock { color:var(--green); font-size:0.74rem; font-weight:700; }
 
