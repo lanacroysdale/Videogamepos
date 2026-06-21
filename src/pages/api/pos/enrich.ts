@@ -56,12 +56,14 @@ export const POST: APIRoute = async ({ locals, request }) => {
       .maybeSingle());
   }
 
-  const needImage = !b.productId || !cur?.image_url;
+  // With { force:true } we re-pull the cover even if one already exists (used to
+  // refresh game covers to the 3D art); otherwise fill-empty-only (resync-safe).
+  const needImage = !b.productId || !cur?.image_url || b.force;
   const imageUrl = coverUrl && needImage ? await intoStorage(admin, coverUrl) : null;
 
   if (b.productId) {
     const patch: Record<string, unknown> = {};
-    if (imageUrl && !cur?.image_url) patch.image_url = imageUrl;
+    if (imageUrl && (b.force || !cur?.image_url)) patch.image_url = imageUrl;
     if (meta?.summary && !cur?.description) patch.description = meta.summary;
     if (meta?.releaseYear && !cur?.release_year) patch.release_year = meta.releaseYear;
     if (meta?.trailerUrl && !cur?.trailer_url) patch.trailer_url = meta.trailerUrl;
