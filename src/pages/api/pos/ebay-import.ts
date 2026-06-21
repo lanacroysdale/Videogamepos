@@ -2,7 +2,7 @@ import type { APIRoute } from "astro";
 import { createSupabaseAdminClient } from "../../../lib/supabase";
 import { copyImageToStorage, copyGallery } from "../../../lib/storage";
 import {
-  ebayConfigured, ebaySeller, extractItemId, getItem, searchSeller, mapItem, type MappedItem,
+  ebayConfigured, ebaySeller, extractItemId, getItem, listSellerItems, mapItem, type MappedItem,
 } from "../../../lib/ebay";
 import { syncEbayStock } from "../../../lib/ebaySync";
 
@@ -48,6 +48,33 @@ async function attachMedia(admin: any, productId: string, variantId: string | nu
   return imageUrl;
 }
 
+// Import a single eBay listing as a product + variant (with media). Skips if
+// already imported (tagged). Used by both the single-id path and bulk.
+async function importOne(admin: any, cats: Map<string, string>, legacyId: string, galleryMax: number) {
+  const { data: existing } = await admin.from("products")
+    .select("id").contains("tags", [`ebay:${legacyId}`]).maybeSingle();
+  if (existing) return { skipped: true as const };
+
+  const mi = mapItem(await getItem(legacyId));
+  const slug = `${slugify(mi.title)}-${mi.ebayItemId.slice(-5)}`;
+  const { data: prod, error: pErr } = await admin.from("products").insert({
+    title: mi.title, platform: mi.platform || null, category_id: resolveCat(cats, mi.categoryName), slug,
+  }).select("id").single();
+  if (pErr) throw new Error(pErr.message);
+
+  const { data: variant } = await admin.from("product_variants").insert({
+    product_id: prod.id,
+    condition: mi.conditionLabel || "Used",
+    completeness_code: mi.completenessCode || null,
+    grade_code: mi.gradeCode || null,
+    price_cents: mi.priceCents,
+    quantity: 1,
+  }).select("id").single();
+
+  const imageUrl = await attachMedia(admin, prod.id, variant?.id || null, mi, galleryMax);
+  return { created: true as const, title: mi.title, imageUrl, priceCents: mi.priceCents };
+}
+
 export const POST: APIRoute = async ({ locals, request }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
   if (!ebayConfigured()) return json({ error: "eBay API keys not configured on the server" }, 400);
@@ -81,55 +108,34 @@ export const POST: APIRoute = async ({ locals, request }) => {
       return json({ ok: true, ...(await syncEbayStock(admin)) });
     }
 
-    // -- Bulk: import a page of the seller's store ---------------------------
-    if (mode === "bulk") {
+    // -- Bulk step 1: enumerate the WHOLE store (all categories) -------------
+    // Returns the list of not-yet-imported item ids; the client then imports
+    // them one at a time via "bulk-item" (so hundreds never time out).
+    if (mode === "bulk-list") {
       const role = locals.profile?.role ?? "";
       if (!["owner", "manager"].includes(role)) return json({ error: "Managers only" }, 403);
       const seller = ebaySeller();
       if (!seller) return json({ error: "EBAY_SELLER not set" }, 400);
 
-      const limit = Math.min(12, Math.max(1, Number(b.limit) || 8));
-      const offset = Math.max(0, Number(b.offset) || 0);
-      const { items: summaries, total } = await searchSeller(seller, { limit, offset });
+      const all = await listSellerItems(seller);
+      // Drop ids we've already imported (tagged ebay:<id>).
+      const { data: tagged } = await admin.from("products").select("tags").not("tags", "is", null);
+      const have = new Set<string>();
+      for (const p of tagged || [])
+        for (const t of p.tags || []) if (String(t).startsWith("ebay:")) have.add(String(t).slice(5));
+      const todo = all.filter((i) => !have.has(i.legacyItemId));
+      return json({ ok: true, total: all.length, alreadyImported: all.length - todo.length, items: todo });
+    }
+
+    // -- Bulk step 2: import ONE listing ------------------------------------
+    if (mode === "bulk-item") {
+      const role = locals.profile?.role ?? "";
+      if (!["owner", "manager"].includes(role)) return json({ error: "Managers only" }, 403);
+      const legacyId = String(b.legacyItemId || extractItemId(b.input || "") || "");
+      if (!legacyId) return json({ error: "legacyItemId required" }, 400);
       const cats = await categoryMap(admin);
-
-      const results: any[] = [];
-      let created = 0, skipped = 0;
-      // Sequential keeps eBay + storage gentle and ordering predictable.
-      for (const s of summaries) {
-        const legacyId = String(s.legacyItemId || "");
-        try {
-          // Skip anything already imported (tagged with its eBay id).
-          const { data: existing } = await admin.from("products")
-            .select("id").contains("tags", [`ebay:${legacyId}`]).maybeSingle();
-          if (existing) { skipped++; results.push({ title: s.title, skipped: true }); continue; }
-
-          const mi = mapItem(await getItem(legacyId));
-          const slug = `${slugify(mi.title)}-${mi.ebayItemId.slice(-5)}`;
-          const { data: prod, error: pErr } = await admin.from("products").insert({
-            title: mi.title, platform: mi.platform || null, category_id: resolveCat(cats, mi.categoryName), slug,
-          }).select("id").single();
-          if (pErr) throw new Error(pErr.message);
-
-          const { data: variant } = await admin.from("product_variants").insert({
-            product_id: prod.id,
-            condition: mi.conditionLabel || "Used",
-            completeness_code: mi.completenessCode || null,
-            grade_code: mi.gradeCode || null,
-            price_cents: mi.priceCents,
-            quantity: 1,
-          }).select("id").single();
-
-          const imageUrl = await attachMedia(admin, prod.id, variant?.id || null, mi, 6);
-          created++;
-          results.push({ title: mi.title, imageUrl, priceCents: mi.priceCents });
-        } catch (e: any) {
-          results.push({ title: s.title, error: e.message });
-        }
-      }
-
-      const nextOffset = offset + summaries.length;
-      return json({ ok: true, total, processed: summaries.length, created, skipped, results, nextOffset: nextOffset < total ? nextOffset : null });
+      const r = await importOne(admin, cats, legacyId, Math.max(0, Number(b.galleryMax ?? 5)));
+      return json({ ok: true, ...r });
     }
 
     return json({ error: "Unknown mode" }, 400);

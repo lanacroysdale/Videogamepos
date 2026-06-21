@@ -9,9 +9,6 @@
 const TOKEN_URL = "https://api.ebay.com/identity/v1/oauth2/token";
 const API = "https://api.ebay.com/buy/browse/v1";
 const MARKETPLACE = "EBAY_US";
-// Top-level "Video Games & Consoles" meta-category — captures a game store's
-// whole catalogue (games, consoles, accessories) for bulk import.
-const VIDEO_GAMES_CAT = "1249";
 
 export const ebayConfigured = () =>
   !!(import.meta.env.EBAY_CLIENT_ID && import.meta.env.EBAY_CLIENT_SECRET);
@@ -87,21 +84,58 @@ export async function checkAvailability(
   }
 }
 
-// ---- seller's store (bulk) — paginated summaries ---------------------------
-export async function searchSeller(
-  username: string,
-  { limit = 50, offset = 0 }: { limit?: number; offset?: number } = {},
-): Promise<{ items: any[]; total: number }> {
+// The Browse API can't list a seller's items across ALL categories in one call
+// (and the legacy Finding API that could is decommissioned), so we sweep the
+// top-level categories a game/collectibles store actually uses and union the
+// results. Add more ids here if the store lists in other departments.
+const STORE_CATEGORIES = [
+  "1249",   // Video Games & Consoles
+  "1",      // Collectibles
+  "220",    // Toys & Hobbies
+  "261328", // Trading Cards
+  "267",    // Books & Magazines
+  "11232",  // Movies & TV
+  "11233",  // Music
+  "293",    // Consumer Electronics
+  "58058",  // Computers/Tablets & Networking
+  "172008", // Gift Cards & Coupons
+];
+
+// One page of one category for a seller.
+async function sellerPage(username: string, category: string, offset: number) {
   const p = new URLSearchParams({
-    category_ids: VIDEO_GAMES_CAT,
+    category_ids: category,
     filter: `sellers:{${username}}`,
-    limit: String(Math.min(200, limit)),
+    limit: "200",
     offset: String(offset),
   });
   const j = await ebayGet(`/item_summary/search?${p.toString()}`);
   if ((j.warnings || []).some((w: any) => /username/i.test(w?.message || "")))
     throw new Error(`eBay doesn't recognise seller "${username}"`);
-  return { items: j.itemSummaries || [], total: j.total || 0 };
+  return { items: (j.itemSummaries || []) as any[], total: (j.total || 0) as number };
+}
+
+// Enumerate a seller's ENTIRE active store (all categories), deduped. Returns
+// lightweight summaries — call getItem(id) per row to fetch full detail.
+export async function listSellerItems(
+  username: string,
+): Promise<{ legacyItemId: string; title: string }[]> {
+  const seen = new Map<string, string>(); // id -> title (dedupes cross-listed)
+  for (const cat of STORE_CATEGORIES) {
+    let offset = 0;
+    for (let page = 0; page < 60; page++) {
+      let res;
+      try { res = await sellerPage(username, cat, offset); }
+      catch (e: any) { if (/recognise seller/.test(e.message)) throw e; break; }
+      for (const it of res.items) {
+        const id = String(it.legacyItemId || "");
+        if (id && !seen.has(id)) seen.set(id, it.title || "");
+      }
+      offset += res.items.length;
+      if (!res.items.length || offset >= res.total) break;
+    }
+  }
+  return [...seen.entries()].map(([legacyItemId, title]) => ({ legacyItemId, title }));
 }
 
 // ===========================================================================

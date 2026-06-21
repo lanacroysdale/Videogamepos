@@ -827,23 +827,36 @@ const posData = {
     } catch (e: any) { alert(e.message); } finally { btn.disabled = false; btn.textContent = o; }
   });
 
-  // Manager-only: import the whole eBay store as draft products, a page at a
-  // time. Skips listings already imported; never overwrites existing products.
+  // Manager-only: import the WHOLE eBay store (all categories) as draft
+  // products. Two phases: scan the store for item ids, then import each one
+  // (a few at a time, with live progress). Skips already-imported listings;
+  // safe to re-run — it resumes where it left off.
   document.getElementById("ebay-bulk")?.addEventListener("click", async () => {
-    if (!confirm("Import your eBay store listings as draft products?\n\nAlready-imported listings are skipped and nothing existing is overwritten. You can edit prices/conditions afterward.")) return;
+    if (!confirm("Import your ENTIRE eBay store (all categories) as draft products?\n\nA large store can take several minutes — keep this tab open; the button shows progress. Already-imported listings are skipped and nothing existing is overwritten.")) return;
     const btn = document.getElementById("ebay-bulk") as HTMLButtonElement; btn.disabled = true; const o = btn.textContent;
-    let offset = 0, created = 0, skipped = 0, total = 0, guard = 0;
     try {
-      do {
-        const r = await fetch("/api/pos/ebay-import", { method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ mode: "bulk", offset, limit: 8 }) });
-        const j = await r.json();
-        if (!r.ok || !j.ok) throw new Error(j.error || "Bulk import failed");
-        created += j.created; skipped += j.skipped; total = j.total; offset = j.nextOffset;
-        btn.textContent = `Importing ${created + skipped}/${total}…`;
-      } while (offset != null && ++guard < 60);
-      toast(`✓ eBay import complete — ${created} added, ${skipped} already present`);
-      setTimeout(() => location.reload(), 1400);
+      btn.textContent = "Scanning store…";
+      const lr = await fetch("/api/pos/ebay-import", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode: "bulk-list" }) });
+      const lj = await lr.json();
+      if (!lr.ok || !lj.ok) throw new Error(lj.error || "Couldn't scan your store");
+      const todo: { legacyItemId: string }[] = lj.items || [];
+      if (!todo.length) { toast(`✓ All ${lj.total} listings already imported`); btn.disabled = false; btn.textContent = o; return; }
+
+      let done = 0, created = 0, failed = 0;
+      const CONC = 4;
+      for (let i = 0; i < todo.length; i += CONC) {
+        await Promise.all(todo.slice(i, i + CONC).map(async (it) => {
+          try {
+            const r = await fetch("/api/pos/ebay-import", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode: "bulk-item", legacyItemId: it.legacyItemId }) });
+            const j = await r.json();
+            if (r.ok && j.ok && j.created) created++; else if (!j.ok) failed++;
+          } catch { failed++; }
+          done++;
+        }));
+        btn.textContent = `Importing ${done}/${todo.length}…`;
+      }
+      toast(`✓ eBay import done — ${created} added${failed ? `, ${failed} failed` : ""} · ${lj.alreadyImported} already present (of ${lj.total} total)`);
+      setTimeout(() => location.reload(), 2000);
     } catch (e: any) { alert(e.message); btn.disabled = false; btn.textContent = o; }
   });
 
