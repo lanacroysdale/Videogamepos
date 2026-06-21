@@ -86,7 +86,10 @@
 /* ---------- Generic POS pieces ---------- */
 .pos-grid { display: grid; gap: 1rem; }
 @media (min-width: 720px) { .pos-grid.two { grid-template-columns: 1fr 1fr; } }
-@media (min-width: 960px) { .pos-grid.cards { grid-template-columns: repeat(4, 1fr); } }
+/* Compact stat cards: 2-up on phones, 4-up from tablet — never full-width stacks. */
+.pos-grid.cards { grid-template-columns: repeat(2, 1fr); gap: 0.7rem; }
+@media (min-width: 640px) { .pos-grid.cards { grid-template-columns: repeat(4, 1fr); } }
+.pos-grid.cards .stat { padding: 0.8rem 1rem; }
 
 .pos-panel {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent);
@@ -97,9 +100,9 @@
 .pos-panel h2 { font-size: 1.05rem; margin-bottom: 0.85rem; }
 .pos-panel .sub { color: var(--muted-2); font-size: 0.82rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; }
 
-.stat { display: flex; flex-direction: column; gap: 0.2rem; }
-.stat .n { font-size: 1.8rem; font-weight: 800; letter-spacing: -0.02em; }
-.stat .l { color: var(--muted); font-size: 0.85rem; }
+.stat { display: flex; flex-direction: column; gap: 0.15rem; }
+.stat .n { font-size: 1.5rem; font-weight: 800; letter-spacing: -0.02em; line-height: 1.1; }
+.stat .l { color: var(--muted); font-size: 0.78rem; }
 
 .btn-sm { padding: 0.5rem 0.85rem; font-size: 0.85rem; }
 

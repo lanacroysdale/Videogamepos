@@ -2,12 +2,14 @@
 export const prerender = false;
 
 import AppLayout from "../../layouts/AppLayout.astro";
-import { lowStockSettings } from "../../lib/lowStock";
+import { lowStockSettings, freeShipSettings } from "../../lib/lowStock";
 
 const supabase = Astro.locals.supabase;
 const { data: row } = await supabase.from("store_settings").select("settings").eq("id", 1).maybeSingle();
 const ls = lowStockSettings(row?.settings);
+const fs = freeShipSettings(row?.settings);
 const minPriceDollars = (ls.lowStockMinPriceCents / 100).toFixed(2);
+const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
 ---
 
 <AppLayout title="Settings" active="settings">
@@ -37,11 +39,37 @@ const minPriceDollars = (ls.lowStockMinPriceCents / 100).toFixed(2);
       <span class="set-money">$<input type="number" id="ls-minprice" min="0" step="1" value={minPriceDollars} /></span>
     </label>
 
+    <label class="set-row set-toggle">
+      <input type="checkbox" id="ls-hover" checked={ls.lowStockHoverOnly} />
+      <span><strong>Reveal on hover only</strong><br />
+        <span class="muted">Hide the badge until the shopper hovers the item (less cluttered).</span></span>
+    </label>
+
     <p class="set-preview" id="ls-preview"></p>
 
     <div class="set-actions">
       <button id="set-save" class="btn btn-primary">Save settings</button>
       <span id="set-status" class="muted"></span>
+    </div>
+  </div>
+
+  <div class="pos-panel set-panel" style="margin-top:1.25rem;">
+    <h2>Free shipping banner</h2>
+    <p class="muted set-desc">A banner at the top of the shop promoting free shipping over a threshold.</p>
+
+    <label class="set-row set-toggle">
+      <input type="checkbox" id="fs-enabled" checked={fs.freeShipEnabled} />
+      <span><strong>Show the free-shipping banner</strong></span>
+    </label>
+
+    <label class="set-row">
+      <span><strong>Free shipping on orders over</strong></span>
+      <span class="set-money">$<input type="number" id="fs-threshold" min="0" step="5" value={freeShipDollars} /></span>
+    </label>
+
+    <div class="set-actions">
+      <button id="fs-save" class="btn btn-primary">Save banner</button>
+      <span id="fs-status" class="muted"></span>
     </div>
   </div>
 </AppLayout>
@@ -60,37 +88,39 @@ const minPriceDollars = (ls.lowStockMinPriceCents / 100).toFixed(2);
 
 <script>
   const $ = (id: string) => document.getElementById(id) as HTMLInputElement;
-  const enabled = $("ls-enabled"), threshold = $("ls-threshold"), minprice = $("ls-minprice");
-  const preview = document.getElementById("ls-preview")!;
-  const status = document.getElementById("set-status")!;
+  const save = async (body: any, statusEl: HTMLElement, btn: HTMLButtonElement) => {
+    btn.disabled = true; statusEl.textContent = "Saving…";
+    try {
+      const res = await fetch("/api/pos/settings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const j = await res.json();
+      if (!res.ok || !j.ok) throw new Error(j.error || "Save failed");
+      statusEl.textContent = "✓ Saved";
+    } catch (e: any) { statusEl.textContent = ""; alert(e.message); }
+    finally { btn.disabled = false; }
+  };
 
+  const enabled = $("ls-enabled"), threshold = $("ls-threshold"), minprice = $("ls-minprice"), hover = $("ls-hover");
+  const preview = document.getElementById("ls-preview")!;
   function renderPreview() {
     if (!enabled.checked) { preview.textContent = "Badge is OFF — no stock-urgency shows on the website."; return; }
     const n = Math.max(1, parseInt(threshold.value) || 1);
     const p = Math.max(0, parseFloat(minprice.value) || 0);
     const example = n === 1 ? "“Only 1 left”" : `“Only N left” (for stock 1–${n})`;
     const priceText = p > 0 ? ` — only on items $${p.toFixed(2)}+` : " — on every item";
-    preview.textContent = `Shows ${example}${priceText}.`;
+    preview.textContent = `Shows ${example}${priceText}${hover.checked ? ", on hover" : ""}.`;
   }
-  [enabled, threshold, minprice].forEach((el) => el.addEventListener("input", renderPreview));
+  [enabled, threshold, minprice, hover].forEach((el) => el.addEventListener("input", renderPreview));
   renderPreview();
 
-  document.getElementById("set-save")!.addEventListener("click", async () => {
-    const btn = document.getElementById("set-save") as HTMLButtonElement;
-    btn.disabled = true; status.textContent = "Saving…";
-    try {
-      const res = await fetch("/api/pos/settings", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          lowStockEnabled: enabled.checked,
-          lowStockThreshold: Math.max(1, parseInt(threshold.value) || 1),
-          lowStockMinPriceCents: Math.round((parseFloat(minprice.value) || 0) * 100),
-        }),
-      });
-      const j = await res.json();
-      if (!res.ok || !j.ok) throw new Error(j.error || "Save failed");
-      status.textContent = "✓ Saved";
-    } catch (e: any) { status.textContent = ""; alert(e.message); }
-    finally { btn.disabled = false; }
-  });
+  document.getElementById("set-save")!.addEventListener("click", (e) => save({
+    lowStockEnabled: enabled.checked,
+    lowStockThreshold: Math.max(1, parseInt(threshold.value) || 1),
+    lowStockMinPriceCents: Math.round((parseFloat(minprice.value) || 0) * 100),
+    lowStockHoverOnly: hover.checked,
+  }, document.getElementById("set-status")!, e.currentTarget as HTMLButtonElement));
+
+  document.getElementById("fs-save")!.addEventListener("click", (e) => save({
+    freeShipEnabled: $("fs-enabled").checked,
+    freeShipThresholdCents: Math.round((parseFloat($("fs-threshold").value) || 0) * 100),
+  }, document.getElementById("fs-status")!, e.currentTarget as HTMLButtonElement));
 </script>

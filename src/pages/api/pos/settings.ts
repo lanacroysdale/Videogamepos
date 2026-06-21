@@ -19,6 +19,9 @@ export const POST: APIRoute = async ({ locals, request }) => {
   if (b.lowStockEnabled !== undefined) settings.lowStockEnabled = !!b.lowStockEnabled;
   if (b.lowStockThreshold !== undefined) settings.lowStockThreshold = Math.max(0, Math.round(Number(b.lowStockThreshold)) || 0);
   if (b.lowStockMinPriceCents !== undefined) settings.lowStockMinPriceCents = Math.max(0, Math.round(Number(b.lowStockMinPriceCents)) || 0);
+  if (b.lowStockHoverOnly !== undefined) settings.lowStockHoverOnly = !!b.lowStockHoverOnly;
+  if (b.freeShipEnabled !== undefined) settings.freeShipEnabled = !!b.freeShipEnabled;
+  if (b.freeShipThresholdCents !== undefined) settings.freeShipThresholdCents = Math.max(0, Math.round(Number(b.freeShipThresholdCents)) || 0);
 
   const { error } = await admin.from("store_settings").update({ settings }).eq("id", 1);
   if (error) return json({ error: error.message }, 500);

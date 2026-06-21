@@ -5,7 +5,7 @@ import Layout from "../layouts/Layout.astro";
 import { SITE } from "../consts";
 import { fmt } from "../lib/money";
 import { createSupabaseAdminClient } from "../lib/supabase";
-import { lowStockSettings, showLowStock } from "../lib/lowStock";
+import { lowStockSettings, showLowStock, freeShipSettings } from "../lib/lowStock";
 
 // HIDDEN, BROWSE-ONLY shop. Reads the SHARED inventory pool so anything sold in
 // store disappears here automatically. Server-side service-role read selecting
@@ -14,6 +14,8 @@ import { lowStockSettings, showLowStock } from "../lib/lowStock";
 const admin = createSupabaseAdminClient();
 const { data: settingsRow } = await admin.from("store_settings").select("settings").eq("id", 1).maybeSingle();
 const ls = lowStockSettings(settingsRow?.settings);
+const fs = freeShipSettings(settingsRow?.settings);
+const freeShipText = `🚚 Free shipping on orders over ${fmt(fs.freeShipThresholdCents)}`;
 const { data: rows, error } = await admin
   .from("product_variants")
   .select(
@@ -74,6 +76,8 @@ const cardCats = (i: any) => SHOP_CATS.filter((c) => c.key !== "all" && matchSho
   description={`Browse games, consoles, and accessories in stock at ${SITE.name}.`}
   noindex
 >
+  {fs.freeShipEnabled && <div class="ship-banner">{freeShipText}</div>}
+
   <section class="section--tight shop-hero">
     <div class="container">
       <span class="eyebrow">In stock now · {SITE.location}</span>
@@ -110,7 +114,7 @@ const cardCats = (i: any) => SHOP_CATS.filter((c) => c.key !== "all" && matchSho
 
       {listings.length > 0 && (
         <Fragment>
-        <div class="shop-grid">
+        <div class:list={["shop-grid", { "low-hover": ls.lowStockHoverOnly }]}>
           {listings.map((item) => (
             <a class="shop-card" data-shopcat={"all " + cardCats(item)} data-platform={(item.platform || "").toLowerCase()} href={item.slug ? "/shop/" + item.slug : "#"}>
               <div class="shop-thumb">
@@ -310,6 +314,17 @@ const cardCats = (i: any) => SHOP_CATS.filter((c) => c.key !== "all" && matchSho
   .shop-low {
     position: absolute; top: 0.5rem; left: 0.5rem; z-index: 2; padding: 0.2rem 0.55rem;
     background: var(--magenta); color: #fff; font-size: 0.72rem; font-weight: 800;
+  }
+  /* "Reveal on hover" mode — badge fades in when the card is hovered. */
+  .shop-grid.low-hover .shop-low { opacity: 0; transition: opacity .15s ease; }
+  .shop-grid.low-hover .shop-card:hover .shop-low,
+  .shop-grid.low-hover .shop-card:focus-within .shop-low { opacity: 1; }
+
+  /* Free-shipping banner */
+  .ship-banner {
+    text-align: center; font-weight: 800; font-size: 0.92rem; letter-spacing: 0.01em;
+    padding: 0.6rem 1rem; color: #06121a;
+    background: linear-gradient(90deg, var(--cyan), var(--magenta));
   }
   .shop-body { display: flex; flex-direction: column; gap: 0.25rem; padding: 0.7rem 0.8rem 0.85rem; }
   .shop-plat { color: var(--muted-2); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; }
