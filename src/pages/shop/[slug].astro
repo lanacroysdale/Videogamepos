@@ -38,6 +38,9 @@ if (product) {
   (cl ?? []).forEach((c: any) => (comp[c.code] = c.label));
   (cg ?? []).forEach((g: any) => (grade[g.code] = (g.icon ? g.icon + " " : "") + g.label));
 }
+// Combined condition label for the price-area selector (completeness · grade).
+const condText = (v: any) =>
+  [comp[v.completeness_code], grade[v.grade_code]].filter(Boolean).join(" · ") || v.condition || "Used";
 
 // Image gallery (per-product Storage folder; falls back to the cover).
 const gallery = product ? await listGallery(admin, product.id) : [];
@@ -182,12 +185,16 @@ const metaDesc = product?.description
               <h1 class:list={["pdp-title", { "pdp-title--long": titleLong }]}>{titleMain}</h1>
               {titleSub && <p class="pdp-subtitle">{titleSub}</p>}
 
-              {lowest != null && (
-                <div class="pdp-priceblock">
-                  {variants.length > 1 && <span class="pdp-pricefrom">from</span>}
-                  <span class="pdp-bigprice">{fmt(lowest)}</span>
-                  <span class="pdp-instock">In stock</span>
-                </div>
+              {variants.length > 0 ? (
+                <Fragment>
+                  <div class="pdp-priceblock">
+                    <span class="pdp-bigprice" id="pdp-bigprice">{fmt(variants[0].displayCents)}</span>
+                    <span class="pdp-instock">In stock</span>
+                  </div>
+                  <p class="pdp-selcond"><span class="pdp-selcond-lbl">Condition:</span> <strong id="pdp-selcond">{condText(variants[0])}</strong></p>
+                </Fragment>
+              ) : (
+                <p class="muted" style="margin:0.5rem 0 1.2rem;">Not currently listed online — ask us about availability.</p>
               )}
 
               <div class="pdp-buybox">
@@ -198,17 +205,18 @@ const metaDesc = product?.description
               </div>
 
               {variants.length > 1 && (
-                <div class="pdp-prices">
-                  {variants.map((v) => (
-                    <div class="pdp-price-row">
-                      <span class="pdp-cond">
-                        {comp[v.completeness_code] && <span class="pdp-comp">{comp[v.completeness_code]}</span>}
-                        {grade[v.grade_code] && <span class="pdp-grade">{grade[v.grade_code]}</span>}
-                        {!comp[v.completeness_code] && !grade[v.grade_code] && <span class="pdp-comp">{v.condition}</span>}
-                      </span>
-                      <span class="pdp-price">{fmt(v.displayCents)}</span>
-                      <span class="pdp-stock">{v.quantity <= 3 ? "Only " + v.quantity + " left" : "In stock"}</span>
-                    </div>
+                <div class="pdp-condsel" role="group" aria-label="Choose a condition">
+                  {variants.map((v, i) => (
+                    <button
+                      class:list={["pdp-condbtn", { active: i === 0 }]}
+                      type="button"
+                      data-i={i}
+                      data-price={fmt(v.displayCents)}
+                      data-cond={condText(v)}
+                    >
+                      <span class="pdp-condbtn-name">{condText(v)}</span>
+                      <span class="pdp-condbtn-price">{fmt(v.displayCents)}</span>
+                    </button>
                   ))}
                 </div>
               )}
@@ -314,6 +322,17 @@ const metaDesc = product?.description
       readmore.textContent = expanded ? "Read less ▴" : "Read more ▾";
     });
   }
+
+  // Condition selector — picking a condition updates the big price + label.
+  const condBtns = [...document.querySelectorAll<HTMLButtonElement>(".pdp-condbtn")];
+  const bigPrice = document.getElementById("pdp-bigprice");
+  const selCond = document.getElementById("pdp-selcond");
+  condBtns.forEach((b) => b.addEventListener("click", () => {
+    condBtns.forEach((x) => x.classList.remove("active"));
+    b.classList.add("active");
+    if (bigPrice && b.dataset.price) bigPrice.textContent = b.dataset.price;
+    if (selCond && b.dataset.cond) selCond.textContent = b.dataset.cond;
+  }));
 </script>
 
 <style>
@@ -360,27 +379,35 @@ const metaDesc = product?.description
   .pdp-thumb-more:hover { border-color:var(--cyan); }
 
   .pdp-refurb { display:inline-block; margin-bottom:0.5rem; padding:0.2rem 0.6rem; font-size:0.76rem; font-weight:800; letter-spacing:0.02em; text-transform:uppercase; color:#06121a; background:var(--cyan); }
-  .pdp-title { font-size:clamp(1.7rem, 1.3rem + 2vw, 2.7rem); margin:0 0 0.3rem; line-height:1.1; text-wrap:balance; }
-  .pdp-title--long { font-size:clamp(1.35rem, 1.05rem + 1.5vw, 2rem); }
-  .pdp-subtitle { margin:0 0 0.7rem; color:var(--muted-2); font-size:0.95rem; font-weight:600; line-height:1.3; text-wrap:pretty; }
+  .pdp-title { font-size:clamp(1.55rem, 1.2rem + 1.8vw, 2.4rem); margin:0 0 0.35rem; line-height:1.1; text-wrap:balance; }
+  .pdp-title--long { font-size:clamp(1.25rem, 1rem + 1.3vw, 1.8rem); }
+  /* Split-off keywords — bigger & more readable than before. */
+  .pdp-subtitle { margin:0 0 0.9rem; color:var(--muted); font-size:clamp(1rem, 0.95rem + 0.3vw, 1.2rem); font-weight:600; line-height:1.3; text-wrap:pretty; }
 
-  .pdp-priceblock { display:flex; align-items:baseline; gap:0.6rem; margin-bottom:1.1rem; flex-wrap:wrap; }
-  .pdp-pricefrom { color:var(--muted-2); font-size:0.85rem; }
-  .pdp-bigprice { font-family:var(--font-mono); font-weight:800; font-size:clamp(2rem, 1.6rem + 2vw, 2.8rem); color:var(--text); line-height:1; }
+  /* Big, prominent selected price (GameStop-style) + condition line. */
+  .pdp-priceblock { display:flex; align-items:baseline; gap:0.7rem; margin-bottom:0.3rem; flex-wrap:wrap; }
+  .pdp-bigprice { font-family:var(--font-mono); font-weight:800; font-size:clamp(2.6rem, 2rem + 2.6vw, 3.6rem); color:var(--text); line-height:1; }
   .pdp-instock { color:var(--green); font-size:0.85rem; font-weight:700; }
+  .pdp-selcond { margin:0 0 1.2rem; color:var(--muted); font-size:0.95rem; }
+  .pdp-selcond-lbl { color:var(--muted-2); }
+  .pdp-selcond strong { color:var(--text); font-weight:700; }
 
-  .pdp-buybox { display:flex; flex-direction:column; gap:0.6rem; margin-bottom:1.3rem; }
+  .pdp-buybox { display:flex; flex-direction:column; gap:0.6rem; margin-bottom:1.2rem; }
   .pdp-buy { width:100%; justify-content:center; padding:0.95rem 1.4rem; font-size:1.05rem; font-weight:800; }
   .pdp-cta { display:flex; flex-wrap:wrap; gap:0.6rem; }
   .pdp-cta .btn { flex:1 1 9rem; justify-content:center; min-width:0; }
 
-  .pdp-prices { display:grid; gap:0.45rem; margin-bottom:1.3rem; }
-  .pdp-price-row { display:flex; align-items:baseline; gap:0.8rem; padding:0.55rem 0.85rem; border:1px solid var(--border); background:rgba(255,255,255,.02); }
-  .pdp-cond { display:inline-flex; align-items:baseline; gap:0.5rem; font-size:0.9rem; }
-  .pdp-comp { font-weight:700; }
-  .pdp-grade { color:var(--muted); font-weight:600; }
-  .pdp-price { margin-left:auto; font-family:var(--font-mono); font-weight:800; }
-  .pdp-stock { color:var(--green); font-size:0.74rem; font-weight:700; }
+  /* Condition selector — buttons under the CTA; selecting updates the price. */
+  .pdp-condsel { display:flex; flex-wrap:wrap; gap:0.6rem; margin-bottom:1.3rem; }
+  .pdp-condbtn {
+    display:flex; flex-direction:column; gap:0.15rem; align-items:flex-start; flex:1 1 9rem;
+    padding:0.55rem 0.85rem; font:inherit; text-align:left; cursor:pointer; color:var(--text);
+    background:var(--panel); border:1px solid var(--border); transition:border-color .15s;
+  }
+  .pdp-condbtn:hover { border-color:var(--muted); }
+  .pdp-condbtn.active { border-color:var(--cyan); box-shadow:inset 0 0 0 1px var(--cyan); }
+  .pdp-condbtn-name { font-size:0.8rem; font-weight:700; }
+  .pdp-condbtn-price { font-family:var(--font-mono); font-weight:800; color:var(--cyan); }
 
   .pdp-trust { list-style:none; margin:0; padding:0.9rem 0 0; border-top:1px solid var(--border); display:grid; gap:0.5rem; }
   .pdp-trust li { display:flex; align-items:center; gap:0.6rem; font-size:0.9rem; color:var(--muted); }

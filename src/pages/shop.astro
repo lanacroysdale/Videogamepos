@@ -147,11 +147,13 @@ const cardCats = (i: any) => SHOP_CATS.filter((c) => c.key !== "all" && matchSho
             </label>
             <div class="shop-colsel" role="group" aria-label="Items per row">
               <span class="shop-vlabel">Per row</span>
+              <button type="button" class="shop-colbtn shop-colbtn-auto" data-cols="auto">Auto</button>
               <button type="button" class="shop-colbtn" data-cols="1">1</button>
               <button type="button" class="shop-colbtn" data-cols="2">2</button>
               <button type="button" class="shop-colbtn" data-cols="3">3</button>
               <button type="button" class="shop-colbtn c-wide" data-cols="4">4</button>
               <button type="button" class="shop-colbtn c-wide" data-cols="5">5</button>
+              <button type="button" class="shop-colbtn c-wide" data-cols="6">6</button>
             </div>
           </div>
         </div>
@@ -205,14 +207,15 @@ const cardCats = (i: any) => SHOP_CATS.filter((c) => c.key !== "all" && matchSho
   const savedSize = Number(localStorage.getItem("shop-size"));
   if (savedSize) pageSize = savedSize;
   if (pgSize) pgSize.value = String(pageSize);
-  const savedCols = Number(localStorage.getItem("shop-cols"));
-  if (savedCols) setCols(savedCols);
 
-  function setCols(n: number) {
-    grid?.style.setProperty("--shop-cols", String(n));
-    colBtns.forEach((b) => b.setAttribute("aria-pressed", String(Number(b.dataset.cols) === n)));
-    localStorage.setItem("shop-cols", String(n));
+  // "auto" = responsive default (3/4/5/6 by width). A number = a remembered
+  // explicit choice that overrides at every width.
+  function setCols(val: string) {
+    if (val === "auto") { grid?.style.removeProperty("--shop-cols"); localStorage.removeItem("shop-cols"); }
+    else { grid?.style.setProperty("--shop-cols", val); localStorage.setItem("shop-cols", val); }
+    colBtns.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.cols === val)));
   }
+  setCols(localStorage.getItem("shop-cols") || "auto");
 
   function applyView() {
     const matching = cards.filter((c) =>
@@ -241,7 +244,7 @@ const cardCats = (i: any) => SHOP_CATS.filter((c) => c.key !== "all" && matchSho
   pgPrev?.addEventListener("click", () => { if (page > 1) { page--; applyView(); toGridTop(); } });
   pgNext?.addEventListener("click", () => { page++; applyView(); toGridTop(); });
   pgSize?.addEventListener("change", () => { pageSize = Number(pgSize.value) || 24; localStorage.setItem("shop-size", String(pageSize)); page = 1; applyView(); });
-  colBtns.forEach((b) => b.addEventListener("click", () => setCols(Number(b.dataset.cols))));
+  colBtns.forEach((b) => b.addEventListener("click", () => setCols(b.dataset.cols!)));
 
   renderPlatChip();
   applyView();
@@ -263,6 +266,7 @@ const cardCats = (i: any) => SHOP_CATS.filter((c) => c.key !== "all" && matchSho
   }
   @media (min-width: 600px) { .shop-grid { --shop-cols: 4; } }
   @media (min-width: 1000px) { .shop-grid { --shop-cols: 5; } }
+  @media (min-width: 1400px) { .shop-grid { --shop-cols: 6; } }
   .shop-card {
     display: flex; flex-direction: column; overflow: hidden;
     background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
@@ -342,5 +346,6 @@ const cardCats = (i: any) => SHOP_CATS.filter((c) => c.key !== "all" && matchSho
   }
   .shop-colbtn:hover { color: var(--text); border-color: var(--muted); }
   .shop-colbtn[aria-pressed="true"] { color: #06121a; background: var(--cyan); border-color: var(--cyan); }
+  .shop-colbtn-auto { width: auto; padding: 0 0.55rem; }
   @media (max-width: 560px) { .shop-colbtn.c-wide { display: none; } }
 </style>
