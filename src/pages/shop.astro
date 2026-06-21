@@ -42,7 +42,8 @@ const matchShopCat = (i: any, key: string): boolean => {
   const t = (i.title || "").toLowerCase();
   switch (key) {
     case "consoles": return i.category === "Consoles";
-    case "games": return i.category === "Video Games";
+    case "games": return i.category === "Video Games" &&
+      /nintendo|switch|\bwii\b|gamecube|game ?boy|\bgb[ac]?\b|\bnes\b|snes|n64|3ds|\bds\b|famicom|amiibo|pok[eé]mon|zelda|mario/i.test(`${i.platform} ${i.title}`);
     case "accessories": return i.category === "Accessories";
     case "collectibles": return i.category === "Collectibles";
     case "merch": return i.category === "Toys" || i.category === "Books" || /\b(keychain|pin|poster|figure|amiibo|statue)\b/.test(t);
