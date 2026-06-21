@@ -118,12 +118,15 @@ const posData = { catalog, categories: categories ?? [], customer };
 <!-- Held-sale chips are built via innerHTML, so their styles must be global
      (Astro scoped styles don't reach runtime-inserted elements). -->
 <style is:global>
-  .held-chip { display:grid; grid-template-columns:auto auto; gap:0.05rem 0.6rem; align-items:baseline; flex:0 0 auto; padding:0.45rem 0.7rem; background:var(--panel); border:1px solid var(--border); cursor:pointer; text-align:left; color:var(--text); transition:border-color .15s; }
-  .held-chip:hover { border-color:var(--cyan); }
+  .held-chip { position:relative; flex:0 0 auto; }
+  .held-chip-main { display:grid; grid-template-columns:auto auto; gap:0.05rem 0.6rem; align-items:baseline; width:100%; padding:0.45rem 1.5rem 0.45rem 0.7rem; background:var(--panel); border:1px solid var(--border); cursor:pointer; text-align:left; color:var(--text); transition:border-color .15s; }
+  .held-chip-main:hover { border-color:var(--cyan); }
   .held-chip-id { font-weight:800; font-family:var(--font-mono); }
   .held-chip-who { font-size:0.82rem; color:var(--muted); justify-self:end; }
   .held-chip-total { font-family:var(--font-mono); font-weight:800; color:var(--green); grid-column:1; }
-  .held-chip small { grid-column:1 / -1; color:var(--muted-2); font-size:0.72rem; white-space:nowrap; }
+  .held-chip-main small { grid-column:1 / -1; color:var(--muted-2); font-size:0.72rem; white-space:nowrap; }
+  .held-chip-del { position:absolute; top:1px; right:1px; width:1.3rem; height:1.3rem; display:grid; place-items:center; font-size:0.72rem; color:var(--muted-2); background:none; border:none; cursor:pointer; }
+  .held-chip-del:hover { color:#ff6b6b; }
 </style>
 
 <script>
@@ -287,15 +290,20 @@ const posData = { catalog, categories: categories ?? [], customer };
       $("held-list").innerHTML = held.map((h) => {
         const n = (h.transaction_items || []).reduce((s: number, it: any) => s + (it.qty || 1), 0);
         const who = custName(h.customer);
-        return `<button class="held-chip" data-resume="${h.id}" type="button">
-            <span class="held-chip-id">#${h.human_id}</span>${who ? `<span class="held-chip-who">${esc(who)}</span>` : ""}
-            <span class="held-chip-total">${money(h.total_cents)}</span>
-            <small>${n} item${n === 1 ? "" : "s"} · ${timeAgo(h.created_at)}</small>
-          </button>`;
+        return `<div class="held-chip">
+            <button class="held-chip-main" data-resume="${h.id}" type="button">
+              <span class="held-chip-id">#${h.human_id}</span>${who ? `<span class="held-chip-who">${esc(who)}</span>` : ""}
+              <span class="held-chip-total">${money(h.total_cents)}</span>
+              <small>${n} item${n === 1 ? "" : "s"} · ${timeAgo(h.created_at)}</small>
+            </button>
+            <button class="held-chip-del" data-del="${h.id}" type="button" title="Delete held sale" aria-label="Delete held sale #${h.human_id}">✕</button>
+          </div>`;
       }).join("");
       ($("held-bar") as HTMLElement).hidden = held.length === 0;
       $("held-list").querySelectorAll<HTMLButtonElement>("[data-resume]").forEach((b) =>
         b.addEventListener("click", () => resumeHeld(all.find((x) => x.id === b.dataset.resume))));
+      $("held-list").querySelectorAll<HTMLButtonElement>("[data-del]").forEach((b) =>
+        b.addEventListener("click", () => deleteHeld(all.find((x) => x.id === b.dataset.del))));
     } catch { /* leave the bar as-is */ }
   }
 
@@ -316,6 +324,20 @@ const posData = { catalog, categories: categories ?? [], customer };
     renderResumeBanner(h.human_id);
     renderCart();
     loadHeld();
+  }
+
+  async function deleteHeld(h: any) {
+    if (!h) return;
+    if (!confirm(`Delete held sale #${h.human_id}? This can't be undone.`)) return;
+    try {
+      const res = await fetch("/api/pos/checkout", {
+        method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: h.id }),
+      });
+      const j = await res.json();
+      if (!res.ok || !j.ok) throw new Error(j.error || "Delete failed");
+      if (heldId === h.id) { heldId = null; cart = []; renderResumeBanner(null); renderCart(); }
+      loadHeld();
+    } catch (err: any) { alert("Could not delete: " + err.message); }
   }
 
   function renderResumeBanner(humanId: number | null) {

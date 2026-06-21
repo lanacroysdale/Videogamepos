@@ -30,6 +30,21 @@ export const GET: APIRoute = async ({ locals }) => {
   return json({ held: data ?? [] });
 };
 
+// Delete a held (open) sale. Completed sales are ledger records and can't be
+// deleted here — they must be voided/refunded via Returns.
+export const DELETE: APIRoute = async ({ locals, request }) => {
+  if (!locals.user) return json({ error: "unauthorized" }, 401);
+  const { id } = await request.json().catch(() => ({}));
+  if (!id) return json({ error: "id required" }, 400);
+  const { data: txn } = await locals.supabase.from("transactions").select("status").eq("id", id).maybeSingle();
+  if (!txn) return json({ error: "Sale not found." }, 404);
+  if (txn.status !== "open") return json({ error: "Only held (open) sales can be deleted." }, 409);
+  await locals.supabase.from("transaction_items").delete().eq("transaction_id", id);
+  const { error } = await locals.supabase.from("transactions").delete().eq("id", id).eq("status", "open");
+  if (error) return json({ error: error.message }, 500);
+  return json({ ok: true });
+};
+
 export const POST: APIRoute = async ({ locals, request }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
 
