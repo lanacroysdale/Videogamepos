@@ -29,13 +29,19 @@ export const POST: APIRoute = async ({ locals, request }) => {
     try { meta = await searchGame(title, b.platform); } catch { meta = null; }
   }
 
-  // 2. LaunchBox retail box-front — preferred cover source.
+  // 2. LaunchBox retail box art — preferred cover source. Defaults to the 3D
+  //    box render (the angled "stock" look) when available; pass { flat:true }
+  //    to use the flat front instead. Falls back to front when no 3D exists.
   let coverUrl: string | null = meta?.coverUrl ?? null;
   let coverSource: string | null = meta?.coverUrl ? "igdb" : null;
   try {
     const { data: lb } = await admin.rpc("lookup_box_art", { p_title: title, p_platform: lbPlatform(b.platform) });
     const best = Array.isArray(lb) ? lb[0] : lb;
-    if (best?.box_front && (best.sim ?? 0) >= 0.4) { coverUrl = lbImageUrl(best.box_front); coverSource = "launchbox"; }
+    if (best && (best.sim ?? 0) >= 0.4) {
+      const threeD = b.flat ? null : best.box_3d;
+      const file = threeD || best.box_front;
+      if (file) { coverUrl = lbImageUrl(file); coverSource = threeD ? "launchbox-3d" : "launchbox"; }
+    }
   } catch { /* game_metadata not ingested yet → keep IGDB cover */ }
 
   if (!meta && !coverUrl) return json({ ok: true, found: false });
