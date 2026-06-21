@@ -215,6 +215,11 @@ const posData = {
   .reprice-btn { flex:none; width:26px; height:30px; border:none; border-radius:6px; background:var(--cyan); color:#06232b; font-size:0.95rem; cursor:pointer; line-height:1; }
   .reprice-btn:hover { filter:brightness(1.12); }
   .cp-on { font-size:0.68rem; color:var(--cyan); font-weight:800; }
+  .img-field { display:flex; gap:0.4rem; align-items:stretch; }
+  .img-field input { flex:1; }
+  .img-up { flex:none; white-space:nowrap; cursor:pointer; display:inline-flex; align-items:center; }
+  .img-prev { margin-top:0.5rem; }
+  .img-prev img { max-height:130px; border-radius:8px; border:1px solid var(--border); display:block; }
   .web-hint { font-size:0.74rem; color:var(--muted-2); margin-top:0.4rem; }
 
   .bc-block { border:1px solid var(--border); border-radius:10px; padding:0.5rem 0.7rem; margin-bottom:0.5rem; }
@@ -402,8 +407,9 @@ const posData = {
           <label>Genre / set<input id="m-genre" value="${esc(p.genre)}"></label>
           <label>Franchise<input id="m-franchise" value="${esc(p.franchise)}"></label>
           <label>Category<select id="m-category">${catOpts}</select></label>
-          <label>Image URL<input id="m-image" value="${esc(p.imageUrl)}" placeholder="https://…"></label>
+          <label>Image<div class="img-field"><input id="m-image" value="${esc(p.imageUrl)}" placeholder="https://… or upload →"><label class="btn btn-ghost btn-sm img-up">📷 Upload<input type="file" id="m-imgfile" accept="image/*" hidden></label></div></label>
         </div>
+        <div id="m-imgprev" class="img-prev"${p.imageUrl ? "" : " hidden"}>${p.imageUrl ? `<img src="${esc(p.imageUrl)}" alt="">` : ""}</div>
         <div class="m-field"><label>Description (web)<textarea id="m-desc" rows="2" placeholder="Shown on the website listing">${esc(p.description)}</textarea></label></div>
       </div>
 
@@ -428,6 +434,24 @@ const posData = {
     bindBarcodes(p);
     bindReprice(p);
     $("add-cond").addEventListener("click", () => addCondition(p));
+
+    // Image upload → stores in Supabase, fills the URL + preview.
+    const imgFile = document.getElementById("m-imgfile") as HTMLInputElement | null;
+    imgFile?.addEventListener("change", async () => {
+      const f = imgFile.files?.[0];
+      if (!f) return;
+      const fd = new FormData(); fd.append("file", f);
+      toast("Uploading image…");
+      try {
+        const r = await fetch("/api/pos/upload-image", { method: "POST", body: fd });
+        const j = await r.json();
+        if (!r.ok || !j.ok) throw new Error(j.error || "Upload failed");
+        ($("m-image") as HTMLInputElement).value = j.url;
+        const prev = $("m-imgprev"); prev.innerHTML = `<img src="${j.url}" alt="">`; prev.hidden = false;
+        toast("✓ Image uploaded");
+      } catch (e: any) { alert(e.message); }
+    });
+
     modal.hidden = false;
   }
 
