@@ -268,6 +268,11 @@ const hasFilters = platFacets.length + condFacets.length + regionFacets.length +
   let minPrice = 0, maxPrice = Infinity;
 
   const fchips = [...document.querySelectorAll<HTMLButtonElement>(".shop-fchip")];
+  // Drop any deep-linked facet value that isn't actually offered, so a stale or
+  // mismatched ?platform=/?cond= link shows everything instead of an empty grid.
+  const validVals: Record<string, Set<string>> = {};
+  fchips.forEach((b) => { (validVals[b.dataset.facet!] ||= new Set()).add(b.dataset.val!); });
+  for (const k of Object.keys(facet)) { if (facet[k] && !validVals[k]?.has(facet[k])) facet[k] = ""; }
   const filtersPanel = document.getElementById("shop-filters");
   const filterToggle = document.getElementById("shop-filter-toggle");
   const filterClear = document.getElementById("shop-filter-clear");

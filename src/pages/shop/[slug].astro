@@ -9,6 +9,7 @@ import { listGallery } from "../../lib/storage";
 import { ebayItemUrl } from "../../lib/ebay";
 import { splitTitle } from "../../lib/title";
 import { lowStockSettings, showLowStock } from "../../lib/lowStock";
+import { classify } from "../../lib/shopFilters";
 
 // Product detail page — the SEO surface. Server-rendered, indexable (no
 // noindex) once /shop is ungated at launch. Product JSON-LD + details panel.
@@ -56,7 +57,12 @@ const mainImage = images[0] || product?.image_url || null;
 
 const categoryName = (product as any)?.category?.name ?? "";
 const aboutHeading = product?.genre || product?.franchise ? "About this game" : "About this item";
-const shopPlatformHref = product?.platform ? "/shop?platform=" + encodeURIComponent(product.platform) : "/shop";
+// Link the platform eyebrow to the shop's matching platform facet (canonical
+// key, e.g. "n64"), falling back to the raw platform / unfiltered shop.
+const platKey = product
+  ? classify({ title: product.title, platform: product.platform, franchise: product.franchise }).platform
+  : "";
+const shopPlatformHref = platKey ? "/shop?platform=" + platKey : "/shop";
 
 const ebayId = product ? (product.tags ?? []).find((t: string) => t.startsWith("ebay:"))?.slice(5) : null;
 const ebayUrl = ebayId ? ebayItemUrl(ebayId) : null;
