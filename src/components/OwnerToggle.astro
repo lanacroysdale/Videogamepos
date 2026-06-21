@@ -1,0 +1,137 @@
+---
+// Floating owner toolbar — appears on BOTH the public marketing site and the POS
+// app, only once /api/whoami confirms the signed-in user is an owner/manager.
+// Marketing pages are static (no middleware), so the gate is client-side: the
+// widget markup stays display:none until the script adds `tl-owner` to <html>.
+// The links themselves are non-sensitive (POS login is public); the real auth is
+// enforced server-side on every /app route + API. Fly-out, retro/game styling.
+---
+
+<div class="owner-tb" id="owner-tb" aria-hidden="true">
+  <div class="owner-menu" id="owner-menu"></div>
+  <button class="owner-fab" id="owner-fab" type="button" aria-expanded="false" aria-label="Owner quick menu" title="Owner menu">
+    <span class="owner-fab-ico" aria-hidden="true">🎮</span>
+  </button>
+</div>
+
+<style is:global>
+  .owner-tb {
+    position: fixed; right: 1rem; bottom: 1rem; z-index: 2147483000;
+    display: none; flex-direction: column; align-items: flex-end; gap: 0.55rem;
+  }
+  html.tl-owner .owner-tb { display: flex; }
+
+  .owner-fab {
+    width: 3.1rem; height: 3.1rem; flex: none; cursor: pointer;
+    border: 2px solid color-mix(in srgb, var(--cyan) 65%, #000);
+    background: linear-gradient(150deg, var(--cyan), var(--cyan-deep));
+    color: var(--accent-ink); display: grid; place-items: center;
+    box-shadow: var(--glow-cyan), 0 8px 18px -8px rgba(0, 0, 0, .7);
+    transition: transform .15s ease, filter .15s ease;
+  }
+  .owner-fab:hover { transform: translateY(-2px) scale(1.04); filter: brightness(1.08); }
+  .owner-fab-ico { font-size: 1.35rem; line-height: 1; transition: transform .25s ease; }
+  .owner-tb.open .owner-fab-ico { transform: rotate(25deg) scale(1.05); }
+
+  .owner-menu { display: flex; flex-direction: column; align-items: flex-end; gap: 0.45rem; }
+  .owner-item {
+    display: inline-flex; align-items: center; gap: 0.55rem; padding: 0.5rem 0.8rem;
+    font: inherit; font-size: 0.85rem; font-weight: 700; text-decoration: none; cursor: pointer;
+    color: var(--text); background: var(--panel); border: 1px solid var(--border-strong);
+    box-shadow: 0 6px 16px -10px rgba(0, 0, 0, .8); white-space: nowrap;
+    /* hidden state for the fly-out stagger */
+    opacity: 0; transform: translateX(16px) scale(.9); pointer-events: none;
+    transition: opacity .18s ease, transform .18s ease;
+  }
+  .owner-item:hover { border-color: var(--cyan); color: var(--cyan); }
+  .owner-item .owner-item-ico { font-size: 1rem; line-height: 1; }
+  .owner-tb.open .owner-item { opacity: 1; transform: none; pointer-events: auto; }
+  /* staggered reveal, bottom item first */
+  .owner-tb.open .owner-item:nth-last-child(1) { transition-delay: .02s; }
+  .owner-tb.open .owner-item:nth-last-child(2) { transition-delay: .05s; }
+  .owner-tb.open .owner-item:nth-last-child(3) { transition-delay: .08s; }
+  .owner-tb.open .owner-item:nth-last-child(4) { transition-delay: .11s; }
+  .owner-tb.open .owner-item:nth-last-child(5) { transition-delay: .14s; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .owner-item { transition: opacity .12s ease; transform: none; }
+  }
+</style>
+
+<script>
+  type Item = { ico: string; label: string; href?: string; act?: "theme" | "logout" };
+
+  async function init() {
+    let role: string | null = null;
+    try {
+      const r = await fetch("/api/whoami", { headers: { "x-requested-with": "fetch" } });
+      if (r.ok) role = (await r.json())?.role ?? null;
+    } catch { /* offline — stay hidden */ }
+    if (role !== "owner" && role !== "manager") return; // non-owners: nothing renders
+
+    const tb = document.getElementById("owner-tb")!;
+    const fab = document.getElementById("owner-fab")!;
+    const menu = document.getElementById("owner-menu")!;
+    const isManager = role === "owner" || role === "manager";
+    const inPos = location.pathname.startsWith("/app");
+
+    const items: Item[] = inPos
+      ? [
+          { ico: "🏠", label: "Main site", href: "/" },
+          { ico: "🛒", label: "Shop", href: "/shop" },
+          { ico: "🎨", label: "Theme", act: "theme" },
+          ...(isManager ? [{ ico: "⚙️", label: "Settings", href: "/app/settings" } as Item] : []),
+          { ico: "🚪", label: "Log out", act: "logout" },
+        ]
+      : [
+          { ico: "🧾", label: "Open POS", href: "/app" },
+          { ico: "🛒", label: "Shop", href: "/shop" },
+          { ico: "🎨", label: "Theme", act: "theme" },
+          ...(isManager ? [{ ico: "⚙️", label: "Settings", href: "/app/settings" } as Item] : []),
+          { ico: "🚪", label: "Log out", act: "logout" },
+        ];
+
+    const THEMES = ["default", "bright", "light", "midnight"];
+    function cycleTheme() {
+      const cur = (window as any).getTheme?.() || "default";
+      const next = THEMES[(THEMES.indexOf(cur) + 1) % THEMES.length];
+      (window as any).setTheme?.(next);
+    }
+    function logout() {
+      const f = document.createElement("form");
+      f.method = "POST";
+      f.action = "/app/logout";
+      document.body.appendChild(f);
+      f.submit();
+    }
+
+    for (const it of items) {
+      const el = document.createElement(it.href ? "a" : "button") as HTMLElement;
+      el.className = "owner-item";
+      el.innerHTML = `<span class="owner-item-ico" aria-hidden="true">${it.ico}</span>${it.label}`;
+      if (it.href) (el as HTMLAnchorElement).href = it.href;
+      else {
+        (el as HTMLButtonElement).type = "button";
+        el.addEventListener("click", () => {
+          if (it.act === "theme") cycleTheme();
+          else if (it.act === "logout") logout();
+        });
+      }
+      menu.appendChild(el);
+    }
+
+    function setOpen(open: boolean) {
+      tb.classList.toggle("open", open);
+      fab.setAttribute("aria-expanded", String(open));
+    }
+    fab.addEventListener("click", (e) => { e.stopPropagation(); setOpen(!tb.classList.contains("open")); });
+    document.addEventListener("click", (e) => { if (!tb.contains(e.target as Node)) setOpen(false); });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") setOpen(false); });
+
+    document.documentElement.classList.add("tl-owner");
+    tb.setAttribute("aria-hidden", "false");
+  }
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
+  else init();
+</script>

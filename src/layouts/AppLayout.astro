@@ -2,6 +2,7 @@
 import "../styles/global.css";
 import "../styles/app.css";
 import ThemeInit from "../components/ThemeInit.astro";
+import OwnerToggle from "../components/OwnerToggle.astro";
 
 interface Props {
   title: string;
@@ -80,6 +81,7 @@ const nav = [
         </div>
       </main>
     </div>
+    <OwnerToggle />
 
     <style>
       .app-nav a { display: flex; align-items: center; }
