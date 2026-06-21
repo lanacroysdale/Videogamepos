@@ -1,27 +1,34 @@
 ---
-// No-flash theme bootstrap. Reads the store's default theme once (server-side),
-// then an inline <head> script applies the per-device override (localStorage
-// 'tl-theme') or that default BEFORE first paint. Also exposes window.setTheme /
-// getTheme for the in-app palette switcher. Drop this in the <head> of a layout.
+// No-flash theme bootstrap. Reads the store's default palette + sidebar accent
+// once (server-side), then an inline <head> script applies the per-device
+// overrides (localStorage 'tl-theme' / 'tl-sidebar') or those defaults BEFORE
+// first paint. Exposes window.setTheme/getTheme + setSidebar/getSidebar for the
+// in-app switchers. Drop this in the <head> of a layout.
 import { createSupabaseAdminClient } from "../lib/supabase";
 import { themeSettings } from "../lib/themeSettings";
 
 let defaultTheme = "default";
+let defaultSidebar = "default";
 try {
   const admin = createSupabaseAdminClient();
   const { data } = await admin.from("store_settings").select("settings").eq("id", 1).maybeSingle();
-  defaultTheme = themeSettings(data?.settings).defaultTheme;
+  const ts = themeSettings(data?.settings);
+  defaultTheme = ts.defaultTheme;
+  defaultSidebar = ts.defaultSidebar;
 } catch {
-  // Settings unavailable (e.g. DB down) — fall back to the brand default.
+  // Settings unavailable (e.g. DB down) — fall back to the brand defaults.
 }
 ---
 
 <script is:inline set:html={`(function(){try{
-  var DEF=${JSON.stringify(defaultTheme)};
-  function apply(t){ if(t&&t!=='default'){document.documentElement.setAttribute('data-theme',t);} else {document.documentElement.removeAttribute('data-theme');} }
-  var saved=null; try{ saved=localStorage.getItem('tl-theme'); }catch(e){}
-  apply(saved||DEF);
-  window.__tlThemeDefault=DEF;
+  var DEF=${JSON.stringify(defaultTheme)}, SDEF=${JSON.stringify(defaultSidebar)}, el=document.documentElement;
+  function applyTheme(t){ if(t&&t!=='default'){el.setAttribute('data-theme',t);} else {el.removeAttribute('data-theme');} }
+  function applySidebar(s){ if(s&&s!=='default'){el.setAttribute('data-sidebar',s);} else {el.removeAttribute('data-sidebar');} }
+  var st=null, ss=null; try{ st=localStorage.getItem('tl-theme'); ss=localStorage.getItem('tl-sidebar'); }catch(e){}
+  applyTheme(st||DEF); applySidebar(ss||SDEF);
+  window.__tlThemeDefault=DEF; window.__tlSidebarDefault=SDEF;
   window.getTheme=function(){ try{return localStorage.getItem('tl-theme')||DEF;}catch(e){return DEF;} };
-  window.setTheme=function(t){ try{ if(!t||t==='default'){localStorage.removeItem('tl-theme');}else{localStorage.setItem('tl-theme',t);} }catch(e){} apply(t); };
+  window.setTheme=function(t){ try{ if(!t||t==='default'){localStorage.removeItem('tl-theme');}else{localStorage.setItem('tl-theme',t);} }catch(e){} applyTheme(t); };
+  window.getSidebar=function(){ try{return localStorage.getItem('tl-sidebar')||SDEF;}catch(e){return SDEF;} };
+  window.setSidebar=function(s){ try{ if(!s||s==='default'){localStorage.removeItem('tl-sidebar');}else{localStorage.setItem('tl-sidebar',s);} }catch(e){} applySidebar(s); };
 }catch(e){}})();`} />

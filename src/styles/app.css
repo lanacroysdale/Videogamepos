@@ -23,8 +23,8 @@
   flex-direction: column;
   gap: 0.25rem;
   padding: 1rem 0.75rem;
-  background: linear-gradient(180deg, var(--panel), var(--bg-2));
-  border-right: 1px solid var(--border);
+  background: var(--sb-bg);
+  border-right: 1px solid var(--sb-border);
 }
 .app-brand {
   display: flex;
@@ -34,12 +34,12 @@
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--text);
+  color: var(--sb-ink);
   padding: 0.5rem 0.6rem 1rem;
   font-size: 0.95rem;
 }
 .app-brand:hover { text-decoration: none; }
-.app-brand span { color: var(--cyan); }
+.app-brand span { color: var(--sb-brand); }
 
 .app-nav { display: flex; flex-direction: column; gap: 0.2rem; flex: 1; }
 .app-nav a {
@@ -48,22 +48,22 @@
   gap: 0.7rem;
   padding: 0.65rem 0.7rem;
   border-radius: 10px;
-  color: var(--muted);
+  color: var(--sb-ink-dim);
   font-weight: 600;
   font-size: 0.95rem;
 }
-.app-nav a:hover { background: rgba(255, 255, 255, 0.05); color: var(--text); text-decoration: none; }
-.app-nav a.active { background: rgba(223, 94, 57, 0.12); color: var(--cyan); border: 1px solid rgba(223, 94, 57, 0.3); }
+.app-nav a:hover { background: var(--sb-hover); color: var(--sb-ink); text-decoration: none; }
+.app-nav a.active { background: var(--sb-active-bg); color: var(--sb-active-ink); border: 1px solid var(--sb-active-border); }
 .app-nav .ico { font-size: 1.1rem; }
 
 .app-user {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--sb-border);
   padding-top: 0.85rem;
   margin-top: 0.5rem;
   font-size: 0.85rem;
 }
-.app-user .who { font-weight: 700; color: var(--text); }
-.app-user .role { color: var(--muted-2); text-transform: capitalize; font-size: 0.78rem; margin-bottom: 0.6rem; }
+.app-user .who { font-weight: 700; color: var(--sb-ink); }
+.app-user .role { color: var(--sb-ink-dim); text-transform: capitalize; font-size: 0.78rem; margin-bottom: 0.6rem; }
 
 /* ---------- Main ---------- */
 .app-main { display: flex; flex-direction: column; min-width: 0; }

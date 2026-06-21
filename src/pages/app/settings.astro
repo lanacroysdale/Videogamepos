@@ -3,7 +3,7 @@ export const prerender = false;
 
 import AppLayout from "../../layouts/AppLayout.astro";
 import { lowStockSettings, freeShipSettings } from "../../lib/lowStock";
-import { themeSettings, THEMES } from "../../lib/themeSettings";
+import { themeSettings, THEMES, SIDEBARS } from "../../lib/themeSettings";
 
 const supabase = Astro.locals.supabase;
 const { data: row } = await supabase.from("store_settings").select("settings").eq("id", 1).maybeSingle();
@@ -31,6 +31,18 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     </div>
     <p class="set-preview" id="theme-scope-note">Applied as the store default. <button type="button" id="theme-local-reset" class="link-btn">Reset this device to the default</button></p>
     <span id="theme-status" class="muted"></span>
+
+    <h3 class="set-subh">POS sidebar accent</h3>
+    <p class="muted set-desc" style="margin-bottom:0.8rem;">Recolors just the POS sidebar — mixes with any palette above.</p>
+    <div class="theme-grid" role="group" aria-label="Sidebar accent">
+      {SIDEBARS.map((s) => (
+        <button type="button" class="theme-swatch" data-sidebar-pick={s.key} aria-pressed={s.key === th.defaultSidebar ? "true" : "false"}>
+          <span class="theme-prev" style={`background:${s.swatch}`}></span>
+          <span class="theme-name">{s.label}</span>
+        </button>
+      ))}
+    </div>
+    <span id="sidebar-status" class="muted"></span>
 
     <label class="set-row set-toggle" style="margin-top:1rem;">
       <input type="checkbox" id="gem-effect" checked={th.gemEffectEnabled} />
@@ -123,6 +135,7 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   .theme-prev { display: grid; place-items: center; width: 3.6rem; height: 2.4rem; border: 1px solid var(--border-strong); }
   .theme-dot { width: 1rem; height: 1rem; border-radius: 50%; }
   .theme-name { font-size: 0.82rem; font-weight: 700; }
+  .set-subh { font-size: 0.95rem; margin: 1.4rem 0 0.2rem; }
 </style>
 
 <script>
@@ -188,6 +201,23 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     themeBtns.forEach((x) => x.setAttribute("aria-pressed", String(x.dataset.themePick === def)));
     themeStatus.textContent = "✓ This device follows the store default";
   });
+
+  // Sidebar accent picker (independent of the palette).
+  const sbBtns = [...document.querySelectorAll<HTMLButtonElement>("[data-sidebar-pick]")];
+  const sbStatus = document.getElementById("sidebar-status")!;
+  sbBtns.forEach((b) => b.addEventListener("click", async () => {
+    const key = b.dataset.sidebarPick!;
+    win.setSidebar?.(key);
+    win.__tlSidebarDefault = key;
+    sbBtns.forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    sbStatus.textContent = "Saving…";
+    try {
+      const res = await fetch("/api/pos/settings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ defaultSidebar: key }) });
+      const j = await res.json();
+      if (!res.ok || !j.ok) throw new Error(j.error || "Save failed");
+      sbStatus.textContent = "✓ Saved as store default";
+    } catch (e: any) { sbStatus.textContent = ""; alert(e.message); }
+  }));
 
   document.getElementById("gem-save")!.addEventListener("click", (e) => save({
     gemEffectEnabled: $("gem-effect").checked,

@@ -34,6 +34,18 @@
   --accent: var(--cyan);
   --accent-ink: #25130a;  /* dark coffee — legible across terracotta→chestnut */
 
+  /* POS sidebar — tokenised so a bright "sidebar accent" (data-sidebar) can
+     recolor it independently of the palette. Defaults match the base look. */
+  --sb-bg: linear-gradient(180deg, var(--panel), var(--bg-2));
+  --sb-ink: var(--text);
+  --sb-ink-dim: var(--muted);
+  --sb-brand: var(--cyan);
+  --sb-hover: rgba(255, 255, 255, 0.05);
+  --sb-active-bg: rgba(223, 94, 57, 0.12);
+  --sb-active-ink: var(--cyan);
+  --sb-active-border: rgba(223, 94, 57, 0.3);
+  --sb-border: var(--border);
+
   /* Tunable glow strength (0 = off, 1 = default, up to ~2) */
   --glow-strength: 1;
 
@@ -104,6 +116,71 @@
   --muted: #b9a99d;
   --muted-2: #7c6c60;
   --glow-strength: 1.6;
+}
+
+/* Liquid Glass — deep cool canvas; panels become frosted + translucent (see the
+   glass panel rules below). Brand accents stay, cyan pops as the glass tint. */
+:root[data-theme="glass"] {
+  --bg: #0c0a1a;
+  --bg-2: #131127;
+  --panel: rgba(255, 255, 255, 0.07);
+  --panel-2: rgba(255, 255, 255, 0.12);
+  --border: rgba(255, 255, 255, 0.16);
+  --border-strong: rgba(255, 255, 255, 0.28);
+  --text: #f4f6ff;
+  --muted: #c4c8e8;
+  --muted-2: #8f93bf;
+  --glow-strength: 1.4;
+  --sb-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.04));
+}
+/* Frosted, translucent surfaces over a soft aurora backdrop. */
+:root[data-theme="glass"] body,
+:root[data-theme="glass"] .app-body {
+  background:
+    radial-gradient(1100px 700px at 12% -8%, rgba(127, 214, 230, 0.18), transparent 60%),
+    radial-gradient(900px 700px at 108% 12%, rgba(243, 156, 205, 0.16), transparent 55%),
+    radial-gradient(900px 800px at 50% 120%, rgba(205, 128, 76, 0.14), transparent 60%),
+    var(--bg);
+  background-attachment: fixed;
+}
+:root[data-theme="glass"] .pos-panel,
+:root[data-theme="glass"] .app-side,
+:root[data-theme="glass"] .app-top,
+:root[data-theme="glass"] .tile-btn,
+:root[data-theme="glass"] .shop-card,
+:root[data-theme="glass"] .cart-panel {
+  -webkit-backdrop-filter: blur(14px) saturate(1.3);
+  backdrop-filter: blur(14px) saturate(1.3);
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 18px 40px -24px rgba(0, 0, 0, 0.7);
+}
+:root[data-theme="glass"] .ship-banner { background: rgba(255, 255, 255, 0.85); }
+
+/* =========================================================================
+   Sidebar accent (data-sidebar) — recolors ONLY the POS sidebar, layered on
+   top of whatever palette is active. Bright fill + dark ink for legibility.
+   ========================================================================= */
+:root[data-sidebar="blue"] {
+  --sb-bg: linear-gradient(180deg, #5aa6b8, #3c8295);
+  --sb-ink: #06202a; --sb-ink-dim: rgba(6, 32, 42, 0.74); --sb-brand: #06202a;
+  --sb-hover: rgba(255, 255, 255, 0.22);
+  --sb-active-bg: rgba(255, 255, 255, 0.55); --sb-active-ink: #06202a; --sb-active-border: rgba(6, 32, 42, 0.28);
+  --sb-border: rgba(6, 32, 42, 0.22);
+}
+:root[data-sidebar="pink"] {
+  --sb-bg: linear-gradient(180deg, #f6a8d4, #e77fbb);
+  --sb-ink: #3a0f28; --sb-ink-dim: rgba(58, 15, 40, 0.74); --sb-brand: #3a0f28;
+  --sb-hover: rgba(255, 255, 255, 0.30);
+  --sb-active-bg: rgba(255, 255, 255, 0.6); --sb-active-ink: #3a0f28; --sb-active-border: rgba(58, 15, 40, 0.25);
+  --sb-border: rgba(58, 15, 40, 0.18);
+}
+:root[data-sidebar="orange"] {
+  --sb-bg: linear-gradient(180deg, #ef6a40, #cf4e29);
+  --sb-ink: #2a0d04; --sb-ink-dim: rgba(42, 13, 4, 0.74); --sb-brand: #2a0d04;
+  --sb-hover: rgba(255, 255, 255, 0.20);
+  --sb-active-bg: rgba(255, 255, 255, 0.5); --sb-active-ink: #2a0d04; --sb-active-border: rgba(42, 13, 4, 0.28);
+  --sb-border: rgba(42, 13, 4, 0.22);
 }
 
 /* ---------- Reset ---------- */
