@@ -186,9 +186,9 @@ const posData = { catalog, categories: categories ?? [], customer };
 
     return `<svg class="cat-gem" viewBox="0 0 24 24" aria-hidden="true">
       <defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stop-color="#fff" stop-opacity="0.55"/>
-        <stop offset="0.42" stop-color="${color}"/>
-        <stop offset="1" stop-color="${color}" stop-opacity="0.92"/>
+        <stop offset="0" stop-color="#fff" stop-opacity="0.62"/>
+        <stop offset="0.4" stop-color="${color}" stop-opacity="0.8"/>
+        <stop offset="1" stop-color="${color}" stop-opacity="0.5"/>
       </linearGradient></defs>${shape}</svg>`;
   }
 
@@ -206,38 +206,39 @@ const posData = { catalog, categories: categories ?? [], customer };
       </button>`)
     .join("");
 
-  // Mouse-reactive gem glisten: track the cursor over the tile grid (rAF-throttled)
-  // and feed its position to the hovered gem as CSS vars so the highlight follows.
-  // Honours the store "gem effect" setting (data-gem-glow) + reduced-motion.
+  // "Grand" gem glisten: the cursor is a single moving light source for the WHOLE
+  // grid. On any pointer move anywhere on screen (rAF-throttled, ~1 write/gem) we
+  // re-light every gem — the specular highlight slides to the gem edge facing the
+  // cursor and the gem tilts toward it, so all gems catch the light together even
+  // when the cursor is across the screen. Cheap: a handful of CSS-var writes per
+  // frame, GPU-composited. Honours the store gem-effect setting + reduced-motion.
   const glowOn = tilesEl.dataset.gemGlow !== "off" &&
     !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   if (glowOn) {
-    let rafPending = false, lastEv: PointerEvent | null = null;
-    tilesEl.addEventListener("pointermove", (e) => {
-      lastEv = e as PointerEvent;
+    const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+    let rafPending = false, mx = 0, my = 0;
+    const relight = () => {
+      rafPending = false;
+      tilesEl.querySelectorAll<HTMLElement>(".gem-box").forEach((box) => {
+        const r = box.getBoundingClientRect();
+        if (!r.width) return;
+        const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+        // Direction to the cursor, normalised by a screen-ish radius so far-away
+        // cursors still register but saturate gently.
+        const nx = clamp((mx - cx) / 520, -1, 1);
+        const ny = clamp((my - cy) / 520, -1, 1);
+        // Highlight rides the gem edge facing the cursor (clamped just past the rim).
+        box.style.setProperty("--gx", `${(50 + nx * 60).toFixed(1)}%`);
+        box.style.setProperty("--gy", `${(38 + ny * 60).toFixed(1)}%`);
+        box.style.setProperty("--tilt", `perspective(260px) rotateX(${(-ny * 12).toFixed(2)}deg) rotateY(${(nx * 12).toFixed(2)}deg)`);
+      });
+    };
+    window.addEventListener("pointermove", (e) => {
+      mx = e.clientX; my = e.clientY;
       if (rafPending) return;
       rafPending = true;
-      requestAnimationFrame(() => {
-        rafPending = false;
-        const tile = (lastEv!.target as HTMLElement).closest<HTMLElement>(".tile-btn");
-        if (!tile) return;
-        const box = tile.querySelector<HTMLElement>(".gem-box");
-        if (!box) return;
-        const r = box.getBoundingClientRect();
-        box.style.setProperty("--gx", `${((lastEv!.clientX - r.left) / r.width) * 100}%`);
-        box.style.setProperty("--gy", `${((lastEv!.clientY - r.top) / r.height) * 100}%`);
-        const dx = (lastEv!.clientX - (r.left + r.width / 2)) / r.width;
-        const dy = (lastEv!.clientY - (r.top + r.height / 2)) / r.height;
-        box.style.setProperty("--tilt", `perspective(240px) rotateX(${(-dy * 14).toFixed(2)}deg) rotateY(${(dx * 14).toFixed(2)}deg)`);
-      });
-    });
-    tilesEl.addEventListener("pointerleave", () => {
-      tilesEl.querySelectorAll<HTMLElement>(".gem-box").forEach((b) => {
-        b.style.removeProperty("--tilt");
-        b.style.removeProperty("--gx");
-        b.style.removeProperty("--gy");
-      });
-    });
+      requestAnimationFrame(relight);
+    }, { passive: true });
   } else {
     tilesEl.classList.add("gem-flat");
   }
