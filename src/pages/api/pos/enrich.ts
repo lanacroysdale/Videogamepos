@@ -41,15 +41,28 @@ export const POST: APIRoute = async ({ locals, request }) => {
   if (!meta) return json({ ok: true, found: false });
 
   const admin = createSupabaseAdminClient();
-  const imageUrl = meta.coverUrl ? await intoStorage(admin, meta.coverUrl) : null;
+
+  // When persisting to an existing product, fill ONLY empty fields — never
+  // overwrite manual edits. This makes bulk "resync images" purely additive.
+  let cur: any = null;
+  if (b.productId) {
+    ({ data: cur } = await admin
+      .from("products")
+      .select("image_url, description, trailer_url, alternative_names, release_year")
+      .eq("id", b.productId)
+      .maybeSingle());
+  }
+
+  const needImage = !b.productId || !cur?.image_url;
+  const imageUrl = meta.coverUrl && needImage ? await intoStorage(admin, meta.coverUrl) : null;
 
   if (b.productId) {
     const patch: Record<string, unknown> = {};
-    if (imageUrl) patch.image_url = imageUrl;
-    if (meta.summary) patch.description = meta.summary;
-    if (meta.releaseYear) patch.release_year = meta.releaseYear;
-    if (meta.trailerUrl) patch.trailer_url = meta.trailerUrl;
-    if (meta.altNames.length) patch.alternative_names = meta.altNames;
+    if (imageUrl && !cur?.image_url) patch.image_url = imageUrl;
+    if (meta.summary && !cur?.description) patch.description = meta.summary;
+    if (meta.releaseYear && !cur?.release_year) patch.release_year = meta.releaseYear;
+    if (meta.trailerUrl && !cur?.trailer_url) patch.trailer_url = meta.trailerUrl;
+    if (meta.altNames.length && !(cur?.alternative_names?.length)) patch.alternative_names = meta.altNames;
     if (Object.keys(patch).length) await admin.from("products").update(patch).eq("id", b.productId);
   }
 

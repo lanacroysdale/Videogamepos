@@ -48,17 +48,22 @@ const items = (products ?? []).map((p: any) => ({
     ],
   })),
 }));
+const isManager = ["owner", "manager"].includes(Astro.locals.profile?.role ?? "");
 const posData = {
   items,
   categories: categories ?? [],
   completeness: completeness ?? [],
   grades: grades ?? [],
   conditionPricing: settings?.condition_pricing_enabled ?? false,
+  isManager,
 };
 ---
 
 <AppLayout title="Inventory" active="inventory">
-  <div slot="actions"><button id="toggle-add" class="btn btn-primary btn-sm">＋ Add product</button></div>
+  <div slot="actions" style="display:flex;gap:0.5rem;">
+    {isManager && <button id="resync-img" class="btn btn-ghost btn-sm" title="Fetch covers for items with no image (only fills empties)">🔄 Resync images</button>}
+    <button id="toggle-add" class="btn btn-primary btn-sm">＋ Add product</button>
+  </div>
 
   <div id="add-panel" class="pos-panel" hidden style="margin-bottom:1rem;">
     <h2>Add a product</h2>
@@ -649,6 +654,31 @@ const posData = {
 
   /* ---------- Add product ---------- */
   $("toggle-add").addEventListener("click", () => { ($("add-panel") as HTMLElement).hidden = !($("add-panel") as HTMLElement).hidden; });
+
+  // Manager-only: fetch covers for items that have no image. Additive only —
+  // never overwrites or deletes (the enrich endpoint fills empty fields only).
+  document.getElementById("resync-img")?.addEventListener("click", async () => {
+    const pending = items.filter((p) => !p.imageUrl);
+    if (!pending.length) { toast("All items already have images"); return; }
+    if (!confirm(`Fetch covers for ${pending.length} item(s) with no image? This only fills empty listings — nothing is overwritten or deleted.`)) return;
+    const btn = document.getElementById("resync-img") as HTMLButtonElement;
+    btn.disabled = true; const orig = btn.textContent;
+    let done = 0, added = 0;
+    const CONC = 3;
+    for (let i = 0; i < pending.length; i += CONC) {
+      await Promise.all(pending.slice(i, i + CONC).map(async (p) => {
+        try {
+          const e = await enrich({ productId: p.id, title: p.title, platform: p.platform });
+          if (e.ok && e.found && e.imageUrl) { p.imageUrl = e.imageUrl; if (e.altNames?.length) p.altNames = e.altNames; added++; }
+        } catch {}
+        done++;
+      }));
+      btn.textContent = `Syncing ${done}/${pending.length}…`;
+      render();
+    }
+    btn.disabled = false; btn.textContent = orig;
+    toast(`✓ Resync done — added ${added} cover${added === 1 ? "" : "s"}`);
+  });
   $("np-save").addEventListener("click", async () => {
     const comp = ($("np-comp") as HTMLSelectElement).value;
     const grade = ($("np-grade") as HTMLSelectElement).value;
