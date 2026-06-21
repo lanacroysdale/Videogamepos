@@ -15,6 +15,21 @@ interface IncomingItem {
   discountCents?: number;
 }
 
+// List held (open) sales for the resume tray — newest first, with their items.
+export const GET: APIRoute = async ({ locals }) => {
+  if (!locals.user) return json({ error: "unauthorized" }, 401);
+  const { data, error } = await locals.supabase
+    .from("transactions")
+    .select(
+      "id, human_id, total_cents, created_at, note, customer:customers(first_name, last_name), transaction_items(variant_id, category_id, kind, description, qty, unit_price_cents, discount_cents)",
+    )
+    .eq("type", "sale")
+    .eq("status", "open")
+    .order("created_at", { ascending: false });
+  if (error) return json({ error: error.message }, 500);
+  return json({ held: data ?? [] });
+};
+
 export const POST: APIRoute = async ({ locals, request }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
 
@@ -46,28 +61,49 @@ export const POST: APIRoute = async ({ locals, request }) => {
   const card = status === "completed" ? total - cash : 0; // remainder on card
   const change = tendered > total ? tendered - total : 0;
 
-  const { data: txn, error } = await locals.supabase
-    .from("transactions")
-    .insert({
-      customer_id: body.customerId ?? null,
-      employee_id: locals.user.id,
-      type: "sale",
-      status,
-      subtotal_cents: subtotal,
-      discount_cents: totalDiscount,
-      total_cents: total,
-      cash_cents: cash,
-      card_cents: card,
-      completed_at: status === "completed" ? new Date().toISOString() : null,
-    })
-    .select()
-    .single();
-  if (error) return json({ error: error.message }, 500);
+  // Resuming a held sale updates that same transaction in place (so completing
+  // or re-holding never creates a duplicate); otherwise we insert a new one.
+  const resumeId = body.resumeId ?? null;
+  const fields = {
+    customer_id: body.customerId ?? null,
+    status,
+    subtotal_cents: subtotal,
+    discount_cents: totalDiscount,
+    total_cents: total,
+    cash_cents: cash,
+    card_cents: card,
+    completed_at: status === "completed" ? new Date().toISOString() : null,
+  };
 
-  const { error: iErr } = await locals.supabase
-    .from("transaction_items")
-    .insert(items.map((it) => ({ ...it, transaction_id: txn.id })));
-  if (iErr) return json({ error: iErr.message }, 500);
+  let txn: any;
+  if (resumeId) {
+    const { data, error } = await locals.supabase
+      .from("transactions")
+      .update(fields)
+      .eq("id", resumeId)
+      .eq("status", "open") // only an open (held) sale can be resumed
+      .select()
+      .single();
+    if (error || !data) return json({ error: error?.message || "That held sale is no longer available." }, 409);
+    txn = data;
+    await locals.supabase.from("transaction_items").delete().eq("transaction_id", resumeId);
+    const { error: iErr } = await locals.supabase
+      .from("transaction_items")
+      .insert(items.map((it) => ({ ...it, transaction_id: resumeId })));
+    if (iErr) return json({ error: iErr.message }, 500);
+  } else {
+    const { data, error } = await locals.supabase
+      .from("transactions")
+      .insert({ ...fields, employee_id: locals.user.id, type: "sale" })
+      .select()
+      .single();
+    if (error) return json({ error: error.message }, 500);
+    txn = data;
+    const { error: iErr } = await locals.supabase
+      .from("transaction_items")
+      .insert(items.map((it) => ({ ...it, transaction_id: txn.id })));
+    if (iErr) return json({ error: iErr.message }, 500);
+  }
 
   // Decrement stock for completed sales (inventory variants only).
   if (status === "completed") {

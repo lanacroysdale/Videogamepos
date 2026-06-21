@@ -39,6 +39,11 @@ const posData = { catalog, categories: categories ?? [], customer };
 ---
 
 <AppLayout title="Checkout" active="checkout">
+  <div id="held-bar" class="held-bar" hidden>
+    <span class="held-bar-title">🔖 Held sales</span>
+    <div id="held-list" class="held-list"></div>
+  </div>
+
   <div class="checkout-grid">
     <!-- LEFT: catalog -->
     <div class="pos-panel">
@@ -62,6 +67,7 @@ const posData = { catalog, categories: categories ?? [], customer };
     <!-- RIGHT: cart -->
     <div class="pos-panel cart-panel">
       <h2>Cart</h2>
+      <div id="resume-banner" class="resume-banner" hidden></div>
       <div id="cart" class="cart"></div>
       <p id="cart-empty" class="empty">Cart is empty — tap a category or search to add items.</p>
 
@@ -80,7 +86,7 @@ const posData = { catalog, categories: categories ?? [], customer };
 
       <div id="cart-actions" style="margin-top:1rem;display:flex;gap:0.6rem;flex-wrap:wrap;" hidden>
         <button id="complete-btn" class="btn btn-primary" style="flex:1;">Complete sale →</button>
-        <button id="suspend-btn" class="btn btn-ghost btn-sm">Suspend</button>
+        <button id="suspend-btn" class="btn btn-ghost btn-sm" title="Save this cart to resume later">⏸ Hold</button>
         <button id="clear-btn" class="btn btn-ghost btn-sm">Clear</button>
       </div>
 
@@ -101,6 +107,23 @@ const posData = { catalog, categories: categories ?? [], customer };
   .prod-row .stock-0 { color:#ff9aa2; }
   .receipt { margin-top:1rem; padding:1rem; border:1px solid rgba(128,255,114,.4); background:rgba(128,255,114,.08); border-radius:12px; text-align:center; }
   .receipt h3 { color:var(--green); margin-bottom:0.3rem; }
+
+  /* Held sales bar (static template elements). */
+  .held-bar { display:flex; align-items:center; gap:0.8rem; margin-bottom:1rem; padding:0.65rem 0.85rem; background:rgba(255,210,63,.08); border:1px solid rgba(255,210,63,.35); }
+  .held-bar-title { font-weight:800; font-size:0.9rem; white-space:nowrap; }
+  .held-list { display:flex; gap:0.55rem; overflow-x:auto; padding-bottom:0.15rem; }
+  .resume-banner { margin-bottom:0.8rem; padding:0.5rem 0.75rem; background:rgba(44,230,224,.1); border:1px solid rgba(44,230,224,.35); font-size:0.85rem; }
+</style>
+
+<!-- Held-sale chips are built via innerHTML, so their styles must be global
+     (Astro scoped styles don't reach runtime-inserted elements). -->
+<style is:global>
+  .held-chip { display:grid; grid-template-columns:auto auto; gap:0.05rem 0.6rem; align-items:baseline; flex:0 0 auto; padding:0.45rem 0.7rem; background:var(--panel); border:1px solid var(--border); cursor:pointer; text-align:left; color:var(--text); transition:border-color .15s; }
+  .held-chip:hover { border-color:var(--cyan); }
+  .held-chip-id { font-weight:800; font-family:var(--font-mono); }
+  .held-chip-who { font-size:0.82rem; color:var(--muted); justify-self:end; }
+  .held-chip-total { font-family:var(--font-mono); font-weight:800; color:var(--green); grid-column:1; }
+  .held-chip small { grid-column:1 / -1; color:var(--muted-2); font-size:0.72rem; white-space:nowrap; }
 </style>
 
 <script>
@@ -244,18 +267,77 @@ const posData = { catalog, categories: categories ?? [], customer };
   ($("cart-disc") as HTMLInputElement).addEventListener("input", recalc);
   ($("cash-in") as HTMLInputElement).addEventListener("input", recalc);
 
+  // ---------- Held sales (hold / resume) ----------
+  let heldId: string | null = null;
+
+  const timeAgo = (iso: string) => {
+    const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+    if (s < 60) return "just now";
+    if (s < 3600) return Math.floor(s / 60) + "m ago";
+    if (s < 86400) return Math.floor(s / 3600) + "h ago";
+    return Math.floor(s / 86400) + "d ago";
+  };
+  const custName = (c: any) => (c ? `${c.first_name ?? ""} ${c.last_name ?? ""}`.trim() : "");
+
+  async function loadHeld() {
+    try {
+      const j = await (await fetch("/api/pos/checkout")).json();
+      const all: any[] = j.held || [];
+      const held = all.filter((h) => h.id !== heldId); // hide the one being worked on
+      $("held-list").innerHTML = held.map((h) => {
+        const n = (h.transaction_items || []).reduce((s: number, it: any) => s + (it.qty || 1), 0);
+        const who = custName(h.customer);
+        return `<button class="held-chip" data-resume="${h.id}" type="button">
+            <span class="held-chip-id">#${h.human_id}</span>${who ? `<span class="held-chip-who">${esc(who)}</span>` : ""}
+            <span class="held-chip-total">${money(h.total_cents)}</span>
+            <small>${n} item${n === 1 ? "" : "s"} · ${timeAgo(h.created_at)}</small>
+          </button>`;
+      }).join("");
+      ($("held-bar") as HTMLElement).hidden = held.length === 0;
+      $("held-list").querySelectorAll<HTMLButtonElement>("[data-resume]").forEach((b) =>
+        b.addEventListener("click", () => resumeHeld(all.find((x) => x.id === b.dataset.resume))));
+    } catch { /* leave the bar as-is */ }
+  }
+
+  function resumeHeld(h: any) {
+    if (!h) return;
+    if (cart.length && heldId !== h.id && !confirm(`Replace the current cart with held sale #${h.human_id}?`)) return;
+    cart = (h.transaction_items || []).map((it: any) => {
+      const cv = catalog.find((c) => c.variantId === it.variant_id);
+      const cat = categories.find((c) => c.id === it.category_id);
+      return {
+        key: crypto.randomUUID(), variantId: it.variant_id, categoryId: it.category_id, kind: it.kind,
+        title: it.description, meta: cv ? `${cv.platform} · ${cv.condition}` : (cat?.name || ""),
+        unitPriceCents: it.unit_price_cents, qty: it.qty, discountCents: it.discount_cents,
+      };
+    });
+    heldId = h.id;
+    $("receipt").hidden = true;
+    renderResumeBanner(h.human_id);
+    renderCart();
+    loadHeld();
+  }
+
+  function renderResumeBanner(humanId: number | null) {
+    const el = $("resume-banner") as HTMLElement;
+    if (heldId == null) { el.hidden = true; el.innerHTML = ""; return; }
+    el.hidden = false;
+    el.innerHTML = `▶ Resuming held sale <strong>#${humanId}</strong> · <button class="link-btn" id="resume-cancel" type="button">start a new sale</button>`;
+    $("resume-cancel").addEventListener("click", () => { heldId = null; cart = []; renderResumeBanner(null); renderCart(); loadHeld(); });
+  }
+
   // ---------- Submit ----------
   async function submit(status: "completed" | "open") {
     if (!cart.length) return;
     const cartDisc = Math.round(parseFloat(($("cart-disc") as HTMLInputElement).value) * 100) || 0;
     const cash = Math.round(parseFloat(($("cash-in") as HTMLInputElement).value) * 100) || 0;
-    const btn = $("complete-btn") as HTMLButtonElement;
-    btn.disabled = true; btn.textContent = "Saving…";
+    const btn = (status === "completed" ? $("complete-btn") : $("suspend-btn")) as HTMLButtonElement;
+    const orig = btn.textContent; btn.disabled = true; btn.textContent = "Saving…";
     try {
       const res = await fetch("/api/pos/checkout", {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          customerId: customer?.id ?? null, status, cartDiscountCents: cartDisc, cashCents: cash,
+          customerId: customer?.id ?? null, status, resumeId: heldId, cartDiscountCents: cartDisc, cashCents: cash,
           items: cart.map((i) => ({ variantId: i.variantId, categoryId: i.categoryId, kind: i.kind, description: i.title, qty: i.qty, unitPriceCents: i.unitPriceCents, discountCents: i.discountCents })),
         }),
       });
@@ -265,21 +347,24 @@ const posData = { catalog, categories: categories ?? [], customer };
       rc.hidden = false;
       rc.innerHTML = status === "completed"
         ? `<h3>✓ Sale #${j.humanId} complete</h3><p>Total ${money(j.total)}${j.change ? ` · Change due <strong>${money(j.change)}</strong>` : ""}</p>`
-        : `<h3>⏸ Suspended as #${j.humanId}</h3><p>Saved as an open transaction. Find it on the dashboard.</p>`;
-      cart = []; ($("cart-disc") as HTMLInputElement).value = "0"; ($("cash-in") as HTMLInputElement).value = "";
+        : `<h3>⏸ Held as #${j.humanId}</h3><p>Saved — resume it anytime from the Held sales bar above.</p>`;
+      cart = []; heldId = null; renderResumeBanner(null);
+      ($("cart-disc") as HTMLInputElement).value = "0"; ($("cash-in") as HTMLInputElement).value = "";
       renderCart();
+      loadHeld();
       rc.scrollIntoView({ behavior: "smooth", block: "center" });
     } catch (err: any) {
       alert("Could not save: " + err.message);
     } finally {
-      btn.disabled = false; btn.textContent = "Complete sale →";
+      btn.disabled = false; btn.textContent = orig;
     }
   }
   $("complete-btn").addEventListener("click", () => submit("completed"));
   $("suspend-btn").addEventListener("click", () => submit("open"));
-  $("clear-btn").addEventListener("click", () => { cart = []; renderCart(); $("receipt").hidden = true; });
+  $("clear-btn").addEventListener("click", () => { cart = []; heldId = null; renderResumeBanner(null); renderCart(); $("receipt").hidden = true; loadHeld(); });
 
   // initial paint
   renderProducts();
   renderCart();
+  loadHeld();
 </script>
