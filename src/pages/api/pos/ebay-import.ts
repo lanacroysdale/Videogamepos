@@ -2,7 +2,7 @@ import type { APIRoute } from "astro";
 import { createSupabaseAdminClient } from "../../../lib/supabase";
 import { copyImageToStorage, copyGallery } from "../../../lib/storage";
 import {
-  ebayConfigured, ebaySeller, extractItemId, getItem, listSellerItems, mapItem, type MappedItem,
+  ebayConfigured, ebaySeller, extractItemId, getItem, listSellerItems, mapItem, findUpc, type MappedItem,
 } from "../../../lib/ebay";
 import { syncEbayStock } from "../../../lib/ebaySync";
 
@@ -129,6 +129,33 @@ export const POST: APIRoute = async ({ locals, request }) => {
         for (const t of p.tags || []) if (String(t).startsWith("ebay:")) have.add(String(t).slice(5));
       const todo = all.filter((i) => !have.has(i.legacyItemId));
       return json({ ok: true, total: all.length, alreadyImported: all.length - todo.length, items: todo });
+    }
+
+    // -- UPC backfill step 1: variants missing a UPC barcode ----------------
+    if (mode === "upc-list") {
+      if (!isManager) return json({ error: "Managers only" }, 403);
+      const { data } = await admin.from("product_variants")
+        .select("id, product:products(title, platform), product_barcodes(label)");
+      const todo = (data || [])
+        .filter((v: any) => !(v.product_barcodes || []).some((bc: any) => bc.label === "UPC"))
+        .map((v: any) => ({ variantId: v.id, title: v.product?.title, platform: v.product?.platform }))
+        .filter((v: any) => v.title);
+      return json({ ok: true, totalVariants: data?.length ?? 0, todo });
+    }
+
+    // -- UPC backfill step 2: find + attach a UPC for one variant ------------
+    if (mode === "upc-item") {
+      if (!isManager) return json({ error: "Managers only" }, 403);
+      if (!b.variantId || !b.title) return json({ error: "variantId and title required" }, 400);
+      const { data: existing } = await admin.from("product_barcodes")
+        .select("id").eq("variant_id", b.variantId).eq("label", "UPC").maybeSingle();
+      if (existing) return json({ ok: true, skipped: true });
+      const { upc, matchedTitle } = await findUpc(b.title, b.platform);
+      if (!upc) return json({ ok: true, found: false });
+      await admin.from("product_barcodes")
+        .insert({ variant_id: b.variantId, barcode: upc, label: "UPC" })
+        .then(undefined, () => {});
+      return json({ ok: true, found: true, upc, matchedTitle });
     }
 
     // -- Bulk step 2: import ONE listing ------------------------------------

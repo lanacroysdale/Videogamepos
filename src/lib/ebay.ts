@@ -183,6 +183,51 @@ export function mapCategoryName(item: any): string {
 // The public eBay listing URL for an item id (used for "View on eBay").
 export const ebayItemUrl = (legacyItemId: string) => `https://www.ebay.com/itm/${legacyItemId}`;
 
+// ---- UPC lookup (best-effort, free) ----------------------------------------
+const sigWords = (s: string) =>
+  new Set(String(s).toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((w) => w.length > 2));
+// Do the matched listing and our product share enough words to trust its UPC?
+function titlesMatch(ours: string, theirs: string): boolean {
+  const a = sigWords(ours), b = sigWords(theirs);
+  if (!a.size) return false;
+  let common = 0;
+  for (const w of a) if (b.has(w)) common++;
+  return common / a.size >= 0.5;
+}
+// Normalised platform key — guards against sequel/platform confusion (e.g. our
+// PS1 "Metal Gear Solid" matching a PS4 "Metal Gear Solid V").
+const normPlat = (p?: string | null) =>
+  String(p || "").toLowerCase()
+    .replace(/\b(sony|microsoft|nintendo|sega|console|system|entertainment|video game)\b/g, " ")
+    .replace(/playstation/g, "ps")
+    .replace(/[^a-z0-9]+/g, " ").trim();
+const platMatch = (ours?: string | null, theirs?: string | null) => {
+  const a = normPlat(ours), b = normPlat(theirs);
+  return !a || !b ? false : a === b; // require a confident platform match
+};
+
+// Search eBay for a product and return a UPC from a matching listing's item
+// specifics. Guarded by a title match so we don't attach a wrong barcode.
+export async function findUpc(
+  title: string,
+  platform?: string | null,
+): Promise<{ upc: string | null; matchedTitle: string | null }> {
+  const q = (platform ? `${title} ${platform}` : title).slice(0, 100);
+  const p = new URLSearchParams({ q, limit: "3" });
+  let summaries: any[] = [];
+  try { summaries = (await ebayGet(`/item_summary/search?${p.toString()}`)).itemSummaries || []; }
+  catch { return { upc: null, matchedTitle: null }; }
+  for (const s of summaries.slice(0, 2)) {
+    if (!s.legacyItemId) continue;
+    try {
+      const mi = mapItem(await getItem(String(s.legacyItemId)));
+      if (mi.upc && /^\d{8,14}$/.test(mi.upc) && titlesMatch(title, mi.title) && platMatch(platform, mi.platform))
+        return { upc: mi.upc, matchedTitle: mi.title };
+    } catch { /* skip this candidate */ }
+  }
+  return { upc: null, matchedTitle: null };
+}
+
 // Our completeness code (L / IB / CIB / NEW) inferred from title + specifics.
 function deriveCompleteness(title: string, aspects: Record<string, string>, conditionId: string): string {
   const hay = (title + " " + Object.values(aspects).join(" ")).toLowerCase();
