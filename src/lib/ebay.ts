@@ -169,13 +169,19 @@ function aspectDict(item: any): Record<string, string> {
 // eBay categoryPath → one of our category NAMES (resolved to an id server-side).
 export function mapCategoryName(item: any): string {
   const path = String(item.categoryPath || "").toLowerCase();
+  const top = path.split("|")[0].trim();
+  if (top.startsWith("collectible") || /trading card|memorabilia/.test(path)) return "Collectibles";
+  if (top.startsWith("toys")) return "Toys";
   if (/(blu-ray|\bdvd\b|movie|film|tv series)/.test(path)) return "Movies";
   if (/(book|strategy guide|magazine)/.test(path)) return "Books";
-  if (/(console)/.test(path) && !/accessor/.test(path)) return "Consoles";
+  if (/console/.test(path) && !/accessor/.test(path)) return "Consoles";
   if (/(accessor|controller|cable|memory card|headset|adapter)/.test(path)) return "Accessories";
   if (/(video game|game)/.test(path)) return "Video Games";
   return "Video Games";
 }
+
+// The public eBay listing URL for an item id (used for "View on eBay").
+export const ebayItemUrl = (legacyItemId: string) => `https://www.ebay.com/itm/${legacyItemId}`;
 
 // Our completeness code (L / IB / CIB / NEW) inferred from title + specifics.
 function deriveCompleteness(title: string, aspects: Record<string, string>, conditionId: string): string {

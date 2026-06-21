@@ -134,7 +134,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
       const legacyId = String(b.legacyItemId || extractItemId(b.input || "") || "");
       if (!legacyId) return json({ error: "legacyItemId required" }, 400);
       const cats = await categoryMap(admin);
-      const r = await importOne(admin, cats, legacyId, Math.max(0, Number(b.galleryMax ?? 5)));
+      const r = await importOne(admin, cats, legacyId, Math.max(0, Number(b.galleryMax ?? 6)));
       return json({ ok: true, ...r });
     }
 

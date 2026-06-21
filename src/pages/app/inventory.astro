@@ -13,7 +13,7 @@ const [{ data: categories }, { data: settings }, { data: completeness }, { data:
 const { data: products } = await supabase
   .from("products")
   .select(
-    "id, title, slug, platform, franchise, genre, description, image_url, alternative_names, category_id, category:categories(name,color), product_variants(id, condition, completeness, completeness_code, grade_code, sku, barcode, price_cents, online_price_cents, cost_cents, quantity, online_visible, product_barcodes(id, barcode, label))",
+    "id, title, slug, platform, franchise, genre, description, image_url, alternative_names, tags, category_id, category:categories(name,color), product_variants(id, condition, completeness, completeness_code, grade_code, sku, barcode, price_cents, online_price_cents, cost_cents, quantity, online_visible, product_barcodes(id, barcode, label))",
   )
   .order("title");
 
@@ -30,6 +30,7 @@ const items = (products ?? []).map((p: any) => ({
   categoryId: p.category_id,
   categoryName: p.category?.name ?? "",
   categoryColor: p.category?.color ?? "#2ce6e0",
+  ebayId: (p.tags ?? []).find((t: string) => t.startsWith("ebay:"))?.slice(5) ?? "",
   variants: (p.product_variants ?? []).map((v: any) => ({
     id: v.id,
     condition: v.condition,
@@ -121,6 +122,7 @@ const posData = {
       <div class="modal-body" id="modal-body"></div>
       <footer class="modal-foot">
         <a id="m-weblink" class="weblink" target="_blank" rel="noopener" hidden>↗ View on website</a>
+        <a id="m-ebaylink" class="weblink" target="_blank" rel="noopener" hidden>🛒 View on eBay</a>
         <div class="foot-actions">
           <button class="btn btn-ghost btn-sm" data-close>Cancel</button>
           <button id="m-save" class="btn btn-primary btn-sm">Save changes</button>
@@ -484,6 +486,8 @@ const posData = {
 
     const link = $("m-weblink") as HTMLAnchorElement;
     if (anyWeb(p)) { link.href = p.slug ? `/shop/${p.slug}` : "/shop"; link.hidden = false; } else { link.hidden = true; }
+    const ebayLink = $("m-ebaylink") as HTMLAnchorElement;
+    if (p.ebayId) { ebayLink.href = `https://www.ebay.com/itm/${p.ebayId}`; ebayLink.hidden = false; } else { ebayLink.hidden = true; }
 
     bindBarcodes(p);
     bindReprice(p);
@@ -760,6 +764,7 @@ const posData = {
           if (r.ok && e.ok) {
             if (e.imageUrl) newItem.imageUrl = e.imageUrl;
             if (pendingEbay.description) newItem.description = pendingEbay.description;
+            newItem.ebayId = (String(pendingEbay.input).match(/\d{9,15}/) || [])[0] || "";
             render();
             toast(e.imageUrl ? "🛒 Imported from eBay with photo" : "✓ Imported from eBay");
           } else { toast("✓ Added (eBay media failed: " + (e.error || "?") + ")"); }

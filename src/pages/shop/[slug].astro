@@ -6,6 +6,7 @@ import { SITE } from "../../consts";
 import { fmt } from "../../lib/money";
 import { createSupabaseAdminClient } from "../../lib/supabase";
 import { listGallery } from "../../lib/storage";
+import { ebayItemUrl } from "../../lib/ebay";
 
 // Product detail page — the SEO surface. Server-rendered, indexable (no
 // noindex), with a Product JSON-LD block + auto description/trailer. Currently
@@ -16,7 +17,7 @@ const admin = createSupabaseAdminClient();
 const { data: product } = await admin
   .from("products")
   .select(
-    "id, title, slug, platform, franchise, genre, description, image_url, trailer_url, product_variants(id, condition, completeness_code, grade_code, price_cents, online_price_cents, quantity, online_visible)",
+    "id, title, slug, platform, franchise, genre, description, image_url, trailer_url, tags, product_variants(id, condition, completeness_code, grade_code, price_cents, online_price_cents, quantity, online_visible)",
   )
   .eq("slug", slug)
   .maybeSingle();
@@ -50,6 +51,12 @@ const mainImage = images[0] || product?.image_url || null;
 // "About this game" reads wrong for consoles/accessories — label by category.
 const aboutHeading =
   product?.genre || product?.franchise ? "About this game" : "About this item";
+
+// "View on eBay" — reconstruct the listing URL from the ebay:<id> tag.
+const ebayId = product
+  ? (product.tags ?? []).find((t: string) => t.startsWith("ebay:"))?.slice(5)
+  : null;
+const ebayUrl = ebayId ? ebayItemUrl(ebayId) : null;
 
 function ytEmbed(url: string | null | undefined) {
   if (!url) return null;
@@ -146,6 +153,9 @@ const metaDesc = product?.description
 
               <div class="pdp-cta">
                 <a href={SITE.phoneHref} class="btn btn-primary">Call to reserve · {SITE.phoneDisplay}</a>
+                {ebayUrl && (
+                  <a href={ebayUrl} target="_blank" rel="noopener noreferrer" class="btn btn-ghost">View on eBay ↗</a>
+                )}
                 <a href="/#journey" class="btn btn-ghost">Visit us in {SITE.location}</a>
               </div>
             </div>
