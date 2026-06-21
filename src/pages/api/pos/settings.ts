@@ -1,5 +1,6 @@
 import type { APIRoute } from "astro";
 import { createSupabaseAdminClient } from "../../../lib/supabase";
+import { THEME_KEYS } from "../../../lib/themeSettings";
 
 export const prerender = false;
 const json = (d: unknown, s = 200) =>
@@ -22,6 +23,8 @@ export const POST: APIRoute = async ({ locals, request }) => {
   if (b.lowStockHoverOnly !== undefined) settings.lowStockHoverOnly = !!b.lowStockHoverOnly;
   if (b.freeShipEnabled !== undefined) settings.freeShipEnabled = !!b.freeShipEnabled;
   if (b.freeShipThresholdCents !== undefined) settings.freeShipThresholdCents = Math.max(0, Math.round(Number(b.freeShipThresholdCents)) || 0);
+  if (b.defaultTheme !== undefined) settings.defaultTheme = THEME_KEYS.includes(String(b.defaultTheme)) ? String(b.defaultTheme) : "default";
+  if (b.gemEffectEnabled !== undefined) settings.gemEffectEnabled = !!b.gemEffectEnabled;
 
   const { error } = await admin.from("store_settings").update({ settings }).eq("id", 1);
   if (error) return json({ error: error.message }, 500);

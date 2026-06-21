@@ -53,6 +53,59 @@
   --font-display: "League Gothic", "Oswald", "Arial Narrow", var(--font-sans);
 }
 
+/* =========================================================================
+   Color themes — selectable via <html data-theme="…">. Only the neutral
+   surface/text tokens shift; the brand accents stay constant so the identity
+   carries across every theme. Applied no-flash by an inline <head> script and
+   chosen on the POS Settings page (store default) or per-device.
+   ========================================================================= */
+
+/* Bright — lifted, warmer panels + a hotter terracotta; energetic in-store look */
+:root[data-theme="bright"] {
+  --bg: #1c1006;
+  --bg-2: #2a1809;
+  --panel: #3a2410;
+  --panel-2: #4d3015;
+  --border: rgba(255, 238, 224, 0.16);
+  --border-strong: rgba(255, 238, 224, 0.30);
+  --text: #fff6ec;
+  --muted: #dac1ae;
+  --muted-2: #ab9078;
+  --cyan: #f56a3f;
+  --cyan-deep: #c84e2c;
+  --magenta: #ffa9d6;
+  --glow-strength: 1.45;
+}
+
+/* Light — warm paper/cream mode; dark coffee text, accents unchanged */
+:root[data-theme="light"] {
+  --bg: #f4ece2;
+  --bg-2: #ece1d3;
+  --panel: #fbf5ee;
+  --panel-2: #f1e6d9;
+  --border: rgba(60, 32, 12, 0.14);
+  --border-strong: rgba(60, 32, 12, 0.24);
+  --text: #2a1808;
+  --muted: #6b5443;
+  --muted-2: #927a66;
+  --shadow: 0 16px 36px -22px rgba(60, 32, 12, 0.45);
+  --glow-strength: 0.4;
+}
+
+/* Midnight — near-black, cool-leaning; high contrast for low-light shifts */
+:root[data-theme="midnight"] {
+  --bg: #06040a;
+  --bg-2: #0c0810;
+  --panel: #140d16;
+  --panel-2: #1e1422;
+  --border: rgba(255, 238, 224, 0.07);
+  --border-strong: rgba(255, 238, 224, 0.14);
+  --text: #ffffff;
+  --muted: #b9a99d;
+  --muted-2: #7c6c60;
+  --glow-strength: 1.6;
+}
+
 /* ---------- Reset ---------- */
 *, *::before, *::after { box-sizing: border-box; }
 * { margin: 0; }

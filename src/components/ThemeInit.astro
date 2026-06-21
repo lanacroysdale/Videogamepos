@@ -1,0 +1,27 @@
+---
+// No-flash theme bootstrap. Reads the store's default theme once (server-side),
+// then an inline <head> script applies the per-device override (localStorage
+// 'tl-theme') or that default BEFORE first paint. Also exposes window.setTheme /
+// getTheme for the in-app palette switcher. Drop this in the <head> of a layout.
+import { createSupabaseAdminClient } from "../lib/supabase";
+import { themeSettings } from "../lib/themeSettings";
+
+let defaultTheme = "default";
+try {
+  const admin = createSupabaseAdminClient();
+  const { data } = await admin.from("store_settings").select("settings").eq("id", 1).maybeSingle();
+  defaultTheme = themeSettings(data?.settings).defaultTheme;
+} catch {
+  // Settings unavailable (e.g. DB down) — fall back to the brand default.
+}
+---
+
+<script is:inline set:html={`(function(){try{
+  var DEF=${JSON.stringify(defaultTheme)};
+  function apply(t){ if(t&&t!=='default'){document.documentElement.setAttribute('data-theme',t);} else {document.documentElement.removeAttribute('data-theme');} }
+  var saved=null; try{ saved=localStorage.getItem('tl-theme'); }catch(e){}
+  apply(saved||DEF);
+  window.__tlThemeDefault=DEF;
+  window.getTheme=function(){ try{return localStorage.getItem('tl-theme')||DEF;}catch(e){return DEF;} };
+  window.setTheme=function(t){ try{ if(!t||t==='default'){localStorage.removeItem('tl-theme');}else{localStorage.setItem('tl-theme',t);} }catch(e){} apply(t); };
+}catch(e){}})();`} />

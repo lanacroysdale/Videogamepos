@@ -3,17 +3,45 @@ export const prerender = false;
 
 import AppLayout from "../../layouts/AppLayout.astro";
 import { lowStockSettings, freeShipSettings } from "../../lib/lowStock";
+import { themeSettings, THEMES } from "../../lib/themeSettings";
 
 const supabase = Astro.locals.supabase;
 const { data: row } = await supabase.from("store_settings").select("settings").eq("id", 1).maybeSingle();
 const ls = lowStockSettings(row?.settings);
 const fs = freeShipSettings(row?.settings);
+const th = themeSettings(row?.settings);
 const minPriceDollars = (ls.lowStockMinPriceCents / 100).toFixed(2);
 const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
 ---
 
 <AppLayout title="Settings" active="settings">
   <p class="muted" style="margin-bottom:1.25rem;">Store-wide settings. Changes apply to the website immediately.</p>
+
+  <div class="pos-panel set-panel" style="margin-bottom:1.25rem;">
+    <h2>Appearance</h2>
+    <p class="muted set-desc">Pick a color palette. This sets the store default for everyone; you can override it just on this device.</p>
+
+    <div class="theme-grid" role="group" aria-label="Color palette">
+      {THEMES.map((t) => (
+        <button type="button" class="theme-swatch" data-theme-pick={t.key} aria-pressed={t.key === th.defaultTheme ? "true" : "false"}>
+          <span class="theme-prev" style={`background:${t.swatch}`}><span class="theme-dot" style={`background:${t.accent}`}></span></span>
+          <span class="theme-name">{t.label}</span>
+        </button>
+      ))}
+    </div>
+    <p class="set-preview" id="theme-scope-note">Applied as the store default. <button type="button" id="theme-local-reset" class="link-btn">Reset this device to the default</button></p>
+    <span id="theme-status" class="muted"></span>
+
+    <label class="set-row set-toggle" style="margin-top:1rem;">
+      <input type="checkbox" id="gem-effect" checked={th.gemEffectEnabled} />
+      <span><strong>Mouse-reactive gem shine on checkout</strong><br />
+        <span class="muted">The category gems catch a moving glint as the cursor passes. Turn off for a flat look.</span></span>
+    </label>
+    <div class="set-actions">
+      <button id="gem-save" class="btn btn-primary">Save effect</button>
+      <span id="gem-status" class="muted"></span>
+    </div>
+  </div>
 
   <div class="pos-panel set-panel">
     <h2>Low-stock badge</h2>
@@ -84,6 +112,17 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   .set-money { display: inline-flex; align-items: center; gap: 0.2rem; font-weight: 700; }
   .set-preview { margin: 1rem 0 0; padding: 0.7rem 0.9rem; background: rgba(255,255,255,.03); border: 1px solid var(--border); font-size: 0.9rem; }
   .set-actions { display: flex; align-items: center; gap: 1rem; margin-top: 1.3rem; }
+
+  .theme-grid { display: flex; flex-wrap: wrap; gap: 0.7rem; }
+  .theme-swatch {
+    display: flex; flex-direction: column; align-items: center; gap: 0.45rem; padding: 0.5rem;
+    background: var(--bg-2); border: 1px solid var(--border); cursor: pointer; min-width: 5rem;
+  }
+  .theme-swatch:hover { border-color: var(--muted); }
+  .theme-swatch[aria-pressed="true"] { border-color: var(--cyan); box-shadow: 0 0 0 1px var(--cyan); }
+  .theme-prev { display: grid; place-items: center; width: 3.6rem; height: 2.4rem; border: 1px solid var(--border-strong); }
+  .theme-dot { width: 1rem; height: 1rem; border-radius: 50%; }
+  .theme-name { font-size: 0.82rem; font-weight: 700; }
 </style>
 
 <script>
@@ -123,4 +162,34 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     freeShipEnabled: $("fs-enabled").checked,
     freeShipThresholdCents: Math.round((parseFloat($("fs-threshold").value) || 0) * 100),
   }, document.getElementById("fs-status")!, e.currentTarget as HTMLButtonElement));
+
+  // Appearance: theme palette + gem effect.
+  const win = window as any;
+  const themeBtns = [...document.querySelectorAll<HTMLButtonElement>("[data-theme-pick]")];
+  const themeStatus = document.getElementById("theme-status")!;
+  themeBtns.forEach((b) => b.addEventListener("click", async () => {
+    const key = b.dataset.themePick!;
+    win.setTheme?.(key);                       // apply on this device instantly
+    win.__tlThemeDefault = key;
+    themeBtns.forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    themeStatus.textContent = "Saving…";
+    try {
+      const res = await fetch("/api/pos/settings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ defaultTheme: key }) });
+      const j = await res.json();
+      if (!res.ok || !j.ok) throw new Error(j.error || "Save failed");
+      themeStatus.textContent = "✓ Saved as store default";
+    } catch (e: any) { themeStatus.textContent = ""; alert(e.message); }
+  }));
+  document.getElementById("theme-local-reset")?.addEventListener("click", () => {
+    try { localStorage.removeItem("tl-theme"); } catch (e) {}
+    const def = win.__tlThemeDefault || "default";
+    win.setTheme?.(def === "default" ? "default" : def);
+    if (def === "default") { try { localStorage.removeItem("tl-theme"); } catch (e) {} document.documentElement.removeAttribute("data-theme"); }
+    themeBtns.forEach((x) => x.setAttribute("aria-pressed", String(x.dataset.themePick === def)));
+    themeStatus.textContent = "✓ This device follows the store default";
+  });
+
+  document.getElementById("gem-save")!.addEventListener("click", (e) => save({
+    gemEffectEnabled: $("gem-effect").checked,
+  }, document.getElementById("gem-status")!, e.currentTarget as HTMLButtonElement));
 </script>

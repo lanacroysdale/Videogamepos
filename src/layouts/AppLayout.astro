@@ -1,6 +1,7 @@
 ---
 import "../styles/global.css";
 import "../styles/app.css";
+import ThemeInit from "../components/ThemeInit.astro";
 
 interface Props {
   title: string;
@@ -38,6 +39,7 @@ const nav = [
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="robots" content="noindex" />
+    <ThemeInit />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>{title} · Time Lag POS</title>
   </head>
