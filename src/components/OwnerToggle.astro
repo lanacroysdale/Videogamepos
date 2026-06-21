@@ -91,7 +91,7 @@
           { ico: "🚪", label: "Log out", act: "logout" },
         ];
 
-    const THEMES = ["default", "bright", "light", "midnight"];
+    const THEMES = ["default", "bright", "light", "midnight", "glass", "dmg", "gba", "wii"];
     function cycleTheme() {
       const cur = (window as any).getTheme?.() || "default";
       const next = THEMES[(THEMES.indexOf(cur) + 1) % THEMES.length];

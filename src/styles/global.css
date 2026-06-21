@@ -163,6 +163,66 @@
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
 }
 
+/* DMG Game Boy — the classic 4-shade olive-green LCD; accents go green too. */
+:root[data-theme="dmg"] {
+  --bg: #0f380f;
+  --bg-2: #143f12;
+  --panel: #1d4a1c;
+  --panel-2: #2b5a29;
+  --border: rgba(155, 188, 15, 0.18);
+  --border-strong: rgba(155, 188, 15, 0.38);
+  --text: #9bbc0f;
+  --muted: #84a52a;
+  --muted-2: #5f7d1c;
+  --cyan: #9bbc0f; --cyan-deep: #6e8b16; --magenta: #c7d34a; --violet: #6e8b16;
+  --green: #8bac0f; --sky: #6e8b16; --yellow: #c7d34a;
+  --accent-ink: #0f380f;
+  --glow-strength: 0.8;
+}
+
+/* Game Boy Advance — the launch "Indigo" purple, full-colour vibe. */
+:root[data-theme="gba"] {
+  --bg: #1a1640;
+  --bg-2: #211c52;
+  --panel: #2b2566;
+  --panel-2: #3a3382;
+  --border: rgba(220, 215, 255, 0.14);
+  --border-strong: rgba(220, 215, 255, 0.28);
+  --text: #ece9ff;
+  --muted: #b8b2e0;
+  --muted-2: #8780b8;
+  --cyan: #7c6ff0; --cyan-deep: #5a4fcf; --magenta: #c06cf0; --violet: #5a4fcf;
+  --green: #4fd0e0; --sky: #5a4fcf; --yellow: #f0c06c;
+  --accent-ink: #16123a;
+  --glow-strength: 1.35;
+}
+
+/* Nintendo Wii — clean white/silver menu with the signature glossy blue. */
+:root[data-theme="wii"] {
+  --bg: #eef3f6;
+  --bg-2: #e2e9ee;
+  --panel: #ffffff;
+  --panel-2: #f0f5f8;
+  --border: rgba(0, 90, 140, 0.14);
+  --border-strong: rgba(0, 90, 140, 0.26);
+  --text: #28363f;
+  --muted: #5f7682;
+  --muted-2: #8aa0ab;
+  --cyan: #00a4e4; --cyan-deep: #0086c4; --magenta: #6fc9f0; --violet: #0086c4;
+  --green: #19b8d8; --sky: #0086c4; --yellow: #f2b134;
+  --accent-ink: #ffffff;
+  --shadow: 0 16px 36px -22px rgba(0, 60, 90, 0.4);
+  --glow-strength: 0.9;
+}
+/* Wii: a soft glossy wash so it reads light + airy, not flat. */
+:root[data-theme="wii"] body,
+:root[data-theme="wii"] .app-body {
+  background:
+    radial-gradient(900px 600px at 50% -10%, rgba(0, 164, 228, 0.10), transparent 60%),
+    var(--bg);
+  background-attachment: fixed;
+}
+
 /* =========================================================================
    Sidebar accent (data-sidebar) — recolors ONLY the POS sidebar, layered on
    top of whatever palette is active. Bright fill + dark ink for legibility.

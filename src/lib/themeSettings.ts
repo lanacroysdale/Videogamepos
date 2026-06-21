@@ -25,6 +25,9 @@ export const THEMES = [
   { key: "light", label: "Light", swatch: "#f4ece2", accent: "#df5e39" },
   { key: "midnight", label: "Midnight", swatch: "#06040a", accent: "#df5e39" },
   { key: "glass", label: "Liquid Glass", swatch: "#1a1330", accent: "#7fd6e6" },
+  { key: "dmg", label: "Game Boy", swatch: "#0f380f", accent: "#9bbc0f" },
+  { key: "gba", label: "GBA", swatch: "#2b2566", accent: "#7c6ff0" },
+  { key: "wii", label: "Wii", swatch: "#eef3f6", accent: "#00a4e4" },
 ] as const;
 
 // POS sidebar accent — an independent axis layered on any palette (data-sidebar).
