@@ -52,6 +52,7 @@ const nav = [
                 <span class="ico" aria-hidden="true">{item.icon}</span>
                 <span class="label">{item.label}</span>
                 {item.key === "leads" && <span class="nav-badge" id="leads-badge" hidden>0</span>}
+                {item.key === "inventory" && <span class="nav-badge warn" id="inv-badge" title="Listings needing images or data" hidden>0</span>}
               </a>
             ))
           }
@@ -91,6 +92,7 @@ const nav = [
         line-height: 1.55;
         text-align: center;
       }
+      .nav-badge.warn { background: var(--yellow, #ffd23f); color: #3a2c00; }
       #alerts-btn { margin-bottom: 0.4rem; width: 100%; }
     </style>
 
@@ -136,6 +138,19 @@ const nav = [
 
         var firstRun = seen() === 0; // don't replay the whole backlog as notifications
 
+        var invBadge = document.getElementById("inv-badge");
+        function pollInventoryHealth() {
+          if (!invBadge) return;
+          fetch("/api/pos/inventory-health", { headers: { "x-requested-with": "fetch" } })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (j) {
+              if (!j || !j.ok) return;
+              if (j.count > 0) { invBadge.textContent = String(j.count); invBadge.hidden = false; }
+              else { invBadge.hidden = true; }
+            })
+            .catch(function () {});
+        }
+
         function poll() {
           fetch("/api/pos/leads?since=" + seen(), { headers: { "x-requested-with": "fetch" } })
             .then(function (r) { return r.ok ? r.json() : null; })
@@ -149,6 +164,7 @@ const nav = [
               firstRun = false;
             })
             .catch(function () {});
+          pollInventoryHealth();
         }
 
         poll();

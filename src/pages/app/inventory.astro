@@ -94,6 +94,7 @@ const posData = {
       </select>
       <button class="chip filt" data-filt="instock">In stock</button>
       <button class="chip filt" data-filt="web">On web</button>
+      <button class="chip filt warn-chip" data-filt="attention" id="attn-chip">⚠ Needs attention</button>
     </div>
     <div id="smart-bar" class="smart-bar" hidden></div>
     <p class="inv-count" id="inv-count"></p>
@@ -146,7 +147,11 @@ const posData = {
     background:linear-gradient(180deg, rgba(255,255,255,.025), rgba(255,255,255,0));
     transition:border-color .15s ease, transform .15s ease;
   }
+  .inv-card { cursor:pointer; }
   .inv-card:hover { border-color:var(--border-strong); }
+  .inv-card .inv-actions, .inv-card .vchip, .inv-card .inv-warn { cursor:auto; }
+  .inv-warn { margin-top:0.5rem; font-size:0.76rem; color:var(--yellow,#ffd23f); font-weight:600; }
+  .chip.warn-chip.active { border-color:var(--yellow,#ffd23f); color:var(--yellow,#ffd23f); }
   .inv-cover {
     width:62px; height:62px; flex:none; border-radius:10px; overflow:hidden;
     display:grid; place-items:center; background:rgba(0,0,0,.28); font-size:1.7rem;
@@ -253,7 +258,7 @@ const posData = {
   const esc = (s: any) => String(s ?? "").replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m] as string));
   const money = (c: number) => (c / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
   const toCents = (v: string) => Math.max(0, Math.round(parseFloat(v) * 100) || 0);
-  const state = { q: "", cat: "", sort: "title", instock: false, web: false, parsed: null as any };
+  const state = { q: "", cat: "", sort: "title", instock: false, web: false, attention: false, parsed: null as any };
 
   /* ---------- Smart find-or-create (shared module: src/lib/smartSearch.ts) ---------- */
   const PLATFORMS = buildPlatforms(items.map((p) => p.platform));
@@ -314,6 +319,14 @@ const posData = {
   const totalQty = (p: any) => p.variants.reduce((s: number, v: any) => s + v.quantity, 0);
   const maxPrice = (p: any) => Math.max(0, ...p.variants.map((v: any) => v.priceCents));
   const anyWeb = (p: any) => p.variants.some((v: any) => v.onlineVisible);
+  // What a listing is still missing (drives the "needs attention" inbox + badge).
+  function issues(p: any): string[] {
+    const out: string[] = [];
+    if (!p.imageUrl) out.push("image");
+    if (!p.description) out.push("description");
+    if (p.variants.some((v: any) => !v.completenessCode)) out.push("condition");
+    return out;
+  }
 
   // Display label for a variant from the structured condition codes (falls back
   // to the legacy free-text condition).
@@ -356,6 +369,7 @@ const posData = {
           <div class="inv-tags">${tags}</div>
           ${skus.length ? `<div class="inv-sku">${esc(skus[0])}${skus.length > 1 ? ` +${skus.length - 1}` : ""}</div>` : ""}
           <div class="inv-variants">${p.variants.map(vchip).join("")}</div>
+          ${issues(p).length ? `<div class="inv-warn">⚠ Needs: ${issues(p).join(", ")}</div>` : ""}
         </div>
         <div class="inv-actions">
           <span class="tot">${totalQty(p)} in stock</span>
@@ -370,6 +384,7 @@ const posData = {
       if (state.cat && p.categoryId !== state.cat) return false;
       if (state.instock && totalQty(p) <= 0) return false;
       if (state.web && !anyWeb(p)) return false;
+      if (state.attention && issues(p).length === 0) return false;
       return true;
     });
     const parsed = state.parsed;
@@ -388,7 +403,19 @@ const posData = {
     const list = visible();
     $("inv-count").textContent = `${list.length} product${list.length === 1 ? "" : "s"}`;
     $("inv-list").innerHTML = list.length ? list.map(cardHtml).join("") : `<p class="empty">No products match.</p>`;
-    document.querySelectorAll<HTMLElement>("[data-edit]").forEach((b) => b.addEventListener("click", () => openModal(b.dataset.edit!)));
+    document.querySelectorAll<HTMLElement>("[data-edit]").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); openModal(b.dataset.edit!); }));
+    // Click a card (not a control) → preview the product page in a popup window.
+    document.querySelectorAll<HTMLElement>(".inv-card").forEach((card) => {
+      card.addEventListener("click", (e) => {
+        if ((e.target as HTMLElement).closest("button, a, input, select, label")) return;
+        const p = items.find((x) => x.id === card.dataset.p);
+        if (p?.slug) window.open(`/shop/${p.slug}`, "tl-preview", "popup=yes,width=540,height=820");
+      });
+    });
+    // Live count on the "needs attention" chip.
+    const attn = items.filter((p) => issues(p).length).length;
+    const chip = document.getElementById("attn-chip");
+    if (chip) chip.textContent = `⚠ Needs attention${attn ? ` (${attn})` : ""}`;
   }
 
   /* ---------- Edit modal ---------- */
