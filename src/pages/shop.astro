@@ -6,6 +6,8 @@ import { SITE } from "../consts";
 import { fmt } from "../lib/money";
 import { createSupabaseAdminClient } from "../lib/supabase";
 import { lowStockSettings, showLowStock, freeShipSettings } from "../lib/lowStock";
+import { classify, DEPARTMENTS, PLATFORMS, CONDITIONS, REGIONS, FRANCHISES } from "../lib/shopFilters";
+import type { Rule } from "../lib/shopFilters";
 
 // HIDDEN, BROWSE-ONLY shop. Reads the SHARED inventory pool so anything sold in
 // store disappears here automatically. Server-side service-role read selecting
@@ -25,50 +27,49 @@ const { data: rows, error } = await admin
   .gt("quantity", 0)
   .order("price_cents", { ascending: true });
 
-const listings = (rows ?? []).map((v: any) => ({
-  id: v.id,
-  title: v.product?.title ?? "Untitled",
-  slug: v.product?.slug ?? "",
-  platform: v.product?.platform ?? "",
-  franchise: v.product?.franchise ?? "",
-  category: v.product?.category?.name ?? "",
-  image: v.product?.image_url ?? null,
-  description: v.product?.description ?? "",
-  condition: v.condition,
-  completeness: v.completeness,
-  priceCents: v.online_price_cents ?? v.price_cents,
-  quantity: v.quantity,
-  lowStock: showLowStock(v.quantity, v.online_price_cents ?? v.price_cents, ls),
-}));
+const listings = (rows ?? []).map((v: any) => {
+  const item = {
+    id: v.id,
+    title: v.product?.title ?? "Untitled",
+    slug: v.product?.slug ?? "",
+    platform: v.product?.platform ?? "",
+    franchise: v.product?.franchise ?? "",
+    category: v.product?.category?.name ?? "",
+    image: v.product?.image_url ?? null,
+    description: v.product?.description ?? "",
+    condition: v.condition,
+    completeness: v.completeness,
+    priceCents: v.online_price_cents ?? v.price_cents,
+    quantity: v.quantity,
+    lowStock: showLowStock(v.quantity, v.online_price_cents ?? v.price_cents, ls),
+  };
+  // Keyword-derived department + facets (ignores the unreliable import category).
+  return { ...item, facets: classify(item) };
+});
 
-// Storefront category nav. Each tab maps the POS taxonomy / platform / title to
-// a shopper-facing department; "data-shopcat" on each card drives client-side
-// filtering. Adjust the predicates here as the catalogue grows.
-const matchShopCat = (i: any, key: string): boolean => {
-  const t = (i.title || "").toLowerCase();
-  switch (key) {
-    case "consoles": return i.category === "Consoles";
-    case "games": return i.category === "Video Games" &&
-      /nintendo|switch|\bwii\b|gamecube|game ?boy|\bgb[ac]?\b|\bnes\b|snes|n64|3ds|\bds\b|famicom|amiibo|pok[eé]mon|zelda|mario/i.test(`${i.platform} ${i.title}`);
-    case "accessories": return i.category === "Accessories";
-    case "collectibles": return i.category === "Collectibles";
-    case "merch": return i.category === "Toys" || i.category === "Books" || /\b(keychain|pin|poster|figure|amiibo|statue)\b/.test(t);
-    case "plushies": return /\b(plush|plushie|cushion|stuffed)\b/.test(t);
-    default: return true;
-  }
+// Build the department tabs + filter facets, keeping only values that actually
+// occur in the catalogue (with live counts).
+const countBy = (pick: (l: (typeof listings)[number]) => string) => {
+  const m = new Map<string, number>();
+  for (const l of listings) { const k = pick(l); if (k) m.set(k, (m.get(k) ?? 0) + 1); }
+  return m;
 };
-const SHOP_CATS = [
-  { key: "all", label: "All" },
-  { key: "consoles", label: "Game Consoles" },
-  { key: "games", label: "Nintendo Games" },
-  { key: "accessories", label: "Accessories" },
-  { key: "collectibles", label: "Collectibles" },
-  { key: "merch", label: "Game Merch" },
-  { key: "plushies", label: "Plushies" },
-];
-const catCount = (key: string) => (key === "all" ? listings.length : listings.filter((i) => matchShopCat(i, key)).length);
-// The shop-category keys each card belongs to (space-separated for the filter).
-const cardCats = (i: any) => SHOP_CATS.filter((c) => c.key !== "all" && matchShopCat(i, c.key)).map((c) => c.key).join(" ");
+const deptCounts = countBy((l) => l.facets.dept);
+const platCounts = countBy((l) => l.facets.platform);
+const condCounts = countBy((l) => l.facets.cond);
+const regionCounts = countBy((l) => l.facets.region);
+const franchiseCounts = countBy((l) => l.facets.franchise);
+
+const present = (rules: Rule[], counts: Map<string, number>) =>
+  rules.filter((r) => (counts.get(r.key) ?? 0) > 0).map((r) => ({ ...r, n: counts.get(r.key) ?? 0 }));
+
+const deptTabs = [{ key: "all", label: "All", icon: "🛒", n: listings.length }, ...present(DEPARTMENTS, deptCounts)];
+const platFacets = present(PLATFORMS, platCounts);
+const condFacets = present(CONDITIONS, condCounts);
+const regionFacets = present(REGIONS, regionCounts);
+const franchiseFacets = present(FRANCHISES, franchiseCounts);
+const hasFilters = platFacets.length + condFacets.length + regionFacets.length + franchiseFacets.length > 0;
+
 ---
 
 <Layout
@@ -102,21 +103,81 @@ const cardCats = (i: any) => SHOP_CATS.filter((c) => c.key !== "all" && matchSho
 
       {listings.length > 0 && (
         <nav class="shop-cats" aria-label="Shop categories">
-          {SHOP_CATS.map((c) => catCount(c.key) > 0 && (
+          {deptTabs.map((c) => (
             <button class="shop-cat" data-shopcat={c.key} aria-pressed={c.key === "all" ? "true" : "false"}>
-              {c.label}<span class="shop-cat-n">{catCount(c.key)}</span>
+              <span class="shop-cat-ico" aria-hidden="true">{c.icon}</span>{c.label}<span class="shop-cat-n">{c.n}</span>
             </button>
           ))}
         </nav>
       )}
 
-      <div id="shop-platfilter" class="shop-platfilter" hidden></div>
+      {listings.length > 0 && hasFilters && (
+        <div class="shop-filterbar">
+          <button type="button" id="shop-filter-toggle" class="shop-filter-toggle" aria-expanded="false">
+            <span aria-hidden="true">⚙️</span> Filters <span class="shop-filter-count" id="shop-filter-count" hidden></span>
+          </button>
+          <button type="button" id="shop-filter-clear" class="shop-filter-clear" hidden>Clear all</button>
+        </div>
+      )}
+
+      {listings.length > 0 && hasFilters && (
+        <aside class="shop-filters" id="shop-filters" hidden>
+          {platFacets.length > 0 && (
+            <div class="shop-fgroup">
+              <span class="shop-fgroup-h">Platform</span>
+              <div class="shop-chips">
+                {platFacets.map((p) => (
+                  <button type="button" class="shop-fchip" data-facet="platform" data-val={p.key}>{p.label}<span class="shop-fchip-n">{p.n}</span></button>
+                ))}
+              </div>
+            </div>
+          )}
+          {condFacets.length > 0 && (
+            <div class="shop-fgroup">
+              <span class="shop-fgroup-h">Condition</span>
+              <div class="shop-chips">
+                {condFacets.map((c) => (
+                  <button type="button" class="shop-fchip" data-facet="cond" data-val={c.key}>{c.label}<span class="shop-fchip-n">{c.n}</span></button>
+                ))}
+              </div>
+            </div>
+          )}
+          {franchiseFacets.length > 0 && (
+            <div class="shop-fgroup">
+              <span class="shop-fgroup-h">Franchise</span>
+              <div class="shop-chips">
+                {franchiseFacets.map((f) => (
+                  <button type="button" class="shop-fchip" data-facet="franchise" data-val={f.key}>{f.label}<span class="shop-fchip-n">{f.n}</span></button>
+                ))}
+              </div>
+            </div>
+          )}
+          {regionFacets.length > 0 && (
+            <div class="shop-fgroup">
+              <span class="shop-fgroup-h">Region</span>
+              <div class="shop-chips">
+                {regionFacets.map((r) => (
+                  <button type="button" class="shop-fchip" data-facet="region" data-val={r.key}>{r.label}<span class="shop-fchip-n">{r.n}</span></button>
+                ))}
+              </div>
+            </div>
+          )}
+          <div class="shop-fgroup">
+            <span class="shop-fgroup-h">Price</span>
+            <div class="shop-price-range">
+              <span class="shop-money">$<input type="number" id="shop-min" min="0" step="5" placeholder="Min" /></span>
+              <span class="shop-dash">–</span>
+              <span class="shop-money">$<input type="number" id="shop-max" min="0" step="5" placeholder="Max" /></span>
+            </div>
+          </div>
+        </aside>
+      )}
 
       {listings.length > 0 && (
         <Fragment>
         <div class:list={["shop-grid", { "low-hover": ls.lowStockHoverOnly }]}>
           {listings.map((item) => (
-            <a class="shop-card" data-shopcat={"all " + cardCats(item)} data-platform={(item.platform || "").toLowerCase()} href={item.slug ? "/shop/" + item.slug : "#"}>
+            <a class="shop-card" data-dept={item.facets.dept} data-platform={item.facets.platform} data-cond={item.facets.cond} data-region={item.facets.region} data-franchise={item.facets.franchise} data-price={item.priceCents} href={item.slug ? "/shop/" + item.slug : "#"}>
               <div class="shop-thumb">
                 {item.image ? (
                   <img class="shop-thumb-fg" src={item.image} alt={item.title} loading="lazy" />
@@ -195,22 +256,24 @@ const cardCats = (i: any) => SHOP_CATS.filter((c) => c.key !== "all" && matchSho
   const colBtns = [...document.querySelectorAll<HTMLButtonElement>(".shop-colbtn")];
 
   let cat = "all", page = 1, pageSize = 24;
-  // Optional platform filter from the URL (?platform=Nintendo+64), set by the
-  // clickable platform breadcrumb on a product page.
-  let platformFilter = (new URLSearchParams(location.search).get("platform") || "").toLowerCase().trim();
-  const platChip = document.getElementById("shop-platfilter");
-  function renderPlatChip() {
-    if (!platChip) return;
-    if (platformFilter) {
-      platChip.hidden = false;
-      platChip.innerHTML = `<span class="shop-platlabel">${platformFilter}</span><button type="button" id="shop-platclear" aria-label="Clear platform filter">✕</button>`;
-      document.getElementById("shop-platclear")?.addEventListener("click", () => {
-        platformFilter = "";
-        history.replaceState(null, "", location.pathname);
-        renderPlatChip(); page = 1; applyView();
-      });
-    } else { platChip.hidden = true; platChip.innerHTML = ""; }
-  }
+  // One active value per facet group ("" = no filter on that facet).
+  const params = new URLSearchParams(location.search);
+  const facet: Record<string, string> = {
+    platform: (params.get("platform") || "").toLowerCase().trim(),
+    cond: (params.get("cond") || "").toLowerCase().trim(),
+    region: (params.get("region") || "").toLowerCase().trim(),
+    franchise: (params.get("franchise") || "").toLowerCase().trim(),
+  };
+  if (params.get("dept")) cat = params.get("dept")!.toLowerCase().trim();
+  let minPrice = 0, maxPrice = Infinity;
+
+  const fchips = [...document.querySelectorAll<HTMLButtonElement>(".shop-fchip")];
+  const filtersPanel = document.getElementById("shop-filters");
+  const filterToggle = document.getElementById("shop-filter-toggle");
+  const filterClear = document.getElementById("shop-filter-clear");
+  const filterCount = document.getElementById("shop-filter-count");
+  const minIn = document.getElementById("shop-min") as HTMLInputElement | null;
+  const maxIn = document.getElementById("shop-max") as HTMLInputElement | null;
 
   const savedSize = Number(localStorage.getItem("shop-size"));
   if (savedSize) pageSize = savedSize;
@@ -225,10 +288,26 @@ const cardCats = (i: any) => SHOP_CATS.filter((c) => c.key !== "all" && matchSho
   }
   setCols(localStorage.getItem("shop-cols") || "auto");
 
+  function activeFacetCount() {
+    return Object.values(facet).filter(Boolean).length + (minPrice > 0 || maxPrice < Infinity ? 1 : 0);
+  }
+  function syncChrome() {
+    fchips.forEach((b) => b.setAttribute("aria-pressed", String(facet[b.dataset.facet!] === b.dataset.val)));
+    const n = activeFacetCount();
+    if (filterCount) { filterCount.hidden = n === 0; filterCount.textContent = String(n); }
+    if (filterClear) filterClear.hidden = n === 0;
+  }
+
   function applyView() {
-    const matching = cards.filter((c) =>
-      (cat === "all" || (c.dataset.shopcat || "").split(" ").includes(cat)) &&
-      (!platformFilter || (c.dataset.platform || "") === platformFilter));
+    const matching = cards.filter((c) => {
+      if (cat !== "all" && (c.dataset.dept || "") !== cat) return false;
+      for (const k of ["platform", "cond", "region", "franchise"]) {
+        if (facet[k] && (c.dataset[k] || "") !== facet[k]) return false;
+      }
+      const price = Number(c.dataset.price || 0);
+      if (price < minPrice || price > maxPrice) return false;
+      return true;
+    });
     cards.forEach((c) => (c.hidden = true));
     const total = matching.length;
     const pages = Math.max(1, Math.ceil(total / pageSize));
@@ -240,6 +319,7 @@ const cardCats = (i: any) => SHOP_CATS.filter((c) => c.key !== "all" && matchSho
     if (pgInfo) pgInfo.textContent = total ? `${start + 1}–${Math.min(start + pageSize, total)} of ${total}` : "";
     if (pgPrev) pgPrev.disabled = page <= 1;
     if (pgNext) pgNext.disabled = page >= pages;
+    syncChrome();
   }
 
   const toGridTop = () => grid?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -249,12 +329,37 @@ const cardCats = (i: any) => SHOP_CATS.filter((c) => c.key !== "all" && matchSho
     tabs.forEach((t) => t.setAttribute("aria-pressed", String(t === tab)));
     page = 1; applyView();
   }));
+  // Filter chips: single-select per facet group (click again to clear).
+  fchips.forEach((b) => b.addEventListener("click", () => {
+    const g = b.dataset.facet!, v = b.dataset.val!;
+    facet[g] = facet[g] === v ? "" : v;
+    page = 1; applyView();
+  }));
+  filterToggle?.addEventListener("click", () => {
+    const open = filtersPanel?.hidden;
+    if (filtersPanel) filtersPanel.hidden = !open;
+    filterToggle.setAttribute("aria-expanded", String(!!open));
+  });
+  filterClear?.addEventListener("click", () => {
+    for (const k of Object.keys(facet)) facet[k] = "";
+    minPrice = 0; maxPrice = Infinity;
+    if (minIn) minIn.value = ""; if (maxIn) maxIn.value = "";
+    page = 1; applyView();
+  });
+  const onPrice = () => {
+    minPrice = Math.max(0, (parseFloat(minIn?.value || "") || 0) * 100);
+    maxPrice = maxIn?.value ? (parseFloat(maxIn.value) || 0) * 100 : Infinity;
+    page = 1; applyView();
+  };
+  minIn?.addEventListener("input", onPrice);
+  maxIn?.addEventListener("input", onPrice);
   pgPrev?.addEventListener("click", () => { if (page > 1) { page--; applyView(); toGridTop(); } });
   pgNext?.addEventListener("click", () => { page++; applyView(); toGridTop(); });
   pgSize?.addEventListener("change", () => { pageSize = Number(pgSize.value) || 24; localStorage.setItem("shop-size", String(pageSize)); page = 1; applyView(); });
   colBtns.forEach((b) => b.addEventListener("click", () => setCols(b.dataset.cols!)));
 
-  renderPlatChip();
+  // Auto-open the panel if arriving with a facet pre-set from a deep link.
+  if (filtersPanel && activeFacetCount() > 0) { filtersPanel.hidden = false; filterToggle?.setAttribute("aria-expanded", "true"); }
   applyView();
 </script>
 
@@ -302,15 +407,43 @@ const cardCats = (i: any) => SHOP_CATS.filter((c) => c.key !== "all" && matchSho
     border: 1px solid var(--border); cursor: pointer; transition: color .15s, background .15s, border-color .15s;
   }
   .shop-cat:hover { color: var(--text); border-color: var(--muted); }
-  .shop-cat[aria-pressed="true"] { color: #06121a; background: var(--cyan); border-color: var(--cyan); }
+  .shop-cat[aria-pressed="true"] { color: var(--accent-ink); background: var(--cyan); border-color: var(--cyan); }
+  .shop-cat-ico { font-size: 0.95rem; line-height: 1; }
   .shop-cat-n { font-family: var(--font-mono); font-size: 0.74rem; opacity: 0.7; }
-  .shop-platfilter { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1.2rem; }
-  .shop-platlabel {
-    display: inline-flex; align-items: center; padding: 0.35rem 0.7rem; font-size: 0.85rem; font-weight: 700;
-    color: #06121a; background: var(--cyan); text-transform: capitalize;
+
+  /* Filters bar + panel */
+  .shop-filterbar { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1rem; }
+  .shop-filter-toggle {
+    display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.5rem 0.9rem;
+    font-size: 0.9rem; font-weight: 700; color: var(--text); background: var(--panel);
+    border: 1px solid var(--border-strong); cursor: pointer;
   }
-  #shop-platclear { width: 1.9rem; height: 1.9rem; font: inherit; color: var(--muted); background: var(--panel); border: 1px solid var(--border); cursor: pointer; }
-  #shop-platclear:hover { color: var(--text); border-color: var(--cyan); }
+  .shop-filter-toggle:hover { border-color: var(--cyan); }
+  .shop-filter-count {
+    min-width: 1.3em; padding: 0 0.35em; text-align: center; font-family: var(--font-mono);
+    font-size: 0.74rem; color: var(--accent-ink); background: var(--cyan);
+  }
+  .shop-filter-clear { font: inherit; font-size: 0.85rem; font-weight: 700; color: var(--magenta); background: none; border: none; cursor: pointer; padding: 0; }
+  .shop-filter-clear:hover { text-decoration: underline; }
+  .shop-filters {
+    margin-bottom: 1.4rem; padding: 1rem 1.1rem; background: var(--panel);
+    border: 1px solid var(--border); display: grid; gap: 1rem;
+  }
+  .shop-fgroup { display: grid; gap: 0.5rem; }
+  .shop-fgroup-h { font-size: 0.74rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted-2); }
+  .shop-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+  .shop-fchip {
+    display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.35rem 0.7rem;
+    font-size: 0.84rem; font-weight: 600; color: var(--muted); background: var(--bg-2);
+    border: 1px solid var(--border); cursor: pointer; transition: color .12s, background .12s, border-color .12s;
+  }
+  .shop-fchip:hover { color: var(--text); border-color: var(--muted); }
+  .shop-fchip[aria-pressed="true"] { color: var(--accent-ink); background: var(--cyan); border-color: var(--cyan); }
+  .shop-fchip-n { font-family: var(--font-mono); font-size: 0.7rem; opacity: 0.65; }
+  .shop-price-range { display: flex; align-items: center; gap: 0.6rem; }
+  .shop-money { display: inline-flex; align-items: center; gap: 0.2rem; font-weight: 700; color: var(--muted); }
+  .shop-money input { width: 5.5rem; padding: 0.4rem 0.5rem; }
+  .shop-dash { color: var(--muted-2); }
   .shop-low {
     position: absolute; top: 0.5rem; left: 0.5rem; z-index: 2; padding: 0.2rem 0.55rem;
     background: var(--magenta); color: #fff; font-size: 0.72rem; font-weight: 800;
@@ -320,11 +453,11 @@ const cardCats = (i: any) => SHOP_CATS.filter((c) => c.key !== "all" && matchSho
   .shop-grid.low-hover .shop-card:hover .shop-low,
   .shop-grid.low-hover .shop-card:focus-within .shop-low { opacity: 1; }
 
-  /* Free-shipping banner */
+  /* Free-shipping banner — clean white with dark-brown text + terracotta rule */
   .ship-banner {
     text-align: center; font-weight: 800; font-size: 0.92rem; letter-spacing: 0.01em;
-    padding: 0.6rem 1rem; color: #06121a;
-    background: linear-gradient(90deg, var(--cyan), var(--magenta));
+    padding: 0.6rem 1rem; color: #3a2210;
+    background: #fbf3ec; border-bottom: 3px solid var(--cyan);
   }
   .shop-body { display: flex; flex-direction: column; gap: 0.25rem; padding: 0.7rem 0.8rem 0.85rem; }
   .shop-plat { color: var(--muted-2); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; }
