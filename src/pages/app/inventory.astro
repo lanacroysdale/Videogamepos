@@ -296,6 +296,10 @@ const posData = {
     if (!r.ok || !j.ok) throw new Error(j.error || "Failed");
     return j;
   }
+  async function enrich(payload: any) {
+    const r = await fetch("/api/pos/enrich", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+    return r.ok ? r.json() : { ok: false };
+  }
   let toastT: any;
   function toast(msg: string) {
     const t = $("toast"); t.textContent = msg; t.hidden = false;
@@ -400,7 +404,7 @@ const posData = {
 
     $("modal-body").innerHTML = `
       <div class="m-section">
-        <div class="m-label">Product</div>
+        <div class="m-label" style="display:flex;align-items:center;gap:0.5rem;">Product <button type="button" class="btn btn-ghost btn-sm" id="m-enrich">✨ Auto‑fill from IGDB</button></div>
         <div class="m-grid">
           <label>Title<input id="m-title" value="${esc(p.title)}"></label>
           <label>Platform<input id="m-platform" value="${esc(p.platform)}"></label>
@@ -434,6 +438,25 @@ const posData = {
     bindBarcodes(p);
     bindReprice(p);
     $("add-cond").addEventListener("click", () => addCondition(p));
+
+    // Auto-fill from IGDB (cover, description) — no productId so it doesn't
+    // persist; the user reviews and Saves.
+    $("m-enrich").addEventListener("click", async () => {
+      const title = ($("m-title") as HTMLInputElement).value.trim();
+      if (!title) { alert("Enter a title first"); return; }
+      toast("Looking up on IGDB…");
+      try {
+        const e = await enrich({ title, platform: ($("m-platform") as HTMLInputElement).value.trim() });
+        if (!e.ok) throw new Error(e.error || "Lookup failed");
+        if (!e.found) { toast("No IGDB match found"); return; }
+        if (e.imageUrl) {
+          ($("m-image") as HTMLInputElement).value = e.imageUrl;
+          const prev = $("m-imgprev"); prev.innerHTML = `<img src="${e.imageUrl}" alt="">`; prev.hidden = false;
+        }
+        if (e.description && !($("m-desc") as HTMLTextAreaElement).value.trim()) ($("m-desc") as HTMLTextAreaElement).value = e.description;
+        toast("✓ Filled from IGDB · " + e.matchedName);
+      } catch (err: any) { alert(err.message); }
+    });
 
     // Image upload → stores in Supabase, fills the URL + preview.
     const imgFile = document.getElementById("m-imgfile") as HTMLInputElement | null;
@@ -644,13 +667,25 @@ const posData = {
     try {
       const j = await api(body);
       const cat = categories.find((c: any) => c.id === body.categoryId);
-      items.push({ id: j.productId, title: body.title, slug: body.title.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""), platform: body.platform, franchise: "", genre: "", description: "", imageUrl: "", altNames: [], categoryId: body.categoryId, categoryName: cat?.name ?? "", categoryColor: cat?.color ?? "#2ce6e0",
-        variants: [{ id: j.variantId, condition, completeness: null, completenessCode: comp, gradeCode: grade, sku: null, priceCents: body.priceCents, onlinePriceCents: null, costCents: null, quantity: body.quantity, onlineVisible: false, barcodes: body.barcode ? [{ id: "primary:" + j.variantId, barcode: body.barcode, label: "Primary", primary: true }] : [] }] });
+      const newItem: any = { id: j.productId, title: body.title, slug: body.title.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""), platform: body.platform, franchise: "", genre: "", description: "", imageUrl: "", altNames: [], categoryId: body.categoryId, categoryName: cat?.name ?? "", categoryColor: cat?.color ?? "#2ce6e0",
+        variants: [{ id: j.variantId, condition, completeness: null, completenessCode: comp, gradeCode: grade, sku: null, priceCents: body.priceCents, onlinePriceCents: null, costCents: null, quantity: body.quantity, onlineVisible: false, barcodes: body.barcode ? [{ id: "primary:" + j.variantId, barcode: body.barcode, label: "Primary", primary: true }] : [] }] };
+      items.push(newItem);
       ($("add-panel") as HTMLElement).hidden = true;
       ($("np-title") as HTMLInputElement).value = "";
       ($("inv-search") as HTMLInputElement).value = ""; state.q = ""; state.parsed = null; renderSmart();
       render();
-      toast("✓ Product added");
+      toast("✓ Product added — fetching cover…");
+      // Auto-enrich from IGDB: cover art, description, trailer, alt-names.
+      try {
+        const e = await enrich({ productId: newItem.id, title: newItem.title, platform: newItem.platform });
+        if (e.ok && e.found) {
+          if (e.imageUrl) newItem.imageUrl = e.imageUrl;
+          if (e.altNames?.length) newItem.altNames = e.altNames;
+          if (e.description) newItem.description = e.description;
+          render();
+          toast(e.imageUrl ? "🎮 Cover added from IGDB" : "✓ Details added from IGDB");
+        } else { toast("✓ Product added"); }
+      } catch { toast("✓ Product added"); }
     } catch (e: any) { alert(e.message); }
   });
 
