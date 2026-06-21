@@ -2,27 +2,38 @@
 // No-flash theme bootstrap. Reads the store's default palette + sidebar accent
 // once (server-side), then an inline <head> script applies the per-device
 // overrides (localStorage 'tl-theme' / 'tl-sidebar') or those defaults BEFORE
-// first paint. Exposes window.setTheme/getTheme + setSidebar/getSidebar for the
-// in-app switchers. Drop this in the <head> of a layout.
+// first paint. Exposes window.setTheme/getTheme + setSidebar/getSidebar.
+//
+// `scope`: "pos" for the POS AppLayout, "site" for the public Layout (marketing +
+// shop). When the store's "POS only" toggle is on, the palette is suppressed on
+// "site" pages so the public website keeps the brand default. The sidebar accent
+// is POS-only by nature (no sidebar on the public site).
 import { createSupabaseAdminClient } from "../lib/supabase";
 import { themeSettings } from "../lib/themeSettings";
 
+interface Props { scope?: "site" | "pos"; }
+const { scope = "site" } = Astro.props;
+
 let defaultTheme = "default";
 let defaultSidebar = "default";
+let posOnly = false;
 try {
   const admin = createSupabaseAdminClient();
   const { data } = await admin.from("store_settings").select("settings").eq("id", 1).maybeSingle();
   const ts = themeSettings(data?.settings);
   defaultTheme = ts.defaultTheme;
   defaultSidebar = ts.defaultSidebar;
+  posOnly = ts.themePosOnly;
 } catch {
   // Settings unavailable (e.g. DB down) — fall back to the brand defaults.
 }
+// Whether the palette is allowed to render on THIS page.
+const paletteActive = scope === "pos" || !posOnly;
 ---
 
 <script is:inline set:html={`(function(){try{
-  var DEF=${JSON.stringify(defaultTheme)}, SDEF=${JSON.stringify(defaultSidebar)}, el=document.documentElement;
-  function applyTheme(t){ if(t&&t!=='default'){el.setAttribute('data-theme',t);} else {el.removeAttribute('data-theme');} }
+  var DEF=${JSON.stringify(defaultTheme)}, SDEF=${JSON.stringify(defaultSidebar)}, ACTIVE=${paletteActive ? "true" : "false"}, el=document.documentElement;
+  function applyTheme(t){ if(ACTIVE && t && t!=='default'){el.setAttribute('data-theme',t);} else {el.removeAttribute('data-theme');} }
   function applySidebar(s){ if(s&&s!=='default'){el.setAttribute('data-sidebar',s);} else {el.removeAttribute('data-sidebar');} }
   var st=null, ss=null; try{ st=localStorage.getItem('tl-theme'); ss=localStorage.getItem('tl-sidebar'); }catch(e){}
   applyTheme(st||DEF); applySidebar(ss||SDEF);

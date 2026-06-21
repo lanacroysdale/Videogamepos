@@ -25,6 +25,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
   if (b.freeShipThresholdCents !== undefined) settings.freeShipThresholdCents = Math.max(0, Math.round(Number(b.freeShipThresholdCents)) || 0);
   if (b.defaultTheme !== undefined) settings.defaultTheme = THEME_KEYS.includes(String(b.defaultTheme)) ? String(b.defaultTheme) : "default";
   if (b.defaultSidebar !== undefined) settings.defaultSidebar = SIDEBAR_KEYS.includes(String(b.defaultSidebar)) ? String(b.defaultSidebar) : "default";
+  if (b.themePosOnly !== undefined) settings.themePosOnly = !!b.themePosOnly;
   if (b.gemEffectEnabled !== undefined) settings.gemEffectEnabled = !!b.gemEffectEnabled;
 
   const { error } = await admin.from("store_settings").update({ settings }).eq("id", 1);

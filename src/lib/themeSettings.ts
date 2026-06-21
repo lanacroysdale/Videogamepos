@@ -6,12 +6,14 @@
 export interface ThemeSettings {
   defaultTheme: string;       // one of THEMES[].key (the palette)
   defaultSidebar: string;     // one of SIDEBARS[].key (POS sidebar accent)
+  themePosOnly: boolean;      // true = palette applies in the POS only, public site stays default
   gemEffectEnabled: boolean;  // mouse-reactive glisten on checkout category gems
 }
 
 export const THEME_DEFAULTS: ThemeSettings = {
   defaultTheme: "default",
   defaultSidebar: "default",
+  themePosOnly: false,
   gemEffectEnabled: true,
 };
 
@@ -42,6 +44,7 @@ export function themeSettings(raw: any): ThemeSettings {
   return {
     defaultTheme: (THEME_KEYS as readonly string[]).includes(t) ? t : THEME_DEFAULTS.defaultTheme,
     defaultSidebar: (SIDEBAR_KEYS as readonly string[]).includes(s) ? s : THEME_DEFAULTS.defaultSidebar,
+    themePosOnly: raw?.themePosOnly ?? THEME_DEFAULTS.themePosOnly,
     gemEffectEnabled: raw?.gemEffectEnabled ?? THEME_DEFAULTS.gemEffectEnabled,
   };
 }

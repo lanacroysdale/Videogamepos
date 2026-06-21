@@ -32,6 +32,13 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     <p class="set-preview" id="theme-scope-note">Applied as the store default. <button type="button" id="theme-local-reset" class="link-btn">Reset this device to the default</button></p>
     <span id="theme-status" class="muted"></span>
 
+    <label class="set-row set-toggle" style="margin-top:0.6rem;">
+      <input type="checkbox" id="theme-site" checked={!th.themePosOnly} />
+      <span><strong>Apply the palette to the public website too</strong><br />
+        <span class="muted">Off = the palette only changes the POS; customers always see the default brand look.</span></span>
+    </label>
+    <span id="theme-site-status" class="muted"></span>
+
     <h3 class="set-subh">POS sidebar accent</h3>
     <p class="muted set-desc" style="margin-bottom:0.8rem;">Recolors just the POS sidebar — mixes with any palette above.</p>
     <div class="theme-grid" role="group" aria-label="Sidebar accent">
@@ -193,6 +200,17 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       themeStatus.textContent = "✓ Saved as store default";
     } catch (e: any) { themeStatus.textContent = ""; alert(e.message); }
   }));
+  $("theme-site").addEventListener("change", async () => {
+    const st = document.getElementById("theme-site-status")!;
+    st.textContent = "Saving…";
+    try {
+      const res = await fetch("/api/pos/settings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ themePosOnly: !$("theme-site").checked }) });
+      const j = await res.json();
+      if (!res.ok || !j.ok) throw new Error(j.error || "Save failed");
+      st.textContent = $("theme-site").checked ? "✓ Palette applies site-wide" : "✓ Palette is POS-only";
+    } catch (e: any) { st.textContent = ""; alert(e.message); }
+  });
+
   document.getElementById("theme-local-reset")?.addEventListener("click", () => {
     try { localStorage.removeItem("tl-theme"); } catch (e) {}
     const def = win.__tlThemeDefault || "default";
