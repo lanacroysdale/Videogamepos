@@ -76,11 +76,17 @@ async function importOne(admin: any, cats: Map<string, string>, legacyId: string
 }
 
 export const POST: APIRoute = async ({ locals, request }) => {
-  if (!locals.user) return json({ error: "unauthorized" }, 401);
+  // Auth: a staff session, OR the CRON_SECRET bearer (used by the background
+  // bulk-import / scheduled jobs so they can reuse this exact import logic).
+  const cronAuthed =
+    !!import.meta.env.CRON_SECRET &&
+    request.headers.get("authorization") === `Bearer ${import.meta.env.CRON_SECRET}`;
+  if (!locals.user && !cronAuthed) return json({ error: "unauthorized" }, 401);
   if (!ebayConfigured()) return json({ error: "eBay API keys not configured on the server" }, 400);
 
   const b = await request.json().catch(() => ({}));
   const mode = b.mode || "preview";
+  const isManager = cronAuthed || ["owner", "manager"].includes(locals.profile?.role ?? "");
   const admin = createSupabaseAdminClient();
 
   try {
@@ -103,8 +109,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
 
     // -- Sync stock down from eBay (out of stock / ended → 0 on website) -----
     if (mode === "sync") {
-      const role = locals.profile?.role ?? "";
-      if (!["owner", "manager"].includes(role)) return json({ error: "Managers only" }, 403);
+      if (!isManager) return json({ error: "Managers only" }, 403);
       return json({ ok: true, ...(await syncEbayStock(admin)) });
     }
 
@@ -112,8 +117,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
     // Returns the list of not-yet-imported item ids; the client then imports
     // them one at a time via "bulk-item" (so hundreds never time out).
     if (mode === "bulk-list") {
-      const role = locals.profile?.role ?? "";
-      if (!["owner", "manager"].includes(role)) return json({ error: "Managers only" }, 403);
+      if (!isManager) return json({ error: "Managers only" }, 403);
       const seller = ebaySeller();
       if (!seller) return json({ error: "EBAY_SELLER not set" }, 400);
 
@@ -129,8 +133,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
 
     // -- Bulk step 2: import ONE listing ------------------------------------
     if (mode === "bulk-item") {
-      const role = locals.profile?.role ?? "";
-      if (!["owner", "manager"].includes(role)) return json({ error: "Managers only" }, 403);
+      if (!isManager) return json({ error: "Managers only" }, 403);
       const legacyId = String(b.legacyItemId || extractItemId(b.input || "") || "");
       if (!legacyId) return json({ error: "legacyItemId required" }, 400);
       const cats = await categoryMap(admin);

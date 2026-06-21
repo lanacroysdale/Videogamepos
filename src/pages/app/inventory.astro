@@ -105,6 +105,7 @@ const posData = {
       </select>
       <button class="chip filt" data-filt="instock">In stock</button>
       <button class="chip filt" data-filt="web">On web</button>
+      <button class="chip filt" data-filt="ebay">🛒 eBay imports</button>
       <button class="chip filt warn-chip" data-filt="attention" id="attn-chip">⚠ Needs attention</button>
     </div>
     <div id="smart-bar" class="smart-bar" hidden></div>
@@ -174,6 +175,7 @@ const posData = {
   .inv-titlerow { display:flex; align-items:center; gap:0.55rem; flex-wrap:wrap; }
   .inv-title { font-family:var(--font-display); font-weight:600; font-size:1.08rem; line-height:1.2; }
   .inv-catpill { font-size:0.72rem; font-weight:700; padding:0.1rem 0.55rem; border-radius:999px; }
+  .inv-ebay { font-size:0.68rem; font-weight:800; padding:0.1rem 0.45rem; background:#e5323822; color:#ff6b6b; white-space:nowrap; }
   .inv-tags { display:flex; flex-wrap:wrap; gap:0.35rem; margin:0.35rem 0; }
   .inv-tag { font-size:0.72rem; padding:0.1rem 0.5rem; border-radius:999px; background:rgba(255,255,255,.06); color:var(--muted); }
   .inv-sku { font-family:var(--font-mono); font-size:0.74rem; color:var(--muted-2); }
@@ -278,7 +280,7 @@ const posData = {
   const esc = (s: any) => String(s ?? "").replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m] as string));
   const money = (c: number) => (c / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
   const toCents = (v: string) => Math.max(0, Math.round(parseFloat(v) * 100) || 0);
-  const state = { q: "", cat: "", sort: "title", instock: false, web: false, attention: false, parsed: null as any };
+  const state = { q: "", cat: "", sort: "title", instock: false, web: false, ebay: false, attention: false, parsed: null as any };
 
   /* ---------- Smart find-or-create (shared module: src/lib/smartSearch.ts) ---------- */
   const PLATFORMS = buildPlatforms(items.map((p) => p.platform));
@@ -385,6 +387,7 @@ const posData = {
           <div class="inv-titlerow">
             <span class="inv-title">${esc(p.title)}</span>
             <span class="inv-catpill" style="background:${esc(p.categoryColor)}22;color:${esc(p.categoryColor)}">${esc(p.categoryName)}</span>
+            ${p.ebayId ? `<span class="inv-ebay" title="Imported from eBay">🛒 eBay</span>` : ""}
           </div>
           <div class="inv-tags">${tags}</div>
           ${skus.length ? `<div class="inv-sku">${esc(skus[0])}${skus.length > 1 ? ` +${skus.length - 1}` : ""}</div>` : ""}
@@ -404,6 +407,7 @@ const posData = {
       if (state.cat && p.categoryId !== state.cat) return false;
       if (state.instock && totalQty(p) <= 0) return false;
       if (state.web && !anyWeb(p)) return false;
+      if (state.ebay && !p.ebayId) return false;
       if (state.attention && issues(p).length === 0) return false;
       return true;
     });
