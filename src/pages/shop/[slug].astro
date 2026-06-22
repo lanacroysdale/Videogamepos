@@ -113,6 +113,13 @@ const details: [string, any][] = product
     ].filter(([, v]) => v != null && String(v).trim() !== "") as [string, any][])
   : [];
 
+// Structured data: an in-stock Product whose offer is fulfilled from the Portland
+// storefront. Drives rich results + Google Shopping / local inventory.
+const canonicalUrl = new URL(Astro.url.pathname, Astro.site ?? SITE.url).href;
+const portlandAddr = { "@type": "PostalAddress", addressLocality: "Portland", addressRegion: "OR", addressCountry: "US" };
+const storePlace = { "@type": "Store", name: SITE.name, telephone: SITE.phoneDisplay, address: portlandAddr, areaServed: "Portland, OR" };
+const itemCondition = primaryV?.completeness_code === "NEW" ? "https://schema.org/NewCondition" : "https://schema.org/UsedCondition";
+
 const jsonLd = product
   ? {
       "@context": "https://schema.org",
@@ -121,19 +128,33 @@ const jsonLd = product
       ...(product.image_url ? { image: product.image_url } : {}),
       ...(product.description ? { description: product.description } : {}),
       ...(upc ? { gtin: upc } : {}),
+      sku: primaryV?.sku || product.id,
       ...(product.brand ? { brand: { "@type": "Brand", name: product.brand } } : {}),
       category: categoryName || product.genre || "Video Games",
       ...(lowest != null
-        ? { offers: { "@type": "Offer", price: (lowest / 100).toFixed(2), priceCurrency: "USD", availability: "https://schema.org/InStock", seller: { "@type": "Store", name: SITE.name } } }
+        ? {
+            offers: {
+              "@type": "Offer",
+              price: (lowest / 100).toFixed(2),
+              priceCurrency: "USD",
+              availability: "https://schema.org/InStock",
+              itemCondition,
+              url: canonicalUrl,
+              seller: storePlace,
+              availableAtOrFrom: { "@type": "Place", name: SITE.name, address: portlandAddr },
+            },
+          }
         : {}),
     }
   : null;
 
-const metaDesc = product?.description
-  ? product.description.slice(0, 155)
-  : product
-    ? `${product.title}${product.platform ? ` for ${product.platform}` : ""} — in stock at ${SITE.name}, ${SITE.location}.`
-    : "Not found";
+// Every item's meta description states it's in stock in Portland.
+const inStockLine = `In stock now at ${SITE.name}, ${SITE.location}.`;
+const metaDesc = !product
+  ? "Not found"
+  : product.description
+    ? `${product.description.replace(/\s+/g, " ").trim().slice(0, 104)}… ${inStockLine}`
+    : `${product.title}${product.platform ? ` for ${product.platform}` : ""} — ${inStockLine}`;
 ---
 
 {
