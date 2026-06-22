@@ -1,11 +1,12 @@
 ---
-// Game Boy mode helpers.
-// 1. A hidden SVG "duotone" filter that maps full-colour pixels onto the Game Boy
-//    green ramp (dark #0f380f -> light #d3f5d2). Referenced from CSS via
-//    filter: url(#gb-green). Harmless on other themes (nothing references it).
-// 2. A script that wraps loose emoji in <span class="gb-emoji"> so the same filter
-//    can green every emoji (nav icons, button labels, etc.) without recolouring
-//    the elements that contain them. Only runs while Game Boy mode is active.
+// Game Boy mode emoji helpers.
+// 1. A hidden SVG "duotone" filter mapping pixels onto the Game Boy green ramp
+//    (dark #0f380f -> light #d3f5d2). Referenced from CSS via filter: url(#gb-green).
+// 2. A script that, while Game Boy mode is active, replaces each loose emoji with
+//    a tiny low-res <canvas> rendering of it (upscaled crisp via image-rendering:
+//    pixelated) so emoji look genuinely 8-bit, plus a hidden text fallback so the
+//    original emoji returns in every other theme. Idempotent + re-runnable for
+//    late DOM (e.g. the owner toolbar).
 ---
 <svg width="0" height="0" aria-hidden="true" style="position:absolute" focusable="false">
   <filter id="gb-green" color-interpolation-filters="sRGB">
@@ -22,6 +23,21 @@
   (function () {
     var HAS = /\p{Extended_Pictographic}/u;
     var RX = /(\p{Extended_Pictographic}(?:️|‍\p{Extended_Pictographic})*)/gu;
+    var GRID = 14; // low-res emoji raster; upscaled by CSS for the pixelated look
+
+    function pixelCanvas(ch) {
+      var c = document.createElement("canvas");
+      c.width = GRID; c.height = GRID;
+      c.className = "gb-emoji-px";
+      c.setAttribute("aria-hidden", "true");
+      var ctx = c.getContext("2d");
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = (GRID - 2) + 'px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",EmojiOne,sans-serif';
+      ctx.fillText(ch, GRID / 2, GRID / 2 + 1);
+      return c;
+    }
+
     function wrap(root) {
       if (!root) return;
       var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
@@ -31,7 +47,7 @@
           if (!p || !p.nodeName) return NodeFilter.FILTER_REJECT;
           var t = p.nodeName;
           if (t === "SCRIPT" || t === "STYLE" || t === "TEXTAREA" || t === "OPTION") return NodeFilter.FILTER_REJECT;
-          if (p.classList && p.classList.contains("gb-emoji")) return NodeFilter.FILTER_REJECT;
+          if (p.closest && p.closest(".gb-emoji")) return NodeFilter.FILTER_REJECT; // already wrapped
           return NodeFilter.FILTER_ACCEPT;
         },
       });
@@ -42,24 +58,28 @@
         RX.lastIndex = 0;
         while ((m = RX.exec(s))) {
           if (m.index > last) frag.appendChild(document.createTextNode(s.slice(last, m.index)));
+          var ch = m[0];
           var span = document.createElement("span");
           span.className = "gb-emoji";
-          span.textContent = m[0];
+          span.appendChild(pixelCanvas(ch));      // shown in Game Boy mode
+          var tx = document.createElement("span"); // shown in every other theme
+          tx.className = "gb-emoji-txt";
+          tx.textContent = ch;
+          span.appendChild(tx);
           frag.appendChild(span);
-          last = m.index + m[0].length;
+          last = m.index + ch.length;
         }
         if (last < s.length) frag.appendChild(document.createTextNode(s.slice(last)));
         if (node.parentNode) node.parentNode.replaceChild(frag, node);
       });
     }
-    var ran = false;
-    function run() { if (ran) return; ran = true; try { wrap(document.body); } catch (e) {} }
-    // Expose for ThemeInit to call when switching INTO Game Boy mode at runtime.
-    window.__tlWrapEmojis = run;
-    // Initial load: if Game Boy mode is already active, green the emoji now.
-    if (document.documentElement.getAttribute("data-theme") === "dmg") {
-      if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", run);
-      else run();
+
+    function run() {
+      if (document.documentElement.getAttribute("data-theme") !== "dmg") return;
+      try { wrap(document.body); } catch (e) {}
     }
+    window.__tlWrapEmojis = run;
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", run);
+    else run();
   })();
 </script>

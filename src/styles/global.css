@@ -251,14 +251,16 @@
 :root[data-theme="dmg"] summary,
 :root[data-theme="dmg"] select { cursor: url("/cursor-gb.svg") 2 2, pointer; }
 
-/* Even the emoji icons get mapped onto the green ramp (duotone SVG filter). */
-:root[data-theme="dmg"] .app-nav .ico,
-:root[data-theme="dmg"] .app-brand-ico,
-:root[data-theme="dmg"] .owner-fab-ico,
-:root[data-theme="dmg"] .owner-item-ico,
-:root[data-theme="dmg"] .shop-thumb-ph,
-:root[data-theme="dmg"] .gb-emoji { filter: url(#gb-green); }
-.gb-emoji { display: inline-block; }
+/* Emoji become low-res pixel art mapped onto the green ramp. The script swaps each
+   emoji for a tiny <canvas> (shown here, upscaled crisp) + a hidden text fallback
+   (shown in every other theme, so they revert cleanly). */
+.gb-emoji-px { display: none; }
+:root[data-theme="dmg"] .gb-emoji-txt { display: none; }
+:root[data-theme="dmg"] .gb-emoji-px {
+  display: inline-block; width: 1.15em; height: 1.15em; vertical-align: -0.22em;
+  image-rendering: pixelated; image-rendering: crisp-edges;
+  filter: url(#gb-green);
+}
 
 /* Game Boy Advance — the launch "Indigo" purple, full-colour vibe. */
 :root[data-theme="gba"] {

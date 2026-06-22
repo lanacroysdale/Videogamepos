@@ -130,6 +130,8 @@
 
     document.documentElement.classList.add("tl-owner");
     tb.setAttribute("aria-hidden", "false");
+    // Pixelate/green the freshly-built menu icons if Game Boy mode is active.
+    (window as any).__tlWrapEmojis?.();
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
