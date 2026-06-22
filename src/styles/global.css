@@ -179,9 +179,35 @@
   --green: #4e9a5e; --sky: #1d5546; --yellow: #66a86e;
   --accent-ink: #eafaea;
   --sb-hover: rgba(0, 26, 22, 0.07);
-  --shadow: 0 16px 36px -22px rgba(0, 40, 30, 0.4);
+  --shadow: 3px 3px 0 rgba(0, 40, 30, 0.22);
   --glow-strength: 0.5;
+  /* Pixel fonts (lazy-loaded by ThemeInit only when this theme is active). */
+  --font-sans: "Pixelify Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Pixelify Sans", ui-sans-serif, sans-serif;
+  --font-mono: "VT323", ui-monospace, "Cascadia Code", monospace;
 }
+/* "Low bit" treatment: crisp aliased text, a faint LCD dot grid, blocky shadows,
+   and a chunky 8-bit page title. */
+:root[data-theme="dmg"] body,
+:root[data-theme="dmg"] .app-body {
+  -webkit-font-smoothing: none;
+  text-rendering: optimizeSpeed;
+  background-image:
+    repeating-linear-gradient(0deg, rgba(0, 40, 30, 0.05) 0 1px, transparent 1px 4px),
+    repeating-linear-gradient(90deg, rgba(0, 40, 30, 0.05) 0 1px, transparent 1px 4px);
+}
+:root[data-theme="dmg"] .pos-panel,
+:root[data-theme="dmg"] .tile-btn,
+:root[data-theme="dmg"] .shop-card {
+  box-shadow: 3px 3px 0 rgba(0, 40, 30, 0.16);
+}
+:root[data-theme="dmg"] .app-top h1 {
+  font-family: "Press Start 2P", "Pixelify Sans", monospace;
+  font-size: 1rem; letter-spacing: 0;
+}
+:root[data-theme="dmg"] .app-brand { font-size: 0.82rem; }
+:root[data-theme="dmg"] .tile-name,
+:root[data-theme="dmg"] .stat .n { font-weight: 700; }
 
 /* Game Boy Advance — the launch "Indigo" purple, full-colour vibe. */
 :root[data-theme="gba"] {

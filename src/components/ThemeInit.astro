@@ -33,7 +33,9 @@ const paletteActive = scope === "pos" || !posOnly;
 
 <script is:inline set:html={`(function(){try{
   var DEF=${JSON.stringify(defaultTheme)}, SDEF=${JSON.stringify(defaultSidebar)}, ACTIVE=${paletteActive ? "true" : "false"}, el=document.documentElement;
-  function applyTheme(t){ if(ACTIVE && t && t!=='default'){el.setAttribute('data-theme',t);} else {el.removeAttribute('data-theme');} }
+  // Pixel fonts cost extra weight, so only load them when Game Boy mode is on.
+  function pixelFont(t){ if(t!=='dmg'||document.getElementById('tl-pixel-font'))return; var l=document.createElement('link'); l.id='tl-pixel-font'; l.rel='stylesheet'; l.href='https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400;500;600;700&family=Press+Start+2P&family=VT323&display=swap'; document.head.appendChild(l); }
+  function applyTheme(t){ if(ACTIVE && t && t!=='default'){el.setAttribute('data-theme',t); pixelFont(t);} else {el.removeAttribute('data-theme');} }
   function applySidebar(s){ if(s&&s!=='default'){el.setAttribute('data-sidebar',s);} else {el.removeAttribute('data-sidebar');} }
   var st=null, ss=null; try{ st=localStorage.getItem('tl-theme'); ss=localStorage.getItem('tl-sidebar'); }catch(e){}
   applyTheme(st||DEF); applySidebar(ss||SDEF);
