@@ -1,0 +1,596 @@
+---
+export const prerender = false;
+import AppLayout from "../../layouts/AppLayout.astro";
+import { createSupabaseAdminClient } from "../../lib/supabase";
+import { renderMarkdown } from "../../lib/markdown";
+
+// Staff-only. A staff profile only exists for employees; customers (auth user
+// without a profile) get bounced so they can never read internal SOPs.
+const profile = Astro.locals.profile;
+if (!profile) return Astro.redirect("/app/login");
+const isManager = ["owner", "manager"].includes(profile.role);
+
+const admin = createSupabaseAdminClient();
+const BUCKET = "documents";
+
+// --- SOP list (degrades to an empty "run the migration" state) ---
+let needsMigration = false;
+let sops: any[] = [];
+const { data: sopRows, error: sopErr } = await admin
+  .from("sops")
+  .select("id, title, category, pinned, updated_at, updated_by")
+  .order("pinned", { ascending: false })
+  .order("category", { ascending: true })
+  .order("title", { ascending: true });
+if (sopErr) needsMigration = true;
+else sops = sopRows ?? [];
+
+// File counts per SOP (for the list badge).
+const fileCounts = new Map<string, number>();
+if (!needsMigration) {
+  const { data: files } = await admin.from("sop_files").select("sop_id");
+  (files ?? []).forEach((f: any) => fileCounts.set(f.sop_id, (fileCounts.get(f.sop_id) ?? 0) + 1));
+}
+
+// Author display names.
+const nameMap = new Map<string, string>();
+const ids = [...new Set(sops.map((s) => s.updated_by).filter(Boolean))] as string[];
+if (ids.length) {
+  const { data: profs } = await admin.from("profiles").select("id, full_name").in("id", ids);
+  (profs ?? []).forEach((p: any) => nameMap.set(p.id, p.full_name));
+}
+
+// Group by category for the sidebar.
+const byCat = new Map<string, any[]>();
+for (const s of sops) {
+  if (!byCat.has(s.category)) byCat.set(s.category, []);
+  byCat.get(s.category)!.push(s);
+}
+const categories = [...byCat.keys()].sort();
+
+// --- Selected SOP (?id=…) + its rendered body + attachments ---
+const selId = Astro.url.searchParams.get("id");
+const pickId = selId && sops.find((s) => s.id === selId) ? selId : sops[0]?.id ?? null;
+
+let selected: any = null;
+let bodyHtml = "";
+let selectedFiles: any[] = [];
+if (pickId) {
+  const { data: sop } = await admin.from("sops").select("*").eq("id", pickId).maybeSingle();
+  if (sop) {
+    selected = sop;
+    bodyHtml = renderMarkdown(sop.body_md);
+    const { data: f } = await admin.from("sop_files").select("*").eq("sop_id", pickId).order("created_at", { ascending: true });
+    selectedFiles = await Promise.all(
+      (f ?? []).map(async (file: any) => {
+        const dl = String(file.file_name).replace(/[\r\n"\\]/g, "_"); // safe Content-Disposition
+        const { data } = await admin.storage.from(BUCKET).createSignedUrl(file.storage_path, 3600, { download: dl });
+        return { ...file, url: data?.signedUrl ?? null };
+      }),
+    );
+  }
+}
+
+const fmtDate = (iso: string) =>
+  new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+const fmtSize = (n: number | null) => {
+  if (!n) return "";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / 1048576).toFixed(1)} MB`;
+};
+const fileIcon = (mime: string | null) => {
+  const m = mime ?? "";
+  if (m.startsWith("image/")) return "🖼️";
+  if (m === "application/pdf") return "📕";
+  if (m.includes("sheet") || m.includes("excel") || m === "text/csv") return "📊";
+  if (m.includes("word") || m.includes("document")) return "📄";
+  if (m.includes("presentation") || m.includes("powerpoint")) return "📽️";
+  return "📎";
+};
+---
+
+<AppLayout title="SOPs" active="sops">
+  <div slot="actions">
+    {isManager && !needsMigration && (
+      <button id="sop-new" class="btn btn-primary btn-sm" type="button">+ New SOP</button>
+    )}
+  </div>
+
+  {needsMigration ? (
+    <div class="pos-panel">
+      <h2>Set up the SOP library</h2>
+      <p class="muted" style="margin:0.6rem 0;">
+        The SOP tables aren't there yet. Run the migration
+        <code>supabase/migrations/20260621000004_sops_and_documents.sql</code> in the Supabase SQL
+        editor, then refresh this page.
+      </p>
+    </div>
+  ) : (
+    <div class="sop-wrap">
+      <!-- ---------- Sidebar list ---------- -->
+      <aside class="pos-panel sop-side">
+        <div class="search">
+          <span class="mag">🔎</span>
+          <input id="sop-search" type="search" placeholder="Search SOPs…" autocomplete="off" />
+        </div>
+        <div class="sop-index">
+          {sops.length === 0 ? (
+            <p class="empty">No SOPs yet.{isManager ? " Create the first one." : ""}</p>
+          ) : (
+            categories.map((cat) => (
+              <div class="sop-group" data-group>
+                <div class="sop-cat">{cat}</div>
+                {byCat.get(cat)!.map((s) => (
+                  <a
+                    href={`/app/sops?id=${s.id}`}
+                    class:list={["sop-link", { active: s.id === pickId }]}
+                    data-title={s.title.toLowerCase()}
+                  >
+                    {s.pinned && <span class="pin" title="Pinned">📌</span>}
+                    <span class="sop-link-title">{s.title}</span>
+                    {(fileCounts.get(s.id) ?? 0) > 0 && (
+                      <span class="sop-files-n" title="Attachments">📎{fileCounts.get(s.id)}</span>
+                    )}
+                  </a>
+                ))}
+              </div>
+            ))
+          )}
+          <p id="sop-noresults" class="empty" hidden>No SOPs match your search.</p>
+        </div>
+      </aside>
+
+      <!-- ---------- Main viewer ---------- -->
+      <section class="pos-panel sop-main">
+        {!selected ? (
+          <div class="sop-placeholder">
+            <p class="empty">
+              {sops.length === 0
+                ? isManager
+                  ? "Document your store's procedures here — opening/closing, trade-in rules, refurb steps, shipping. Click “+ New SOP”."
+                  : "No SOPs have been written yet."
+                : "Select a SOP from the list."}
+            </p>
+          </div>
+        ) : (
+          <article
+            id="sop-view"
+            data-id={selected.id}
+            data-title={selected.title}
+            data-category={selected.category}
+            data-pinned={selected.pinned ? "1" : "0"}
+          >
+            <header class="sop-head">
+              <div>
+                <div class="sop-crumb">
+                  <span class="pill muted">{selected.category}</span>
+                  {selected.pinned && <span class="pill cyan">📌 Pinned</span>}
+                </div>
+                <h2 class="sop-title">{selected.title}</h2>
+                <p class="muted-2 sop-meta">
+                  Updated {fmtDate(selected.updated_at)}
+                  {selected.updated_by && nameMap.get(selected.updated_by) ? ` by ${nameMap.get(selected.updated_by)}` : ""}
+                </p>
+              </div>
+              {isManager && (
+                <div class="sop-tools">
+                  <button id="sop-pin" class="btn btn-ghost btn-sm" type="button">
+                    {selected.pinned ? "Unpin" : "Pin"}
+                  </button>
+                  <button id="sop-edit" class="btn btn-ghost btn-sm" type="button">Edit</button>
+                  <button id="sop-delete" class="btn btn-magenta btn-sm" type="button">Delete</button>
+                </div>
+              )}
+            </header>
+
+            {bodyHtml ? (
+              <div class="sop-body" set:html={bodyHtml} />
+            ) : (
+              <p class="empty">No written content — see attachments below.</p>
+            )}
+
+            {selectedFiles.length > 0 && (
+              <div class="sop-attach">
+                <div class="sop-attach-h">Attachments</div>
+                <ul class="sop-files">
+                  {selectedFiles.map((f) => (
+                    <li class="sop-file" data-file={f.id}>
+                      <span class="fi">{fileIcon(f.mime_type)}</span>
+                      <a href={f.url} target="_blank" rel="noopener noreferrer" class="fn">{f.file_name}</a>
+                      <span class="fs muted-2">{fmtSize(f.size_bytes)}</span>
+                      {isManager && <button class="link-btn fr" type="button" data-rm={f.id}>Remove</button>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </article>
+        )}
+
+        <!-- ---------- Editor (manager only, hidden until New/Edit) ---------- -->
+        {isManager && (
+          <form id="sop-editor" class="sop-editor" hidden>
+            <input type="hidden" id="ed-id" />
+            {/* Raw markdown of the selected SOP, so "Edit" populates without a
+                fetch. A <textarea> is a raw-text element: Astro escapes the
+                expression (so "</textarea>" / "<" can't break out) and the
+                browser returns the original text via .value. */}
+            <textarea id="sop-raw" hidden set:text={selected?.body_md ?? ""}></textarea>
+            <div class="ed-row">
+              <label class="ed-field grow">Title<input id="ed-title" placeholder="e.g. Opening checklist" /></label>
+              <label class="ed-field">Category
+                <input id="ed-category" list="sop-cats" placeholder="General" />
+                <datalist id="sop-cats">
+                  {categories.map((c) => <option value={c}></option>)}
+                </datalist>
+              </label>
+            </div>
+            <label class="ed-toggle"><input type="checkbox" id="ed-pinned" /> Pin to top</label>
+
+            <div class="ed-split">
+              <label class="ed-field grow">
+                <span class="ed-lbl">Content <span class="muted-2">(Markdown)</span></span>
+                <textarea id="ed-body" rows="16" placeholder="# Heading&#10;&#10;Steps:&#10;1. First&#10;2. Second&#10;&#10;- [ ] a checklist item&#10;**bold**, *italic*, `code`, [links](https://…)"></textarea>
+              </label>
+              <div class="ed-field grow">
+                <span class="ed-lbl">Preview</span>
+                <div id="ed-preview" class="sop-body ed-preview"></div>
+              </div>
+            </div>
+
+            <div id="ed-files-wrap" class="ed-attach">
+              <div class="sop-attach-h">Attachments</div>
+              <ul id="ed-files" class="sop-files"></ul>
+              <div id="ed-upload-row" class="ed-upload">
+                <input type="file" id="ed-file-input" />
+                <button id="ed-upload" class="btn btn-ghost btn-sm" type="button">Upload</button>
+                <span id="ed-upload-status" class="muted-2"></span>
+              </div>
+              <p id="ed-files-hint" class="muted-2" hidden>Save the SOP first, then you can attach files.</p>
+            </div>
+
+            <div class="ed-actions">
+              <button id="ed-save" class="btn btn-primary btn-sm" type="button">Save SOP</button>
+              <button id="ed-cancel" class="btn btn-ghost btn-sm" type="button">Cancel</button>
+              <span id="ed-status" class="muted-2"></span>
+            </div>
+          </form>
+        )}
+      </section>
+    </div>
+  )}
+</AppLayout>
+
+<!-- Markdown body typography needs is:global: set:html content isn't reached by
+     Astro's scoped styles. -->
+<style is:global>
+  .sop-body { font-size: 0.96rem; line-height: 1.6; }
+  .sop-body > :first-child { margin-top: 0; }
+  .sop-body h1, .sop-body h2, .sop-body h3, .sop-body h4 { margin: 1.1rem 0 0.5rem; line-height: 1.25; }
+  .sop-body h1 { font-size: 1.5rem; }
+  .sop-body h2 { font-size: 1.25rem; }
+  .sop-body h3 { font-size: 1.08rem; }
+  .sop-body h4 { font-size: 0.98rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); }
+  .sop-body p { margin: 0.55rem 0; }
+  .sop-body ul, .sop-body ol { margin: 0.55rem 0; padding-left: 1.4rem; }
+  .sop-body li { margin: 0.25rem 0; }
+  .sop-body li.md-task { list-style: none; margin-left: -1.2rem; }
+  .sop-body li.md-task input { margin-right: 0.45rem; }
+  .sop-body a { color: var(--cyan); text-decoration: underline; }
+  .sop-body code { background: rgba(127,127,127,0.16); padding: 0.1em 0.4em; font-size: 0.88em; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .sop-body pre { background: rgba(127,127,127,0.14); padding: 0.8rem 1rem; overflow: auto; margin: 0.7rem 0; border-left: 3px solid var(--cyan); }
+  .sop-body pre code { background: none; padding: 0; }
+  .sop-body blockquote { margin: 0.7rem 0; padding: 0.2rem 0 0.2rem 1rem; border-left: 3px solid var(--border-strong); color: var(--muted); }
+  .sop-body hr { border: none; border-top: 1px solid var(--border-strong); margin: 1.2rem 0; }
+</style>
+
+<style>
+  .sop-wrap { display: grid; grid-template-columns: 290px 1fr; gap: 1rem; align-items: start; }
+  @media (max-width: 820px) { .sop-wrap { grid-template-columns: 1fr; } }
+
+  .sop-side { position: sticky; top: 1rem; max-height: calc(100vh - 2rem); overflow: auto; }
+  .sop-index { margin-top: 0.7rem; }
+  .sop-group { margin-bottom: 0.9rem; }
+  .sop-cat { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted-2); font-weight: 700; margin: 0.3rem 0; }
+  .sop-link { display: flex; align-items: center; gap: 0.4rem; padding: 0.42rem 0.55rem; color: var(--text); text-decoration: none; border: 1px solid transparent; font-size: 0.9rem; }
+  .sop-link:hover { background: rgba(127,127,127,0.1); }
+  .sop-link.active { background: rgba(127,127,127,0.14); border-color: var(--border-strong); font-weight: 600; }
+  .sop-link-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sop-link .pin { font-size: 0.78rem; }
+  .sop-files-n { font-size: 0.72rem; color: var(--muted-2); white-space: nowrap; }
+
+  .sop-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; margin-bottom: 0.8rem; }
+  .sop-crumb { display: flex; gap: 0.4rem; margin-bottom: 0.4rem; }
+  .sop-title { margin: 0; font-size: 1.6rem; }
+  .sop-meta { margin: 0.3rem 0 0; font-size: 0.82rem; }
+  .sop-tools { display: flex; gap: 0.45rem; flex-shrink: 0; }
+
+  .sop-attach { margin-top: 1.4rem; border-top: 1px solid var(--border-strong); padding-top: 0.9rem; }
+  .sop-attach-h { font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted-2); font-weight: 700; margin-bottom: 0.5rem; }
+  .sop-files { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.35rem; }
+  .sop-file { display: flex; align-items: center; gap: 0.55rem; padding: 0.4rem 0.55rem; background: rgba(127,127,127,0.08); border: 1px solid var(--border); }
+  .sop-file .fi { font-size: 1rem; }
+  .sop-file .fn { flex: 1; min-width: 0; color: var(--cyan); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sop-file .fn:hover { text-decoration: underline; }
+  .sop-file .fs { font-size: 0.78rem; white-space: nowrap; }
+  .sop-file .fr { flex-shrink: 0; }
+
+  .sop-editor { display: grid; gap: 0.8rem; }
+  .ed-row { display: flex; gap: 0.8rem; flex-wrap: wrap; }
+  .ed-field { display: grid; gap: 0.3rem; font-size: 0.85rem; font-weight: 600; }
+  .ed-field.grow { flex: 1; min-width: 220px; }
+  .ed-lbl { font-size: 0.85rem; font-weight: 600; }
+  .ed-field input, .ed-field textarea { font: inherit; padding: 0.5rem 0.6rem; background: var(--bg); color: var(--text); border: 1px solid var(--border-strong); }
+  .ed-field textarea { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.86rem; line-height: 1.5; resize: vertical; }
+  .ed-toggle { display: flex; align-items: center; gap: 0.5rem; font-size: 0.88rem; font-weight: 600; }
+  .ed-split { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; }
+  @media (max-width: 760px) { .ed-split { grid-template-columns: 1fr; } }
+  .ed-preview { padding: 0.6rem 0.8rem; background: var(--bg); border: 1px solid var(--border); min-height: 8rem; overflow: auto; }
+  .ed-attach { border-top: 1px solid var(--border-strong); padding-top: 0.8rem; }
+  .ed-upload { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.6rem; flex-wrap: wrap; }
+  .ed-actions { display: flex; align-items: center; gap: 0.7rem; margin-top: 0.3rem; }
+</style>
+
+<script>
+  import { renderMarkdown } from "../../lib/markdown";
+
+  const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T | null;
+
+  // ---- Sidebar search ----
+  const search = $<HTMLInputElement>("sop-search");
+  search?.addEventListener("input", () => {
+    const q = search.value.trim().toLowerCase();
+    let anyVisible = false;
+    document.querySelectorAll<HTMLElement>("[data-group]").forEach((group) => {
+      let groupVisible = false;
+      group.querySelectorAll<HTMLElement>(".sop-link").forEach((link) => {
+        const hit = !q || (link.dataset.title || "").includes(q) ||
+          (link.querySelector(".sop-link-title")?.textContent || "").toLowerCase().includes(q);
+        link.style.display = hit ? "" : "none";
+        if (hit) groupVisible = true;
+      });
+      group.style.display = groupVisible ? "" : "none";
+      if (groupVisible) anyVisible = true;
+    });
+    const none = $("sop-noresults");
+    if (none) none.hidden = anyVisible;
+  });
+
+  // ---- API helper ----
+  async function api(body: any) {
+    const r = await fetch("/api/pos/sops", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) throw new Error(j.error || "Something went wrong");
+    return j;
+  }
+
+  // ---- Editor open/close ----
+  const editor = $<HTMLFormElement>("sop-editor");
+  const view = $("sop-view");
+  const elId = $<HTMLInputElement>("ed-id");
+  const elTitle = $<HTMLInputElement>("ed-title");
+  const elCat = $<HTMLInputElement>("ed-category");
+  const elPinned = $<HTMLInputElement>("ed-pinned");
+  const elBody = $<HTMLTextAreaElement>("ed-body");
+  const elPreview = $("ed-preview");
+  const elFilesHint = $("ed-files-hint");
+  const elUploadRow = $("ed-upload-row");
+
+  function renderPreview() {
+    if (elPreview && elBody) elPreview.innerHTML = renderMarkdown(elBody.value);
+  }
+  elBody?.addEventListener("input", renderPreview);
+
+  function openEditor(mode: "new" | "edit") {
+    if (!editor) return;
+    if (mode === "new") {
+      if (elId) elId.value = "";
+      if (elTitle) elTitle.value = "";
+      if (elCat) elCat.value = "";
+      if (elPinned) elPinned.checked = false;
+      if (elBody) elBody.value = "";
+      if (elFilesHint) elFilesHint.hidden = false;
+      if (elUploadRow) elUploadRow.hidden = true;
+      loadFiles([]);
+    } else if (view) {
+      if (elId) elId.value = view.dataset.id || "";
+      if (elTitle) elTitle.value = view.dataset.title || "";
+      if (elCat) elCat.value = view.dataset.category || "";
+      if (elPinned) elPinned.checked = view.dataset.pinned === "1";
+      if (elBody) elBody.value = $<HTMLTextAreaElement>("sop-raw")?.value ?? "";
+      if (elFilesHint) elFilesHint.hidden = true;
+      if (elUploadRow) elUploadRow.hidden = false;
+      loadCurrentFiles();
+    }
+    renderPreview();
+    if (view) view.hidden = true;
+    editor.hidden = false;
+    editor.scrollIntoView({ block: "start", behavior: "smooth" });
+    elTitle?.focus();
+  }
+
+  function closeEditor() {
+    if (editor) editor.hidden = true;
+    if (view) view.hidden = false;
+    const id = elId?.value;
+    // If we were creating (no id) and there's nothing to show, go to the list root.
+    if (!id && !view) location.href = "/app/sops";
+  }
+
+  $("sop-new")?.addEventListener("click", () => openEditor("new"));
+  $("sop-edit")?.addEventListener("click", () => openEditor("edit"));
+  $("ed-cancel")?.addEventListener("click", closeEditor);
+
+  // ---- Save ----
+  $("ed-save")?.addEventListener("click", async () => {
+    const title = (elTitle?.value || "").trim();
+    if (!title) { alert("Give the SOP a title."); elTitle?.focus(); return; }
+    const status = $("ed-status");
+    if (status) status.textContent = "Saving…";
+    const payload = {
+      title,
+      category: (elCat?.value || "").trim() || "General",
+      bodyMd: elBody?.value || "",
+      pinned: !!elPinned?.checked,
+    };
+    try {
+      const existingId = elId?.value;
+      if (existingId) {
+        await api({ action: "update", id: existingId, ...payload });
+        location.href = `/app/sops?id=${existingId}`;
+      } else {
+        const res = await api({ action: "create", ...payload });
+        // Reopen in edit mode so files can be attached to the new SOP.
+        location.href = `/app/sops?id=${res.id}&edit=1`;
+      }
+    } catch (err: any) {
+      if (status) status.textContent = "";
+      alert(err.message);
+    }
+  });
+
+  // ---- Pin / Delete ----
+  $("sop-pin")?.addEventListener("click", async () => {
+    if (!view) return;
+    const pinned = view.dataset.pinned !== "1";
+    try {
+      await api({ action: "update", id: view.dataset.id, pinned });
+      location.reload();
+    } catch (err: any) { alert(err.message); }
+  });
+
+  $("sop-delete")?.addEventListener("click", async () => {
+    if (!view) return;
+    if (!confirm(`Delete "${view.dataset.title}"? This also removes its attachments.`)) return;
+    try {
+      await api({ action: "delete", id: view.dataset.id });
+      location.href = "/app/sops";
+    } catch (err: any) { alert(err.message); }
+  });
+
+  // ---- Attachments: remove (in viewer) ----
+  document.querySelectorAll<HTMLButtonElement>("[data-rm]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("Remove this attachment?")) return;
+      try {
+        await api({ action: "remove-file", fileId: btn.dataset.rm });
+        btn.closest(".sop-file")?.remove();
+      } catch (err: any) { alert(err.message); }
+    });
+  });
+
+  // ---- Attachments inside the editor ----
+  type FileRow = { id: string; fileName: string; mimeType: string | null; sizeBytes: number | null; url: string | null };
+  function iconFor(mime: string | null) {
+    const m = mime || "";
+    if (m.startsWith("image/")) return "🖼️";
+    if (m === "application/pdf") return "📕";
+    if (m.includes("sheet") || m.includes("excel") || m === "text/csv") return "📊";
+    if (m.includes("word") || m.includes("document")) return "📄";
+    if (m.includes("presentation") || m.includes("powerpoint")) return "📽️";
+    return "📎";
+  }
+  function sizeFor(n: number | null) {
+    if (!n) return "";
+    if (n < 1024) return `${n} B`;
+    if (n < 1048576) return `${Math.round(n / 1024)} KB`;
+    return `${(n / 1048576).toFixed(1)} MB`;
+  }
+  function loadFiles(files: FileRow[]) {
+    const ul = $("ed-files");
+    if (!ul) return;
+    ul.innerHTML = "";
+    for (const f of files) addFileRow(f);
+  }
+  function addFileRow(f: FileRow) {
+    const ul = $("ed-files");
+    if (!ul) return;
+    // Built with DOM nodes (textContent / .href), never innerHTML — the file
+    // name is attacker-controlled (File.name at upload) so it must never be
+    // parsed as HTML here.
+    const li = document.createElement("li");
+    li.className = "sop-file";
+    li.dataset.file = f.id;
+
+    const icon = document.createElement("span");
+    icon.className = "fi";
+    icon.textContent = iconFor(f.mimeType);
+
+    let nameEl: HTMLElement;
+    if (f.url) {
+      const a = document.createElement("a");
+      a.href = f.url;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.className = "fn";
+      a.textContent = f.fileName;
+      nameEl = a;
+    } else {
+      const span = document.createElement("span");
+      span.className = "fn";
+      span.textContent = f.fileName;
+      nameEl = span;
+    }
+
+    const size = document.createElement("span");
+    size.className = "fs muted-2";
+    size.textContent = sizeFor(f.sizeBytes);
+
+    const rm = document.createElement("button");
+    rm.className = "link-btn fr";
+    rm.type = "button";
+    rm.textContent = "Remove";
+    rm.addEventListener("click", async () => {
+      if (!confirm("Remove this attachment?")) return;
+      try { await api({ action: "remove-file", fileId: f.id }); li.remove(); }
+      catch (err: any) { alert(err.message); }
+    });
+
+    li.append(icon, nameEl, size, rm);
+    ul.appendChild(li);
+  }
+  async function loadCurrentFiles() {
+    const id = elId?.value;
+    if (!id) return loadFiles([]);
+    try {
+      const res = await api({ action: "get", id });
+      loadFiles(res.files || []);
+    } catch { loadFiles([]); }
+  }
+
+  $("ed-upload")?.addEventListener("click", async () => {
+    const input = $<HTMLInputElement>("ed-file-input");
+    const id = elId?.value;
+    const status = $("ed-upload-status");
+    if (!id) { alert("Save the SOP first."); return; }
+    const file = input?.files?.[0];
+    if (!file) { alert("Choose a file to upload."); return; }
+    if (status) status.textContent = "Uploading…";
+    try {
+      const fd = new FormData();
+      fd.append("sopId", id);
+      fd.append("file", file);
+      const r = await fetch("/api/pos/sop-upload", { method: "POST", body: fd });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) throw new Error(j.error || "Upload failed");
+      addFileRow(j.file);
+      if (input) input.value = "";
+      if (status) status.textContent = "Uploaded ✓";
+      setTimeout(() => { if (status) status.textContent = ""; }, 2500);
+    } catch (err: any) {
+      if (status) status.textContent = "";
+      alert(err.message);
+    }
+  });
+
+  // Auto-open the editor when arriving via ?edit=1 (e.g. just after creating).
+  // Reads the body synchronously from #sop-raw, so there's no script-ordering race.
+  if (new URLSearchParams(location.search).get("edit") === "1" && view) {
+    openEditor("edit");
+  }
+</script>
