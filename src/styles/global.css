@@ -209,6 +209,28 @@
 :root[data-theme="dmg"] .tile-name,
 :root[data-theme="dmg"] .stat .n { font-weight: 700; }
 
+/* Translate the brand-coloured buttons + badges into the Game Boy greens (some
+   are hardcoded teal/pink), with hard pixel-art shadows instead of soft glows. */
+:root[data-theme="dmg"] .btn-primary { filter: drop-shadow(2px 2px 0 rgba(0, 40, 30, 0.28)); }
+:root[data-theme="dmg"] .btn-primary:hover { filter: drop-shadow(3px 3px 0 rgba(0, 40, 30, 0.34)); }
+:root[data-theme="dmg"] .btn-ghost {
+  background: var(--magenta); color: #001a16;
+  filter: drop-shadow(2px 2px 0 rgba(0, 40, 30, 0.24));
+}
+:root[data-theme="dmg"] .btn-ghost:hover { background: #7cba83; color: #001a16; filter: drop-shadow(3px 3px 0 rgba(0, 40, 30, 0.3)); }
+:root[data-theme="dmg"] .btn-magenta {
+  background: var(--cyan); color: var(--accent-ink);
+  filter: drop-shadow(2px 2px 0 rgba(0, 40, 30, 0.24));
+}
+:root[data-theme="dmg"] .btn-magenta:hover { filter: drop-shadow(3px 3px 0 rgba(0, 40, 30, 0.3)); }
+:root[data-theme="dmg"] .pill.cyan,
+:root[data-theme="dmg"] .pill.magenta,
+:root[data-theme="dmg"] .pill.green {
+  color: var(--cyan);
+  border-color: color-mix(in srgb, var(--cyan) 42%, transparent);
+  background: color-mix(in srgb, var(--cyan) 12%, transparent);
+}
+
 /* Game Boy Advance — the launch "Indigo" purple, full-colour vibe. */
 :root[data-theme="gba"] {
   --bg: #1a1640;
