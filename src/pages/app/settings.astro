@@ -5,8 +5,28 @@ import AppLayout from "../../layouts/AppLayout.astro";
 import { lowStockSettings, freeShipSettings } from "../../lib/lowStock";
 import { themeSettings, THEMES, SIDEBARS } from "../../lib/themeSettings";
 import { aiSettings, aiStatus, AI_PROVIDERS, AI_QUALITIES } from "../../lib/ai";
+import { createSupabaseAdminClient } from "../../lib/supabase";
 
 const supabase = Astro.locals.supabase;
+const isOwner = Astro.locals.profile?.role === "owner";
+
+// Team list (owner-only) — emails come from auth via the admin client.
+let team: { id: string; full_name: string; role: string; email: string; isYou: boolean }[] = [];
+if (isOwner) {
+  const admin = createSupabaseAdminClient();
+  const { data: profs } = await admin.from("profiles").select("id, full_name, role").order("full_name");
+  // Per-id email lookup — bulk listUsers fails wholesale if any one auth row
+  // can't be scanned; this degrades just that user's email to blank instead.
+  const emailById = new Map<string, string>(
+    await Promise.all(
+      (profs ?? []).map(async (p: any): Promise<[string, string]> => {
+        const { data } = await admin.auth.admin.getUserById(p.id);
+        return [p.id, data?.user?.email ?? ""];
+      }),
+    ),
+  );
+  team = (profs ?? []).map((p: any) => ({ id: p.id, full_name: p.full_name, role: p.role, email: emailById.get(p.id) ?? "", isYou: p.id === Astro.locals.user!.id }));
+}
 const { data: row } = await supabase.from("store_settings").select("settings").eq("id", 1).maybeSingle();
 const ls = lowStockSettings(row?.settings);
 const fs = freeShipSettings(row?.settings);
@@ -21,6 +41,48 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
 
 <AppLayout title="Settings" active="settings">
   <p class="muted" style="margin-bottom:1.25rem;">Store-wide settings. Changes apply to the website immediately.</p>
+
+  {isOwner && (
+    <div class="pos-panel set-panel" style="margin-bottom:1.25rem;">
+      <h2>Team & permissions</h2>
+      <p class="muted set-desc">
+        Invite employees and set access. <strong>Cashier</strong> = checkout, inventory, trade-ins ·
+        <strong>Manager</strong> = + reports, pricing, settings · <strong>Owner</strong> = full access + team.
+      </p>
+      <table class="tbl team-tbl">
+        <thead><tr><th>Name</th><th>Email</th><th>Role</th></tr></thead>
+        <tbody>
+          {team.map((u) => (
+            <tr>
+              <td><strong>{u.full_name}</strong>{u.isYou && <span class="muted"> (you)</span>}</td>
+              <td class="muted">{u.email}</td>
+              <td>
+                <select class="team-role" data-uid={u.id} disabled={u.isYou}>
+                  <option value="cashier" selected={u.role === "cashier"}>Cashier</option>
+                  <option value="manager" selected={u.role === "manager"}>Manager</option>
+                  <option value="owner" selected={u.role === "owner"}>Owner</option>
+                </select>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <span id="team-status" class="muted"></span>
+
+      <h3 class="set-subh">Invite an employee</h3>
+      <div class="inv-grid">
+        <input id="inv-name" placeholder="Full name" autocomplete="off" />
+        <input id="inv-email" type="email" placeholder="email@example.com" autocomplete="off" />
+        <select id="inv-role">
+          <option value="cashier">Cashier</option>
+          <option value="manager">Manager</option>
+          <option value="owner">Owner</option>
+        </select>
+        <button id="inv-send" class="btn btn-primary btn-sm">Invite</button>
+      </div>
+      <p id="inv-result" class="set-preview" hidden></p>
+    </div>
+  )}
 
   <div class="pos-panel set-panel" style="margin-bottom:1.25rem;">
     <h2>Appearance</h2>
@@ -197,6 +259,11 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   .theme-dot { width: 1rem; height: 1rem; border-radius: 50%; }
   .theme-name { font-size: 0.82rem; font-weight: 700; }
   .set-subh { font-size: 0.95rem; margin: 1.4rem 0 0.2rem; }
+  .team-tbl { margin: 0.6rem 0 0.4rem; }
+  .team-tbl select { padding: 0.3rem 0.4rem; font-size: 0.85rem; }
+  .inv-grid { display: grid; grid-template-columns: 1fr 1fr auto auto; gap: 0.5rem; margin-top: 0.5rem; }
+  @media (max-width: 640px) { .inv-grid { grid-template-columns: 1fr; } }
+  #inv-result code { color: var(--cyan); font-weight: 700; }
 </style>
 
 <script>
@@ -231,6 +298,40 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     lowStockMinPriceCents: Math.round((parseFloat(minprice.value) || 0) * 100),
     lowStockHoverOnly: hover.checked,
   }, document.getElementById("set-status")!, e.currentTarget as HTMLButtonElement));
+
+  // ---- Team & permissions (owners) ----
+  document.querySelectorAll<HTMLSelectElement>(".team-role").forEach((sel) => {
+    sel.dataset.prev = sel.value;
+    sel.addEventListener("change", async () => {
+      const st = document.getElementById("team-status")!;
+      st.textContent = "Saving…";
+      try {
+        const res = await fetch("/api/pos/users", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "set-role", userId: sel.dataset.uid, role: sel.value }) });
+        const j = await res.json();
+        if (!res.ok || !j.ok) throw new Error(j.error || "Failed");
+        sel.dataset.prev = sel.value;
+        st.textContent = "✓ Role updated";
+      } catch (e: any) { sel.value = sel.dataset.prev || sel.value; st.textContent = ""; alert(e.message); }
+    });
+  });
+  document.getElementById("inv-send")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget as HTMLButtonElement;
+    const name = ($("inv-name") as HTMLInputElement).value.trim();
+    const email = ($("inv-email") as HTMLInputElement).value.trim();
+    const role = ($("inv-role") as HTMLSelectElement).value;
+    if (!name || !email) { alert("Enter a name and email."); return; }
+    btn.disabled = true;
+    try {
+      const res = await fetch("/api/pos/users", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "invite", fullName: name, email, role }) });
+      const j = await res.json();
+      if (!res.ok || !j.ok) throw new Error(j.error || "Failed");
+      const out = document.getElementById("inv-result")!;
+      out.hidden = false;
+      out.innerHTML = `✓ Invited <strong>${email}</strong>. Temporary password: <code>${j.tempPassword}</code> — copy it and give it to them. They sign in at <code>/app/login</code> (refresh this page to see them in the list).`;
+      ($("inv-name") as HTMLInputElement).value = ""; ($("inv-email") as HTMLInputElement).value = "";
+    } catch (e: any) { alert(e.message); }
+    finally { btn.disabled = false; }
+  });
 
   document.getElementById("notify-save")!.addEventListener("click", (e) => save({
     notifyTaskComplete: ($("notify-tasks") as HTMLInputElement).checked,
