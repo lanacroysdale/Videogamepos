@@ -4,7 +4,7 @@ export const prerender = false;
 import AppLayout from "../../layouts/AppLayout.astro";
 import { lowStockSettings, freeShipSettings } from "../../lib/lowStock";
 import { themeSettings, THEMES, SIDEBARS } from "../../lib/themeSettings";
-import { aiSettings, aiConfigured, AI_MODELS } from "../../lib/ai";
+import { aiSettings, aiStatus, AI_PROVIDERS, AI_QUALITIES } from "../../lib/ai";
 
 const supabase = Astro.locals.supabase;
 const { data: row } = await supabase.from("store_settings").select("settings").eq("id", 1).maybeSingle();
@@ -12,7 +12,8 @@ const ls = lowStockSettings(row?.settings);
 const fs = freeShipSettings(row?.settings);
 const th = themeSettings(row?.settings);
 const ai = aiSettings(row?.settings);
-const aiReady = aiConfigured();
+const aiSt = aiStatus(ai.provider);
+const aiProviderLabel = aiSt.provider === "gemini" ? "Gemini" : aiSt.provider === "anthropic" ? "Claude" : "";
 const minPriceDollars = (ls.lowStockMinPriceCents / 100).toFixed(2);
 const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
 ---
@@ -127,16 +128,23 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     <h2>AI assistant</h2>
     <p class="muted set-desc">
       Powers the “✨ Write with AI” description button (more skills coming).
-      Status: {aiReady
-        ? <span style="color:var(--green);font-weight:700;">● Connected</span>
+      Status: {aiSt.configured
+        ? <span style="color:var(--green);font-weight:700;">● Connected via {aiProviderLabel}</span>
         : <span style="color:var(--magenta);font-weight:700;">● Not configured</span>}
-      {!aiReady && <span class="muted"> — add <code>ANTHROPIC_API_KEY</code> to your env (.env + Vercel) to enable.</span>}
+      {!aiSt.configured && <span class="muted"> — add <code>GEMINI_API_KEY</code> (free tier) or <code>ANTHROPIC_API_KEY</code> to your env (.env + Vercel) to enable.</span>}
     </p>
 
     <label class="set-row" style="display:block;">
-      <strong>Model</strong>
-      <select id="ai-model" style="margin-top:0.4rem;width:100%;max-width:320px;">
-        {AI_MODELS.map((m) => <option value={m.key} selected={m.key === ai.model}>{m.label}</option>)}
+      <strong>Provider</strong>
+      <select id="ai-provider" style="margin-top:0.4rem;width:100%;max-width:320px;">
+        {AI_PROVIDERS.map((p) => <option value={p.key} selected={p.key === ai.provider}>{p.label}</option>)}
+      </select>
+    </label>
+
+    <label class="set-row" style="display:block;">
+      <strong>Quality</strong>
+      <select id="ai-quality" style="margin-top:0.4rem;width:100%;max-width:320px;">
+        {AI_QUALITIES.map((q) => <option value={q.key} selected={q.key === ai.quality}>{q.label}</option>)}
       </select>
     </label>
 
@@ -211,7 +219,8 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   }, document.getElementById("set-status")!, e.currentTarget as HTMLButtonElement));
 
   document.getElementById("ai-save")!.addEventListener("click", (e) => save({
-    aiModel: (document.getElementById("ai-model") as HTMLSelectElement).value,
+    aiProvider: (document.getElementById("ai-provider") as HTMLSelectElement).value,
+    aiQuality: (document.getElementById("ai-quality") as HTMLSelectElement).value,
     aiDescriptionPrompt: (document.getElementById("ai-prompt") as HTMLTextAreaElement).value,
   }, document.getElementById("ai-status")!, e.currentTarget as HTMLButtonElement));
 

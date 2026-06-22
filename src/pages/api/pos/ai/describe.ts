@@ -1,5 +1,5 @@
 import type { APIRoute } from "astro";
-import { aiConfigured, aiSettings, callClaude } from "../../../../lib/ai";
+import { aiConfigured, aiSettings, callAI } from "../../../../lib/ai";
 
 export const prerender = false;
 const json = (d: unknown, s = 200) => new Response(JSON.stringify(d), { status: s, headers: { "content-type": "application/json" } });
@@ -7,7 +7,7 @@ const json = (d: unknown, s = 200) => new Response(JSON.stringify(d), { status: 
 // Generate an on-brand SEO product description. Internal/staff only.
 export const POST: APIRoute = async ({ locals, request }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
-  if (!aiConfigured()) return json({ error: "AI isn't set up yet — add ANTHROPIC_API_KEY to .env / Vercel to enable it.", needsKey: true }, 400);
+  if (!aiConfigured()) return json({ error: "AI isn't set up yet — add GEMINI_API_KEY or ANTHROPIC_API_KEY to .env / Vercel to enable it.", needsKey: true }, 400);
 
   const b = await request.json().catch(() => ({} as any));
   const sb = locals.supabase;
@@ -42,14 +42,14 @@ export const POST: APIRoute = async ({ locals, request }) => {
 
   if (!ctx.Title) return json({ error: "No product title to describe." }, 400);
 
-  const { descriptionPrompt, model } = aiSettings(
+  const settings = aiSettings(
     (await sb.from("store_settings").select("settings").eq("id", 1).maybeSingle()).data?.settings,
   );
   const facts = Object.entries(ctx).filter(([, v]) => v && v.trim()).map(([k, v]) => `${k}: ${v}`).join("\n");
   const user = `Write a product description for this item using ONLY these facts (do not invent anything):\n\n${facts}`;
 
   try {
-    const description = await callClaude({ system: descriptionPrompt, user, model, maxTokens: 600 });
+    const description = await callAI({ system: settings.descriptionPrompt, user, settings, maxTokens: 600 });
     return json({ ok: true, description });
   } catch (e: any) {
     return json({ error: e.message || "AI request failed" }, 500);
