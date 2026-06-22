@@ -1,12 +1,10 @@
 ---
-// Game Boy mode emoji helpers.
-// 1. A hidden SVG "duotone" filter mapping pixels onto the Game Boy green ramp
-//    (dark #0f380f -> light #d3f5d2). Referenced from CSS via filter: url(#gb-green).
-// 2. A script that, while Game Boy mode is active, replaces each loose emoji with
-//    a tiny low-res <canvas> rendering of it (upscaled crisp via image-rendering:
-//    pixelated) so emoji look genuinely 8-bit, plus a hidden text fallback so the
-//    original emoji returns in every other theme. Idempotent + re-runnable for
-//    late DOM (e.g. the owner toolbar).
+// Game Boy mode icon system.
+// In Game Boy mode each emoji is swapped for a crisp pixel-art icon (Pixelarticons,
+// MIT — https://pixelarticons.com), which inherits the surrounding text colour via
+// currentColor so it sits right on the green. Emojis with no mapped icon fall back
+// to a low-res <canvas> raster greened by the #gb-green duotone filter. A hidden
+// text node keeps the original emoji so every other theme reverts cleanly.
 ---
 <svg width="0" height="0" aria-hidden="true" style="position:absolute" focusable="false">
   <filter id="gb-green" color-interpolation-filters="sRGB">
@@ -23,19 +21,53 @@
   (function () {
     var HAS = /\p{Extended_Pictographic}/u;
     var RX = /(\p{Extended_Pictographic}(?:️|‍\p{Extended_Pictographic})*)/gu;
-    var GRID = 14; // low-res emoji raster; upscaled by CSS for the pixelated look
+    var GRID = 14;
+    // emoji (base, no variation selector) -> pixelarticons inner SVG
+    var ICONS = {
+      "🏠": '<path d="M4 20h16v2H4zm16-10h2v10h-2zM2 10h2v10H2zm2-2h2v2H4zm2-2h2v2H6zm2-2h2v2H8zm2-2h4v2h-4zm4 2h2v2h-2zm2 2h2v2h-2zm2 2h2v2h-2zM8 14h2v6H8zm2-2h4v2h-4zm4 2h2v6h-2z"/>',
+      "📥": '<path d="M2 4h2v16H2zm2 16h16v2H4zM20 4h2v16h-2zM4 2h16v2H4zm0 12h4v2H4zm4 2h8v2H8zm8-2h4v2h-4z"/>',
+      "🧾": '<path d="M3 2h2v18H3zm16 0h2v18h-2zM5 4h2v2H5zm4 0h2v2H9zM5 20h14v2H5zm8-16h2v2h-2zM7 2h2v2H7zm4 0h2v2h-2zm4 0h2v2h-2zm2 2h2v2h-2zM7 8h10v2H7zm0 4h10v2H7zm0 4h4v2H7z"/>',
+      "🔁": '<path d="M17 5h2v2h-2zM5 17h2v2H5zm6-14h2v6h-2zM9 1h2v8H9zm0 8h2v2H9zm10 8H9v2h10zM5 7H3v10h2z"/><path d="M13 15h-2v6h2zm2-2h-2v8h2zm0 8h-2v2h2zM5 5h10v2H5zm14 12h2V7h-2z"/>',
+      "↩": '<path d="M18 20h-6v-2h6v2Zm2-2h-2v-8h2v8Zm-10-4H8v-2H6v-2H4V8h2V6h2V4h2v4h8v2h-8v4Z"/>',
+      "📦": '<path d="M10 20h4v2h-4zm0-16h4V2h-4zm0 6h4v2h-4zm4 8h4v2h-4zm0-12h4V4h-4zm0 2h4v2h-4zm4 8h4v2h-4zm0-8h4V6h-4zM6 18h4v2H6zM6 6h4V4H6zm0 2h4v2H6zm-4 8h4v2H2zm0-8h4V6H2z"/><path d="M2 6h2v12H2zm18 0h2v12h-2zm-8 6h2v8h-2zm-2-6h4v2h-4z"/>',
+      "🛠": '<path d="M2 11h20v2H2zm0 2h2v8H2zm2 8h16v2H4zm16-8h2v8h-2zM9 15h6v2H9zM4 8h2v3H4zm2-2h6v2H6zm6 2h2v3h-2zM8 4h2v2H8zm10 0h2v7h-2zm-8-2h8v2h-8z"/>',
+      "🧑": '<path d="M9 2h6v2H9zm0 8h6v2H9zm6-6h2v6h-2zM7 4h2v6H7zM4 18h2v4H4zm14 0h2v4h-2zM8 14h8v2H8zm-2 2h2v2H6zm10 0h2v2h-2z"/>',
+      "📅": '<path d="M5 4h14v2H5zm0 16h14v2H5zM3 10h2v10H3zm0-4h2v2H3zm16 0h2v2h-2zm0 4h2v10h-2zM3 8h18v2H3zm12-6h2v2h-2zM7 2h2v2H7z"/>',
+      "📊": '<path d="M4 20h18v2H4zM2 2h2v18H2zm16 11v3h-2v-3zM8 13v3H6v-3zm8-2v2H8v-2zm0 5v2H8v-2zm4-12v3h-2V4zM8 4v3H6V4zm10-2v2H8V2zm0 5v2H8V7z"/>',
+      "🏷": '<path d="M6 2h6v2H6zM4 4h2v2H4zm8 0h2v2h-2zm-8 8h2v2H4zm8 0h2v2h-2zm-6 2h6v2H6zM2 6h2v6H2zm12 0h2v6h-2z"/><path d="M14 8h4v2h-4zm-4 10h2v2h-2zm8-8h2v2h-2zm-6 10h2v2h-2zm6-2h2v2h-2z"/><path d="M12 20h6v2h-6zm-4-6h2v4H8zm12-2h2v6h-2zM7 6h4v2H7z"/><path d="M9 6h2v6H9zm6 8h2v4h-2zm-1-2h3v2h-3z"/>',
+      "⚙": '<path d="M9 0h6v2H9zm6 24H9v-2h6zM0 15V9h2v6zm24-6v6h-2V9zM9 2h2v4H9zm6 20h-2v-4h2zM2 15v-2h4v2zm20-6v2h-4V9zm-9-7h2v4h-2zm-2 20H9v-4h2zM2 11V9h4v2zm20 2v2h-4v-2zM7 4h2v2H7zm10 0h-2v2h2zm0 16h-2v-2h2zM7 20h2v-2H7zM2 2h5v2H2zm20 0h-5v2h5zm0 20h-5v-2h5zM2 22h5v-2H2z"/><path d="M2 2h2v5H2zm20 0h-2v5h2zm0 20h-2v-5h2zM2 22h2v-5H2zM4 7h2v2H4zm16 0h-2v2h2zm0 10h-2v-2h2zM4 17h2v-2H4zm6-9h4v2h-4zm0 6h4v2h-4zm-2-4h2v4H8zm6 0h2v4h-2z"/>',
+      "🛒": '<path d="M2 2h2v2H2zm2 6h2v4H4zm2 4h2v4H6zm2 4h10v2H8zm10-4h2v4h-2zm2-4h2v4h-2zM4 6h18v2H4zm0-4h2v4H4zm2 17h3v3H6zm11 0h3v3h-3z"/>',
+      "🎨": '<path d="M14 2h6v2h-6zm0 18h6v2h-6zM4 20h10v2H4zm8-16h2v16h-2zm8 0h2v16h-2zM2 16h2v4H2zm2-2h8v2H4zm12 2h2v2h-2zM6 12h2v2H6zM4 8h2v4H4zm2-2h4v2H6zm4 2h2v2h-2z"/>',
+      "🚪": '<path d="M8 11h12v2H8zm8-2h2v2h-2z"/><path d="M14 7h2v10h-2zm2 6h2v2h-2zM6 2h12v2H6zm0 18h12v2H6zM4 4h2v16H4zm14 0h2v3h-2zm0 13h2v3h-2z"/>',
+      "🎮": '<path d="M4 4h16v2H4zm0 14h16v2H4zM2 6h2v12H2zm18 0h2v12h-2zM8 9h2v6H8z"/><path d="M6 11h6v2H6zm8-2h2v2h-2zm2 4h2v2h-2z"/>',
+      "🔔": '<path d="M9 2h6v2H9zM7 4h2v2H7zm8 0h2v2h-2zM5 6h2v7H5zm12 0h2v7h-2zM3 13h2v4H3zm16 0h2v4h-2z"/><path d="M3 15h18v2H3zm5 3h2v2H8zm6 0h2v2h-2zm-4 2h4v2h-4z"/>',
+      "🔍": '<path d="M22 22h-2v-2h2v2Zm-2-2h-2v-2h2v2Zm-6-2H6v-2h8v2Zm4 0h-2v-2h2v2ZM6 16H4v-2h2v2Zm10 0h-2v-2h2v2ZM4 14H2V6h2v8Zm14 0h-2V6h2v8ZM6 6H4V4h2v2Zm10 0h-2V4h2v2Zm-2-2H6V2h8v2Z"/>',
+      "🕐": '<path d="M6 2h12v2H6zM2 6h2v12H2zm18 0h2v12h-2zm-2-2h2v2h-2zM4 4h2v2H4zm2 18h12v-2H6zm12-2h2v-2h-2zM4 20h2v-2H4zm7-14h2v7h-2zm2 7h2v2h-2zm2 2h2v2h-2z"/>',
+    };
+
+    function iconFor(ch) { return ICONS[ch] || ICONS[ch.replace(/️/g, "")] || null; }
 
     function pixelCanvas(ch) {
       var c = document.createElement("canvas");
-      c.width = GRID; c.height = GRID;
-      c.className = "gb-emoji-px";
-      c.setAttribute("aria-hidden", "true");
+      c.width = GRID; c.height = GRID; c.className = "gb-emoji-px"; c.setAttribute("aria-hidden", "true");
       var ctx = c.getContext("2d");
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.font = (GRID - 2) + 'px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",EmojiOne,sans-serif';
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.font = (GRID - 2) + 'px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
       ctx.fillText(ch, GRID / 2, GRID / 2 + 1);
       return c;
+    }
+
+    function build(ch) {
+      var span = document.createElement("span");
+      span.className = "gb-emoji";
+      var ic = iconFor(ch);
+      if (ic) span.innerHTML = '<svg class="gb-emoji-ic" viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">' + ic + "</svg>";
+      else span.appendChild(pixelCanvas(ch));
+      var tx = document.createElement("span");
+      tx.className = "gb-emoji-txt";
+      tx.textContent = ch;
+      span.appendChild(tx);
+      return span;
     }
 
     function wrap(root) {
@@ -47,7 +79,7 @@
           if (!p || !p.nodeName) return NodeFilter.FILTER_REJECT;
           var t = p.nodeName;
           if (t === "SCRIPT" || t === "STYLE" || t === "TEXTAREA" || t === "OPTION") return NodeFilter.FILTER_REJECT;
-          if (p.closest && p.closest(".gb-emoji")) return NodeFilter.FILTER_REJECT; // already wrapped
+          if (p.closest && p.closest(".gb-emoji")) return NodeFilter.FILTER_REJECT;
           return NodeFilter.FILTER_ACCEPT;
         },
       });
@@ -58,16 +90,8 @@
         RX.lastIndex = 0;
         while ((m = RX.exec(s))) {
           if (m.index > last) frag.appendChild(document.createTextNode(s.slice(last, m.index)));
-          var ch = m[0];
-          var span = document.createElement("span");
-          span.className = "gb-emoji";
-          span.appendChild(pixelCanvas(ch));      // shown in Game Boy mode
-          var tx = document.createElement("span"); // shown in every other theme
-          tx.className = "gb-emoji-txt";
-          tx.textContent = ch;
-          span.appendChild(tx);
-          frag.appendChild(span);
-          last = m.index + ch.length;
+          frag.appendChild(build(m[0]));
+          last = m.index + m[0].length;
         }
         if (last < s.length) frag.appendChild(document.createTextNode(s.slice(last)));
         if (node.parentNode) node.parentNode.replaceChild(frag, node);

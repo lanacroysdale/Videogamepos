@@ -254,8 +254,14 @@
 /* Emoji become low-res pixel art mapped onto the green ramp. The script swaps each
    emoji for a tiny <canvas> (shown here, upscaled crisp) + a hidden text fallback
    (shown in every other theme, so they revert cleanly). */
-.gb-emoji-px { display: none; }
+.gb-emoji-px, .gb-emoji-ic { display: none; }
 :root[data-theme="dmg"] .gb-emoji-txt { display: none; }
+/* Pixel-art icon (Pixelarticons) — inherits the green text colour via currentColor. */
+:root[data-theme="dmg"] .gb-emoji-ic {
+  display: inline-block; width: 1.1em; height: 1.1em; vertical-align: -0.16em;
+  fill: currentColor;
+}
+/* Canvas fallback for any unmapped emoji — low-res raster greened by the duotone. */
 :root[data-theme="dmg"] .gb-emoji-px {
   display: inline-block; width: 1.15em; height: 1.15em; vertical-align: -0.22em;
   image-rendering: pixelated; image-rendering: crisp-edges;
