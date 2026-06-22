@@ -41,9 +41,9 @@
   --sb-ink-dim: var(--muted);
   --sb-brand: var(--cyan);
   --sb-hover: rgba(255, 255, 255, 0.05);
-  --sb-active-bg: rgba(223, 94, 57, 0.12);
+  --sb-active-bg: color-mix(in srgb, var(--cyan) 14%, transparent);
   --sb-active-ink: var(--cyan);
-  --sb-active-border: rgba(223, 94, 57, 0.3);
+  --sb-active-border: color-mix(in srgb, var(--cyan) 32%, transparent);
   --sb-border: var(--border);
 
   /* Tunable glow strength (0 = off, 1 = default, up to ~2) */
@@ -163,21 +163,24 @@
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
 }
 
-/* DMG Game Boy — the classic 4-shade olive-green LCD; accents go green too. */
+/* Game Boy — soft modern green: pale mint canvas (not white), dark-green ink,
+   pine + sage accents. Built from the 4-shade green palette. */
 :root[data-theme="dmg"] {
-  --bg: #0f380f;
-  --bg-2: #143f12;
-  --panel: #1d4a1c;
-  --panel-2: #2b5a29;
-  --border: rgba(155, 188, 15, 0.18);
-  --border-strong: rgba(155, 188, 15, 0.38);
-  --text: #9bbc0f;
-  --muted: #84a52a;
-  --muted-2: #5f7d1c;
-  --cyan: #9bbc0f; --cyan-deep: #6e8b16; --magenta: #c7d34a; --violet: #6e8b16;
-  --green: #8bac0f; --sky: #6e8b16; --yellow: #c7d34a;
-  --accent-ink: #0f380f;
-  --glow-strength: 0.8;
+  --bg: #d3f5d2;
+  --bg-2: #c4ecc3;
+  --panel: #e6f9e5;
+  --panel-2: #d8f2d7;
+  --border: rgba(0, 26, 22, 0.14);
+  --border-strong: rgba(0, 26, 22, 0.26);
+  --text: #001a16;
+  --muted: #1d5546;
+  --muted-2: #4a7d6c;
+  --cyan: #1d5546; --cyan-deep: #143f34; --magenta: #66a86e; --violet: #357a62;
+  --green: #4e9a5e; --sky: #1d5546; --yellow: #66a86e;
+  --accent-ink: #eafaea;
+  --sb-hover: rgba(0, 26, 22, 0.07);
+  --shadow: 0 16px 36px -22px rgba(0, 40, 30, 0.4);
+  --glow-strength: 0.5;
 }
 
 /* Game Boy Advance — the launch "Indigo" purple, full-colour vibe. */
