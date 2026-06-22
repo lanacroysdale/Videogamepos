@@ -311,6 +311,49 @@
   background-attachment: fixed;
 }
 
+/* Wii Menu look: round EVERYTHING (override the sharp-corners rule) + clean
+   outlines on the "channels". Higher specificity than the global * reset so it
+   wins despite !important. */
+:root[data-theme="wii"] *,
+:root[data-theme="wii"] *::before,
+:root[data-theme="wii"] *::after { border-radius: 9px !important; }
+/* Rounded channel-style panels/cards with a crisp outline. */
+:root[data-theme="wii"] .pos-panel,
+:root[data-theme="wii"] .stat,
+:root[data-theme="wii"] .shop-card,
+:root[data-theme="wii"] .tile-btn,
+:root[data-theme="wii"] .cart-panel,
+:root[data-theme="wii"] .result-row,
+:root[data-theme="wii"] .set-panel {
+  border-radius: 16px !important;
+  border: 2px solid var(--border-strong);
+}
+/* Pill buttons (drop the trapezoid clip-path) with an outline. */
+:root[data-theme="wii"] .btn {
+  clip-path: none !important;
+  border-radius: 999px !important;
+  border: 2px solid rgba(255, 255, 255, 0.65);
+  box-shadow: 0 2px 6px -1px rgba(0, 60, 90, 0.25);
+}
+:root[data-theme="wii"] .btn-sm { border-width: 1.5px; }
+/* Inputs, search, selects — rounded with an outline. */
+:root[data-theme="wii"] input,
+:root[data-theme="wii"] select,
+:root[data-theme="wii"] textarea,
+:root[data-theme="wii"] .search input { border-radius: 999px !important; border: 1.5px solid var(--border-strong); }
+/* Pills / badges become full ovals. */
+:root[data-theme="wii"] .pill,
+:root[data-theme="wii"] .nav-badge { border-radius: 999px !important; }
+/* The circular corner buttons (Wii + message). */
+:root[data-theme="wii"] .owner-fab { border-radius: 50% !important; }
+/* Nav channels: rounded, outlined, blue glow on the active/hovered one. */
+:root[data-theme="wii"] .app-nav a { border: 1.5px solid transparent; }
+:root[data-theme="wii"] .app-nav a:hover,
+:root[data-theme="wii"] .app-nav a.active { border-color: var(--cyan); box-shadow: 0 0 0 2px rgba(0, 164, 228, 0.25); }
+/* Channel hover lift + blue ring, very Wii. */
+:root[data-theme="wii"] .tile-btn:hover,
+:root[data-theme="wii"] .shop-card:hover { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(0, 164, 228, 0.28); }
+
 /* =========================================================================
    Sidebar accent (data-sidebar) — recolors ONLY the POS sidebar, layered on
    top of whatever palette is active. Bright fill + dark ink for legibility.
