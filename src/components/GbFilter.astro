@@ -1,0 +1,65 @@
+---
+// Game Boy mode helpers.
+// 1. A hidden SVG "duotone" filter that maps full-colour pixels onto the Game Boy
+//    green ramp (dark #0f380f -> light #d3f5d2). Referenced from CSS via
+//    filter: url(#gb-green). Harmless on other themes (nothing references it).
+// 2. A script that wraps loose emoji in <span class="gb-emoji"> so the same filter
+//    can green every emoji (nav icons, button labels, etc.) without recolouring
+//    the elements that contain them. Only runs while Game Boy mode is active.
+---
+<svg width="0" height="0" aria-hidden="true" style="position:absolute" focusable="false">
+  <filter id="gb-green" color-interpolation-filters="sRGB">
+    <feColorMatrix type="saturate" values="0" />
+    <feComponentTransfer>
+      <feFuncR type="table" tableValues="0.06 0.83" />
+      <feFuncG type="table" tableValues="0.22 0.96" />
+      <feFuncB type="table" tableValues="0.06 0.82" />
+    </feComponentTransfer>
+  </filter>
+</svg>
+
+<script is:inline>
+  (function () {
+    var HAS = /\p{Extended_Pictographic}/u;
+    var RX = /(\p{Extended_Pictographic}(?:️|‍\p{Extended_Pictographic})*)/gu;
+    function wrap(root) {
+      if (!root) return;
+      var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+        acceptNode: function (n) {
+          if (!n.nodeValue || !HAS.test(n.nodeValue)) return NodeFilter.FILTER_REJECT;
+          var p = n.parentNode;
+          if (!p || !p.nodeName) return NodeFilter.FILTER_REJECT;
+          var t = p.nodeName;
+          if (t === "SCRIPT" || t === "STYLE" || t === "TEXTAREA" || t === "OPTION") return NodeFilter.FILTER_REJECT;
+          if (p.classList && p.classList.contains("gb-emoji")) return NodeFilter.FILTER_REJECT;
+          return NodeFilter.FILTER_ACCEPT;
+        },
+      });
+      var nodes = [];
+      while (walker.nextNode()) nodes.push(walker.currentNode);
+      nodes.forEach(function (node) {
+        var s = node.nodeValue, frag = document.createDocumentFragment(), last = 0, m;
+        RX.lastIndex = 0;
+        while ((m = RX.exec(s))) {
+          if (m.index > last) frag.appendChild(document.createTextNode(s.slice(last, m.index)));
+          var span = document.createElement("span");
+          span.className = "gb-emoji";
+          span.textContent = m[0];
+          frag.appendChild(span);
+          last = m.index + m[0].length;
+        }
+        if (last < s.length) frag.appendChild(document.createTextNode(s.slice(last)));
+        if (node.parentNode) node.parentNode.replaceChild(frag, node);
+      });
+    }
+    var ran = false;
+    function run() { if (ran) return; ran = true; try { wrap(document.body); } catch (e) {} }
+    // Expose for ThemeInit to call when switching INTO Game Boy mode at runtime.
+    window.__tlWrapEmojis = run;
+    // Initial load: if Game Boy mode is already active, green the emoji now.
+    if (document.documentElement.getAttribute("data-theme") === "dmg") {
+      if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", run);
+      else run();
+    }
+  })();
+</script>

@@ -3,6 +3,7 @@ import "../styles/global.css";
 import "../styles/app.css";
 import ThemeInit from "../components/ThemeInit.astro";
 import OwnerToggle from "../components/OwnerToggle.astro";
+import GbFilter from "../components/GbFilter.astro";
 
 interface Props {
   title: string;
@@ -47,7 +48,7 @@ const nav = [
   <body class="app-body">
     <div class="app-shell">
       <aside class="app-side">
-        <a href="/app" class="app-brand">🎮 Time&nbsp;Lag <span>POS</span></a>
+        <a href="/app" class="app-brand"><span class="app-brand-ico">🎮</span> Time&nbsp;Lag <span>POS</span></a>
         <nav class="app-nav">
           {
             nav.map((item) => (
@@ -82,6 +83,7 @@ const nav = [
       </main>
     </div>
     <OwnerToggle />
+    <GbFilter />
 
     <style>
       .app-nav a { display: flex; align-items: center; }

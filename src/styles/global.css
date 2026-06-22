@@ -231,6 +231,35 @@
   background: color-mix(in srgb, var(--cyan) 12%, transparent);
 }
 
+/* Buttons: a Game Boy can't draw the slanted trapezoid, so square them off and
+   give a chunky 3D pixel bevel (light top-left edge, dark bottom-right). */
+:root[data-theme="dmg"] .btn {
+  clip-path: none;
+  box-shadow: inset 2px 2px 0 rgba(255, 255, 255, 0.22), inset -2px -2px 0 rgba(0, 40, 30, 0.28);
+}
+:root[data-theme="dmg"] .btn:active {
+  box-shadow: inset -2px -2px 0 rgba(255, 255, 255, 0.18), inset 2px 2px 0 rgba(0, 40, 30, 0.28);
+}
+
+/* Pixel-art mouse cursor. */
+:root[data-theme="dmg"] { cursor: url("/cursor-gb.svg") 2 2, auto; }
+:root[data-theme="dmg"] a,
+:root[data-theme="dmg"] button,
+:root[data-theme="dmg"] .btn,
+:root[data-theme="dmg"] [role="button"],
+:root[data-theme="dmg"] label,
+:root[data-theme="dmg"] summary,
+:root[data-theme="dmg"] select { cursor: url("/cursor-gb.svg") 2 2, pointer; }
+
+/* Even the emoji icons get mapped onto the green ramp (duotone SVG filter). */
+:root[data-theme="dmg"] .app-nav .ico,
+:root[data-theme="dmg"] .app-brand-ico,
+:root[data-theme="dmg"] .owner-fab-ico,
+:root[data-theme="dmg"] .owner-item-ico,
+:root[data-theme="dmg"] .shop-thumb-ph,
+:root[data-theme="dmg"] .gb-emoji { filter: url(#gb-green); }
+.gb-emoji { display: inline-block; }
+
 /* Game Boy Advance — the launch "Indigo" purple, full-colour vibe. */
 :root[data-theme="gba"] {
   --bg: #1a1640;
