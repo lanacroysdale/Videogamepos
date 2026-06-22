@@ -318,7 +318,7 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     const btn = e.currentTarget as HTMLButtonElement;
     const name = ($("inv-name") as HTMLInputElement).value.trim();
     const email = ($("inv-email") as HTMLInputElement).value.trim();
-    const role = ($("inv-role") as HTMLSelectElement).value;
+    const role = (document.getElementById("inv-role") as HTMLSelectElement).value;
     if (!name || !email) { alert("Enter a name and email."); return; }
     btn.disabled = true;
     try {
