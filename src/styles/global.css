@@ -255,18 +255,23 @@
    emoji for a tiny <canvas> (shown here, upscaled crisp) + a hidden text fallback
    (shown in every other theme, so they revert cleanly). */
 .gb-emoji-px, .gb-emoji-ic { display: none; }
-:root[data-theme="dmg"] .gb-emoji-txt { display: none; }
-/* Pixel-art icon (Pixelarticons) — inherits the green text colour via currentColor. */
-:root[data-theme="dmg"] .gb-emoji-ic {
+:root[data-theme="dmg"] .gb-emoji-txt,
+:root[data-theme="gba"] .gb-emoji-txt { display: none; }
+/* Pixel-art icon (Pixelarticons) — inherits the theme text colour via currentColor
+   (green in Game Boy, indigo/lavender in Indigo GBC/GBA). */
+:root[data-theme="dmg"] .gb-emoji-ic,
+:root[data-theme="gba"] .gb-emoji-ic {
   display: inline-block; width: 1.1em; height: 1.1em; vertical-align: -0.16em;
   fill: currentColor;
 }
-/* Canvas fallback for any unmapped emoji — low-res raster greened by the duotone. */
-:root[data-theme="dmg"] .gb-emoji-px {
+/* Canvas fallback for unmapped emoji — low-res raster duotoned to the theme. */
+:root[data-theme="dmg"] .gb-emoji-px,
+:root[data-theme="gba"] .gb-emoji-px {
   display: inline-block; width: 1.15em; height: 1.15em; vertical-align: -0.22em;
   image-rendering: pixelated; image-rendering: crisp-edges;
-  filter: url(#gb-green);
 }
+:root[data-theme="dmg"] .gb-emoji-px { filter: url(#gb-green); }
+:root[data-theme="gba"] .gb-emoji-px { filter: url(#gb-indigo); }
 
 /* Game Boy Advance — the launch "Indigo" purple, full-colour vibe. */
 :root[data-theme="gba"] {

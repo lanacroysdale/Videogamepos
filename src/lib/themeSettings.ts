@@ -26,7 +26,7 @@ export const THEMES = [
   { key: "midnight", label: "Midnight", swatch: "#06040a", accent: "#df5e39" },
   { key: "glass", label: "Liquid Glass", swatch: "#1a1330", accent: "#7fd6e6" },
   { key: "dmg", label: "Game Boy", swatch: "#d3f5d2", accent: "#1d5546" },
-  { key: "gba", label: "GBA", swatch: "#2b2566", accent: "#7c6ff0" },
+  { key: "gba", label: "Indigo GBC/GBA", swatch: "#2b2566", accent: "#7c6ff0" },
   { key: "wii", label: "Wii", swatch: "#eef3f6", accent: "#00a4e4" },
 ] as const;
 

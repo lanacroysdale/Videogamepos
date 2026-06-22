@@ -15,6 +15,14 @@
       <feFuncB type="table" tableValues="0.06 0.82" />
     </feComponentTransfer>
   </filter>
+  <filter id="gb-indigo" color-interpolation-filters="sRGB">
+    <feColorMatrix type="saturate" values="0" />
+    <feComponentTransfer>
+      <feFuncR type="table" tableValues="0.17 0.93" />
+      <feFuncG type="table" tableValues="0.15 0.91" />
+      <feFuncB type="table" tableValues="0.40 1" />
+    </feComponentTransfer>
+  </filter>
 </svg>
 
 <script is:inline>
@@ -99,7 +107,8 @@
     }
 
     function run() {
-      if (document.documentElement.getAttribute("data-theme") !== "dmg") return;
+      var t = document.documentElement.getAttribute("data-theme");
+      if (t !== "dmg" && t !== "gba") return; // pixel-icon themes
       try { wrap(document.body); } catch (e) {}
     }
     window.__tlWrapEmojis = run;
