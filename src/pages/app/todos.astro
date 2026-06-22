@@ -1,69 +1,160 @@
 ---
 export const prerender = false;
 import AppLayout from "../../layouts/AppLayout.astro";
+import { PRIORITIES, priorityRank, storeToday } from "../../lib/todos";
 
 const supabase = Astro.locals.supabase;
+const uid = Astro.locals.user!.id;
+const isManager = ["owner", "manager"].includes(Astro.locals.profile?.role ?? "");
+const myName = Astro.locals.profile?.full_name ?? "You";
+const today = storeToday();
+
 const { data: roster } = await supabase.from("profiles").select("id, full_name").order("full_name");
 const nameById = new Map((roster ?? []).map((r: any) => [r.id, r.full_name]));
 
-// Degrade gracefully until the tasks table migration is applied.
+// ---- Daily checklist (v2 tables) -----------------------------------------
+let v2Ready = true;
+let templates: any[] = [];
+let completionsToday: any[] = [];
+const tRes = await supabase
+  .from("daily_task_templates")
+  .select("id, title, notes, priority, points, active, sort_order")
+  .eq("active", true)
+  .order("sort_order")
+  .order("created_at");
+if (tRes.error) v2Ready = false;
+else templates = tRes.data ?? [];
+if (v2Ready) {
+  const c = await supabase.from("daily_task_completions").select("template_id, completed_by, points, created_at").eq("completed_date", today);
+  completionsToday = c.data ?? [];
+}
+const compByTemplate = new Map(completionsToday.map((c: any) => [c.template_id, c]));
+const dailyDone = completionsToday.length;
+
+// ---- One-off tasks (try v2 columns, fall back) ---------------------------
 let setupNeeded = false;
 let tasks: any[] = [];
-const res = await supabase
+const tk = await supabase
   .from("tasks")
-  .select("id, title, status, assignee_id, due_date, created_at, completed_at")
-  .order("sort_order")
+  .select("id, title, notes, status, assignee_id, due_date, priority, points, completed_by, completed_at, created_at")
   .order("created_at", { ascending: false });
-if (res.error) setupNeeded = true;
-else tasks = res.data ?? [];
+if (tk.error) {
+  const basic = await supabase.from("tasks").select("id, title, notes, status, assignee_id, due_date, created_at").order("created_at", { ascending: false });
+  if (basic.error) setupNeeded = true;
+  else tasks = basic.data ?? [];
+} else tasks = tk.data ?? [];
 
-const open = tasks.filter((t) => t.status !== "done");
-const done = tasks.filter((t) => t.status === "done");
-const today = new Date(); today.setHours(0, 0, 0, 0);
-const dueState = (d: string | null) => {
-  if (!d) return "";
-  const due = new Date(d + "T00:00:00");
-  if (due < today) return "over";
-  if (due.getTime() === today.getTime()) return "today";
-  return "";
-};
+const openTasks = tasks.filter((t) => t.status !== "done").sort((a, b) => priorityRank(a.priority || "normal") - priorityRank(b.priority || "normal"));
+const doneTasks = tasks.filter((t) => t.status === "done");
+
+// ---- Points, last 7 days (v2) --------------------------------------------
+let leaderboard: { name: string; pts: number }[] = [];
+if (v2Ready) {
+  const ago = new Date(Date.now() - 7 * 86400000);
+  const date7 = ago.toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+  const iso7 = ago.toISOString();
+  const [dc, wt] = await Promise.all([
+    supabase.from("daily_task_completions").select("completed_by, points").gte("completed_date", date7),
+    supabase.from("tasks").select("completed_by, points").eq("status", "done").gte("completed_at", iso7),
+  ]);
+  const m = new Map<string, number>();
+  for (const r of [...(dc.data ?? []), ...(wt.data ?? [])]) {
+    if (r.completed_by) m.set(r.completed_by, (m.get(r.completed_by) ?? 0) + (r.points ?? 0));
+  }
+  leaderboard = [...m.entries()].map(([id, pts]) => ({ name: nameById.get(id) ?? "—", pts })).filter((x) => x.pts > 0).sort((a, b) => b.pts - a.pts);
+}
+
+const today2 = new Date(); today2.setHours(0, 0, 0, 0);
+const dueState = (d: string | null) => { if (!d) return ""; const due = new Date(d + "T00:00:00"); if (due < today2) return "over"; if (due.getTime() === today2.getTime()) return "today"; return ""; };
 const fmtDue = (d: string | null) => (d ? new Date(d + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "");
+const tt = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 ---
 
 <AppLayout title="To-dos" active="todos">
   {setupNeeded ? (
     <div class="pos-panel" style="max-width:640px;">
       <h2>To-dos</h2>
-      <p class="notice" style="margin-top:0.6rem;">
-        Run the migration <code>supabase/migrations/20260621000002_timeclock_activities_and_tasks.sql</code>
-        in the Supabase SQL editor to enable the shared to-do list.
-      </p>
+      <p class="notice" style="margin-top:0.6rem;">Run migration <code>20260621000002</code> (and <code>20260621000003</code>) in the Supabase SQL editor to enable the to-do list.</p>
     </div>
   ) : (
-    <div class="todo-wrap">
-      <!-- New task -->
-      <div class="pos-panel">
+    <div class="todo-wrap" data-myname={myName} data-today={today}>
+      {!v2Ready && (
+        <p class="notice" style="margin-bottom:1rem;">Run migration <code>20260621000003</code> to enable the daily checklist, priorities & points.</p>
+      )}
+
+      {/* Daily checklist */}
+      {v2Ready && (
+        <div class="pos-panel">
+          <h2 style="display:flex;align-items:center;gap:0.7rem;">Daily checklist
+            <span class="td-progress" id="daily-progress">{dailyDone}/{templates.length}</span>
+            <span class="muted" style="font-weight:400;font-size:0.85rem;">resets each day</span>
+          </h2>
+          <ul class="td-list" id="daily-list">
+            {templates.map((t: any) => {
+              const c = compByTemplate.get(t.id);
+              return (
+                <li class={`td-item daily${c ? " done" : ""}`} data-tid={t.id}>
+                  <input type="checkbox" class="td-check daily-check" checked={!!c} />
+                  <span class="td-body">
+                    <span class="td-title">{t.title}
+                      {t.priority !== "normal" && <span class={`pr pr-${t.priority}`}>{t.priority}</span>}
+                      {t.points > 0 && <span class="pts">+{t.points}</span>}
+                    </span>
+                    <span class="td-by" data-by>{c ? `✓ ${nameById.get(c.completed_by) ?? "—"}` : ""}</span>
+                  </span>
+                  {isManager && <button class="td-del" data-tdel title="Remove daily item" aria-label="Remove">✕</button>}
+                </li>
+              );
+            })}
+            {templates.length === 0 && <li class="empty">No daily items yet{isManager ? " — add one below." : "."}</li>}
+          </ul>
+          {isManager && (
+            <div class="td-add daily-add" style="margin-top:0.7rem;">
+              <input id="dt-title" placeholder="New daily item…" autocomplete="off" />
+              <select id="dt-prio">{PRIORITIES.map((p) => <option value={p.key} selected={p.key === "normal"}>{p.label}</option>)}</select>
+              <span class="td-money">⭐<input id="dt-points" type="number" min="0" max="100" value="1" title="Points" /></span>
+              <button id="dt-add" class="btn btn-ghost btn-sm">Add daily</button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Points */}
+      {v2Ready && leaderboard.length > 0 && (
+        <div class="pos-panel" style="margin-top:1rem;">
+          <h2>Points <span class="muted" style="font-weight:400;font-size:0.85rem;">· last 7 days</span></h2>
+          <ul class="lb">
+            {leaderboard.map((r, i) => (
+              <li><span class="lb-rank">{i + 1}</span><span class="lb-name">{r.name}</span><span class="lb-pts">{r.pts} ⭐</span></li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Add one-off task */}
+      <div class="pos-panel" style="margin-top:1rem;">
         <h2>Add a task</h2>
         <div class="td-add">
           <input id="td-title" placeholder="What needs doing?" autocomplete="off" />
-          <select id="td-assignee" title="Assign to">
-            <option value="">Anyone</option>
-            {roster?.map((r: any) => <option value={r.id}>{r.full_name}</option>)}
-          </select>
+          <select id="td-assignee" title="Assign to"><option value="">Anyone</option>{roster?.map((r: any) => <option value={r.id}>{r.full_name}</option>)}</select>
+          {v2Ready && <select id="td-prio" title="Priority">{PRIORITIES.map((p) => <option value={p.key} selected={p.key === "normal"}>{p.label}</option>)}</select>}
           <input id="td-due" type="date" title="Due date" />
           <button id="td-save" class="btn btn-primary btn-sm">Add</button>
         </div>
       </div>
 
-      <!-- Open -->
+      {/* Open */}
       <div class="pos-panel" style="margin-top:1rem;">
-        <h2>Open <span class="muted" style="font-weight:400;">({open.length})</span></h2>
+        <h2>Open <span class="muted" style="font-weight:400;">({openTasks.length})</span></h2>
         <ul class="td-list" id="td-open">
-          {open.map((tk: any) => (
-            <li class="td-item" data-id={tk.id}>
+          {openTasks.map((tk: any) => (
+            <li class={`td-item pr-row-${tk.priority || "normal"}`} data-id={tk.id}>
               <input type="checkbox" class="td-check" />
               <span class="td-body">
-                <span class="td-title">{tk.title}</span>
+                <span class="td-title">{tk.title}
+                  {v2Ready && tk.priority && tk.priority !== "normal" && <span class={`pr pr-${tk.priority}`}>{tk.priority}</span>}
+                  {v2Ready && tk.points > 0 && <span class="pts">+{tk.points}</span>}
+                </span>
                 <span class="td-meta">
                   {tk.assignee_id && <span class="td-who">{nameById.get(tk.assignee_id) ?? "—"}</span>}
                   {tk.due_date && <span class={`td-due td-due--${dueState(tk.due_date)}`}>{fmtDue(tk.due_date)}</span>}
@@ -72,19 +163,22 @@ const fmtDue = (d: string | null) => (d ? new Date(d + "T00:00:00").toLocaleDate
               <button class="td-del" title="Delete" aria-label="Delete">✕</button>
             </li>
           ))}
-          {open.length === 0 && <li class="empty">Nothing open — nice. 🎉</li>}
+          {openTasks.length === 0 && <li class="empty">Nothing open — nice. 🎉</li>}
         </ul>
       </div>
 
-      <!-- Done -->
-      {done.length > 0 && (
+      {/* Done */}
+      {doneTasks.length > 0 && (
         <div class="pos-panel" style="margin-top:1rem;">
-          <h2>Done <span class="muted" style="font-weight:400;">({done.length})</span></h2>
+          <h2>Done <span class="muted" style="font-weight:400;">({doneTasks.length})</span></h2>
           <ul class="td-list" id="td-done">
-            {done.map((tk: any) => (
+            {doneTasks.map((tk: any) => (
               <li class="td-item done" data-id={tk.id}>
                 <input type="checkbox" class="td-check" checked />
-                <span class="td-body"><span class="td-title">{tk.title}</span></span>
+                <span class="td-body">
+                  <span class="td-title">{tk.title}</span>
+                  {v2Ready && tk.completed_by && <span class="td-meta"><span class="td-who">✓ {nameById.get(tk.completed_by) ?? "—"}</span></span>}
+                </span>
                 <button class="td-del" title="Delete" aria-label="Delete">✕</button>
               </li>
             ))}
@@ -97,14 +191,17 @@ const fmtDue = (d: string | null) => (d ? new Date(d + "T00:00:00").toLocaleDate
 
 <style>
   .todo-wrap { max-width: 720px; }
-  .td-add { display: grid; grid-template-columns: 1fr auto auto auto; gap: 0.5rem; }
-  @media (max-width: 620px) { .td-add { grid-template-columns: 1fr; } }
+  .td-add { display: grid; grid-template-columns: 1fr auto auto auto auto; gap: 0.5rem; }
+  .daily-add { grid-template-columns: 1fr auto auto auto; }
+  @media (max-width: 640px) { .td-add { grid-template-columns: 1fr; } }
   .td-list { list-style: none; padding: 0; margin: 0.4rem 0 0; display: grid; gap: 0.4rem; }
   .td-item { display: flex; align-items: center; gap: 0.7rem; padding: 0.6rem 0.7rem; border: 1px solid var(--border); background: rgba(255,255,255,.02); }
+  .td-item.pr-row-high { border-left: 3px solid var(--magenta); }
   .td-check { width: 1.2rem; height: 1.2rem; accent-color: var(--green); flex: none; cursor: pointer; }
   .td-body { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 0.8rem; }
-  .td-title { font-weight: 600; }
+  .td-title { font-weight: 600; display: inline-flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; }
   .td-item.done .td-title { text-decoration: line-through; color: var(--muted-2); }
+  .td-by { font-size: 0.76rem; font-weight: 700; color: var(--green); flex: none; }
   .td-meta { display: flex; align-items: center; gap: 0.5rem; flex: none; }
   .td-who { font-size: 0.74rem; font-weight: 700; color: var(--muted); padding: 0.1rem 0.5rem; border: 1px solid var(--border-strong); }
   .td-due { font-size: 0.74rem; font-weight: 700; color: var(--muted-2); font-variant-numeric: tabular-nums; }
@@ -112,10 +209,24 @@ const fmtDue = (d: string | null) => (d ? new Date(d + "T00:00:00").toLocaleDate
   .td-due--over { color: var(--magenta); }
   .td-del { background: none; border: none; color: var(--muted-2); cursor: pointer; font-size: 0.95rem; flex: none; }
   .td-del:hover { color: var(--magenta); }
+  .pr { font-size: 0.64rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; padding: 0.05rem 0.4rem; border-radius: 999px; }
+  .pr-high { color: #fff; background: var(--magenta); }
+  .pr-low { color: var(--muted-2); border: 1px solid var(--border-strong); }
+  .pts { font-size: 0.7rem; font-weight: 800; color: var(--yellow); }
+  .td-progress { font-family: var(--font-mono); font-size: 0.85rem; font-weight: 800; color: var(--green); padding: 0.1rem 0.55rem; border: 1px solid rgba(70,133,150,.4); background: rgba(70,133,150,.1); }
+  .td-money { display: inline-flex; align-items: center; gap: 0.2rem; }
+  .td-money input { width: 3.4rem; text-align: right; }
+  .lb { list-style: none; padding: 0; margin: 0.4rem 0 0; display: grid; gap: 0.35rem; }
+  .lb li { display: flex; align-items: center; gap: 0.7rem; font-size: 0.92rem; }
+  .lb-rank { font-family: var(--font-mono); font-weight: 800; color: var(--muted-2); width: 1.4rem; }
+  .lb-name { flex: 1; font-weight: 600; }
+  .lb-pts { font-weight: 800; color: var(--yellow); }
 </style>
 
 <script>
   const $ = (id: string) => document.getElementById(id);
+  const wrap = document.querySelector(".todo-wrap") as HTMLElement | null;
+  const myName = wrap?.dataset.myname || "You";
   async function api(body: any) {
     const r = await fetch("/api/pos/tasks", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
     const j = await r.json().catch(() => ({}));
@@ -123,18 +234,55 @@ const fmtDue = (d: string | null) => (d ? new Date(d + "T00:00:00").toLocaleDate
     return j;
   }
 
+  // ---- Daily checklist ----
+  function refreshProgress() {
+    const list = $("daily-list"); const prog = $("daily-progress");
+    if (!list || !prog) return;
+    const items = list.querySelectorAll(".td-item.daily");
+    const done = [...items].filter((li) => li.classList.contains("done")).length;
+    prog.textContent = `${done}/${items.length}`;
+  }
+  document.querySelectorAll<HTMLElement>(".td-item.daily").forEach((li) => {
+    const tid = li.dataset.tid!;
+    li.querySelector<HTMLInputElement>(".daily-check")?.addEventListener("change", async (e) => {
+      const done = (e.target as HTMLInputElement).checked;
+      li.classList.toggle("done", done);
+      const by = li.querySelector("[data-by]"); if (by) by.textContent = done ? `✓ ${myName}` : "";
+      refreshProgress();
+      try { await api({ action: "daily-toggle", templateId: tid, done }); }
+      catch (err: any) { alert(err.message); (e.target as HTMLInputElement).checked = !done; li.classList.toggle("done", !done); if (by) by.textContent = !done ? `✓ ${myName}` : ""; refreshProgress(); }
+    });
+    li.querySelector<HTMLButtonElement>("[data-tdel]")?.addEventListener("click", async () => {
+      if (!confirm("Remove this daily item for everyone?")) return;
+      try { await api({ action: "template-delete", id: tid }); location.reload(); } catch (err: any) { alert(err.message); }
+    });
+  });
+  $("dt-add")?.addEventListener("click", async () => {
+    const title = ($("dt-title") as HTMLInputElement).value.trim();
+    if (!title) return;
+    try {
+      await api({ action: "template-create", title, priority: ($("dt-prio") as HTMLSelectElement).value, points: ($("dt-points") as HTMLInputElement).value });
+      location.reload();
+    } catch (err: any) { alert(err.message); }
+  });
+
+  // ---- One-off tasks ----
   $("td-save")?.addEventListener("click", async () => {
     const title = ($("td-title") as HTMLInputElement).value.trim();
     if (!title) return;
-    const assigneeId = ($("td-assignee") as HTMLSelectElement).value;
-    const dueDate = ($("td-due") as HTMLInputElement).value;
-    try { await api({ action: "create", title, assigneeId, dueDate }); location.reload(); }
-    catch (e: any) { alert(e.message); }
+    try {
+      await api({
+        action: "create", title,
+        assigneeId: ($("td-assignee") as HTMLSelectElement).value,
+        priority: ($("td-prio") as HTMLSelectElement | null)?.value,
+        dueDate: ($("td-due") as HTMLInputElement).value,
+      });
+      location.reload();
+    } catch (err: any) { alert(err.message); }
   });
   $("td-title")?.addEventListener("keydown", (e) => { if ((e as KeyboardEvent).key === "Enter") $("td-save")?.dispatchEvent(new Event("click")); });
 
-  // Toggle done / delete (optimistic; no reload).
-  document.querySelectorAll<HTMLElement>(".td-item").forEach((li) => {
+  document.querySelectorAll<HTMLElement>("#td-open .td-item, #td-done .td-item").forEach((li) => {
     const id = li.dataset.id!;
     li.querySelector<HTMLInputElement>(".td-check")?.addEventListener("change", async (e) => {
       const done = (e.target as HTMLInputElement).checked;
@@ -143,8 +291,7 @@ const fmtDue = (d: string | null) => (d ? new Date(d + "T00:00:00").toLocaleDate
       catch (err: any) { alert(err.message); (e.target as HTMLInputElement).checked = !done; li.classList.toggle("done", !done); }
     });
     li.querySelector<HTMLButtonElement>(".td-del")?.addEventListener("click", async () => {
-      try { await api({ action: "delete", id }); li.remove(); }
-      catch (err: any) { alert(err.message); }
+      try { await api({ action: "delete", id }); li.remove(); } catch (err: any) { alert(err.message); }
     });
   });
 </script>
