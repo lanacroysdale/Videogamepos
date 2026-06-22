@@ -1,0 +1,150 @@
+---
+export const prerender = false;
+import AppLayout from "../../layouts/AppLayout.astro";
+
+const supabase = Astro.locals.supabase;
+const { data: roster } = await supabase.from("profiles").select("id, full_name").order("full_name");
+const nameById = new Map((roster ?? []).map((r: any) => [r.id, r.full_name]));
+
+// Degrade gracefully until the tasks table migration is applied.
+let setupNeeded = false;
+let tasks: any[] = [];
+const res = await supabase
+  .from("tasks")
+  .select("id, title, status, assignee_id, due_date, created_at, completed_at")
+  .order("sort_order")
+  .order("created_at", { ascending: false });
+if (res.error) setupNeeded = true;
+else tasks = res.data ?? [];
+
+const open = tasks.filter((t) => t.status !== "done");
+const done = tasks.filter((t) => t.status === "done");
+const today = new Date(); today.setHours(0, 0, 0, 0);
+const dueState = (d: string | null) => {
+  if (!d) return "";
+  const due = new Date(d + "T00:00:00");
+  if (due < today) return "over";
+  if (due.getTime() === today.getTime()) return "today";
+  return "";
+};
+const fmtDue = (d: string | null) => (d ? new Date(d + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "");
+---
+
+<AppLayout title="To-dos" active="todos">
+  {setupNeeded ? (
+    <div class="pos-panel" style="max-width:640px;">
+      <h2>To-dos</h2>
+      <p class="notice" style="margin-top:0.6rem;">
+        Run the migration <code>supabase/migrations/20260621000002_timeclock_activities_and_tasks.sql</code>
+        in the Supabase SQL editor to enable the shared to-do list.
+      </p>
+    </div>
+  ) : (
+    <div class="todo-wrap">
+      <!-- New task -->
+      <div class="pos-panel">
+        <h2>Add a task</h2>
+        <div class="td-add">
+          <input id="td-title" placeholder="What needs doing?" autocomplete="off" />
+          <select id="td-assignee" title="Assign to">
+            <option value="">Anyone</option>
+            {roster?.map((r: any) => <option value={r.id}>{r.full_name}</option>)}
+          </select>
+          <input id="td-due" type="date" title="Due date" />
+          <button id="td-save" class="btn btn-primary btn-sm">Add</button>
+        </div>
+      </div>
+
+      <!-- Open -->
+      <div class="pos-panel" style="margin-top:1rem;">
+        <h2>Open <span class="muted" style="font-weight:400;">({open.length})</span></h2>
+        <ul class="td-list" id="td-open">
+          {open.map((tk: any) => (
+            <li class="td-item" data-id={tk.id}>
+              <input type="checkbox" class="td-check" />
+              <span class="td-body">
+                <span class="td-title">{tk.title}</span>
+                <span class="td-meta">
+                  {tk.assignee_id && <span class="td-who">{nameById.get(tk.assignee_id) ?? "—"}</span>}
+                  {tk.due_date && <span class={`td-due td-due--${dueState(tk.due_date)}`}>{fmtDue(tk.due_date)}</span>}
+                </span>
+              </span>
+              <button class="td-del" title="Delete" aria-label="Delete">✕</button>
+            </li>
+          ))}
+          {open.length === 0 && <li class="empty">Nothing open — nice. 🎉</li>}
+        </ul>
+      </div>
+
+      <!-- Done -->
+      {done.length > 0 && (
+        <div class="pos-panel" style="margin-top:1rem;">
+          <h2>Done <span class="muted" style="font-weight:400;">({done.length})</span></h2>
+          <ul class="td-list" id="td-done">
+            {done.map((tk: any) => (
+              <li class="td-item done" data-id={tk.id}>
+                <input type="checkbox" class="td-check" checked />
+                <span class="td-body"><span class="td-title">{tk.title}</span></span>
+                <button class="td-del" title="Delete" aria-label="Delete">✕</button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )}
+</AppLayout>
+
+<style>
+  .todo-wrap { max-width: 720px; }
+  .td-add { display: grid; grid-template-columns: 1fr auto auto auto; gap: 0.5rem; }
+  @media (max-width: 620px) { .td-add { grid-template-columns: 1fr; } }
+  .td-list { list-style: none; padding: 0; margin: 0.4rem 0 0; display: grid; gap: 0.4rem; }
+  .td-item { display: flex; align-items: center; gap: 0.7rem; padding: 0.6rem 0.7rem; border: 1px solid var(--border); background: rgba(255,255,255,.02); }
+  .td-check { width: 1.2rem; height: 1.2rem; accent-color: var(--green); flex: none; cursor: pointer; }
+  .td-body { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 0.8rem; }
+  .td-title { font-weight: 600; }
+  .td-item.done .td-title { text-decoration: line-through; color: var(--muted-2); }
+  .td-meta { display: flex; align-items: center; gap: 0.5rem; flex: none; }
+  .td-who { font-size: 0.74rem; font-weight: 700; color: var(--muted); padding: 0.1rem 0.5rem; border: 1px solid var(--border-strong); }
+  .td-due { font-size: 0.74rem; font-weight: 700; color: var(--muted-2); font-variant-numeric: tabular-nums; }
+  .td-due--today { color: var(--yellow); }
+  .td-due--over { color: var(--magenta); }
+  .td-del { background: none; border: none; color: var(--muted-2); cursor: pointer; font-size: 0.95rem; flex: none; }
+  .td-del:hover { color: var(--magenta); }
+</style>
+
+<script>
+  const $ = (id: string) => document.getElementById(id);
+  async function api(body: any) {
+    const r = await fetch("/api/pos/tasks", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) throw new Error(j.error || "Failed");
+    return j;
+  }
+
+  $("td-save")?.addEventListener("click", async () => {
+    const title = ($("td-title") as HTMLInputElement).value.trim();
+    if (!title) return;
+    const assigneeId = ($("td-assignee") as HTMLSelectElement).value;
+    const dueDate = ($("td-due") as HTMLInputElement).value;
+    try { await api({ action: "create", title, assigneeId, dueDate }); location.reload(); }
+    catch (e: any) { alert(e.message); }
+  });
+  $("td-title")?.addEventListener("keydown", (e) => { if ((e as KeyboardEvent).key === "Enter") $("td-save")?.dispatchEvent(new Event("click")); });
+
+  // Toggle done / delete (optimistic; no reload).
+  document.querySelectorAll<HTMLElement>(".td-item").forEach((li) => {
+    const id = li.dataset.id!;
+    li.querySelector<HTMLInputElement>(".td-check")?.addEventListener("change", async (e) => {
+      const done = (e.target as HTMLInputElement).checked;
+      li.classList.toggle("done", done);
+      try { await api({ action: "toggle", id, done }); }
+      catch (err: any) { alert(err.message); (e.target as HTMLInputElement).checked = !done; li.classList.toggle("done", !done); }
+    });
+    li.querySelector<HTMLButtonElement>(".td-del")?.addEventListener("click", async () => {
+      try { await api({ action: "delete", id }); li.remove(); }
+      catch (err: any) { alert(err.message); }
+    });
+  });
+</script>

@@ -1,6 +1,7 @@
 ---
 export const prerender = false;
 import AppLayout from "../../layouts/AppLayout.astro";
+import { clockActivities } from "../../lib/clockActivities";
 
 const supabase = Astro.locals.supabase;
 const user = Astro.locals.user!;
@@ -22,10 +23,39 @@ const { data: shifts } = await supabase
   .lt("starts_at", weekEnd.toISOString())
   .order("starts_at");
 
-const { data: myOpen } = await supabase
-  .from("time_entries").select("id, clock_in").eq("employee_id", user.id).is("clock_out", null).maybeSingle();
-const { data: myEntries } = await supabase
-  .from("time_entries").select("clock_in, clock_out").eq("employee_id", user.id).order("clock_in", { ascending: false }).limit(6);
+const { data: settingsRow } = await supabase.from("store_settings").select("settings").eq("id", 1).maybeSingle();
+const activities = clockActivities(settingsRow?.settings);
+
+// Pull recent entries; degrade gracefully if the `activity` column isn't there yet.
+let activityEnabled = true;
+let rawEntries: any[] = [];
+const withAct = await supabase
+  .from("time_entries").select("id, clock_in, clock_out, activity")
+  .eq("employee_id", user.id).order("clock_in", { ascending: false }).limit(60);
+if (withAct.error) {
+  activityEnabled = false;
+  const noAct = await supabase
+    .from("time_entries").select("id, clock_in, clock_out")
+    .eq("employee_id", user.id).order("clock_in", { ascending: false }).limit(60);
+  rawEntries = noAct.data ?? [];
+} else {
+  rawEntries = withAct.data ?? [];
+}
+const myOpen = rawEntries.find((e) => !e.clock_out) ?? null;
+const myEntries = rawEntries.filter((e) => e.clock_out).slice(0, 6);
+
+// This-week totals grouped by activity.
+const weekMs = weekStart.getTime();
+const totals = new Map<string, number>();
+for (const e of rawEntries) {
+  const t0 = new Date(e.clock_in).getTime();
+  if (t0 < weekMs) continue;
+  const t1 = e.clock_out ? new Date(e.clock_out).getTime() : Date.now();
+  const key = e.activity || "Untagged";
+  totals.set(key, (totals.get(key) ?? 0) + Math.max(0, t1 - t0));
+}
+const activityTotals = [...totals.entries()].sort((a, b) => b[1] - a[1]);
+const fmtDur = (ms: number) => { const m = Math.round(ms / 60000); const h = Math.floor(m / 60); return h ? `${h}h ${m % 60}m` : `${m}m`; };
 
 // Group shifts by day.
 const days: { date: Date; label: string; shifts: any[] }[] = [];
@@ -48,8 +78,13 @@ const todayIso = new Date().toISOString().slice(0, 10);
     <div class="pos-panel">
       <h2>Time clock</h2>
       <p id="clock-status" class="muted" style="margin-bottom:0.8rem;">
-        {myOpen ? `Clocked in since ${t(myOpen.clock_in)}` : "You are clocked out."}
+        {myOpen ? `Clocked in since ${t(myOpen.clock_in)}${activityEnabled && myOpen.activity ? " · " + myOpen.activity : ""}` : "You are clocked out."}
       </p>
+      {!myOpen && activityEnabled && (
+        <label class="clk-act">What are you working on?
+          <select id="clock-activity">{activities.map((a) => <option value={a}>{a}</option>)}</select>
+        </label>
+      )}
       <button id="clock-btn" class={`btn ${myOpen ? "btn-magenta" : "btn-primary"}`} data-open={myOpen ? "1" : "0"}>
         {myOpen ? "Clock out" : "Clock in"}
       </button>
@@ -57,11 +92,24 @@ const todayIso = new Date().toISOString().slice(0, 10);
         <p class="sub">Recent</p>
         <ul style="list-style:none;padding:0;margin:0.4rem 0 0;display:grid;gap:0.3rem;font-size:0.88rem;">
           {(myEntries ?? []).map((e: any) => (
-            <li class="muted">{new Date(e.clock_in).toLocaleDateString("en-US", { month: "short", day: "numeric" })}: {t(e.clock_in)} – {e.clock_out ? t(e.clock_out) : "now"}</li>
+            <li class="muted">
+              {new Date(e.clock_in).toLocaleDateString("en-US", { month: "short", day: "numeric" })}: {t(e.clock_in)} – {e.clock_out ? t(e.clock_out) : "now"}
+              {activityEnabled && e.activity && <span class="clk-tag">{e.activity}</span>}
+            </li>
           ))}
           {(myEntries ?? []).length === 0 && <li class="empty">No time entries yet.</li>}
         </ul>
       </div>
+      {activityEnabled && activityTotals.length > 0 && (
+        <div style="margin-top:1rem;">
+          <p class="sub">This week by activity</p>
+          <ul class="clk-totals">
+            {activityTotals.map(([name, ms]) => (
+              <li><span>{name}</span><span class="clk-dur">{fmtDur(ms)}</span></li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
 
     <!-- Manager: assign shift -->
@@ -109,6 +157,11 @@ const todayIso = new Date().toISOString().slice(0, 10);
   .day { border:1px solid var(--border); border-radius:10px; padding:0.5rem; min-height:80px; }
   .shift { position:relative; background:rgba(44,230,224,.08); border:1px solid rgba(44,230,224,.25); border-radius:8px; padding:0.4rem 0.5rem; margin-bottom:0.4rem; font-size:0.85rem; }
   .shift .link-btn { position:absolute; top:0.3rem; right:0.4rem; }
+  .clk-act { display:grid; gap:0.3rem; font-size:0.85rem; font-weight:600; margin-bottom:0.7rem; max-width:280px; }
+  .clk-tag { display:inline-block; margin-left:0.4rem; padding:0.05rem 0.45rem; font-size:0.72rem; font-weight:700; color:var(--cyan); background:rgba(223,94,57,.1); border:1px solid rgba(223,94,57,.3); border-radius:999px; }
+  .clk-totals { list-style:none; padding:0; margin:0.4rem 0 0; display:grid; gap:0.3rem; font-size:0.88rem; }
+  .clk-totals li { display:flex; justify-content:space-between; gap:1rem; }
+  .clk-dur { font-family:var(--font-mono); font-weight:700; color:var(--text); }
 </style>
 
 <script>
@@ -117,7 +170,9 @@ const todayIso = new Date().toISOString().slice(0, 10);
   $("clock-btn").addEventListener("click", async () => {
     const btn = $("clock-btn") as HTMLButtonElement;
     btn.disabled = true;
-    const r = await fetch("/api/pos/clock", { method: "POST" });
+    const actSel = document.getElementById("clock-activity") as HTMLSelectElement | null;
+    const body = btn.dataset.open === "1" || !actSel ? {} : { activity: actSel.value };
+    const r = await fetch("/api/pos/clock", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
     const j = await r.json();
     btn.disabled = false;
     if (!r.ok || !j.ok) { alert(j.error || "Failed"); return; }
