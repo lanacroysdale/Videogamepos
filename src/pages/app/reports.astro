@@ -2,114 +2,398 @@
 export const prerender = false;
 
 import AppLayout from "../../layouts/AppLayout.astro";
+import { createSupabaseAdminClient } from "../../lib/supabase";
 import { fmt } from "../../lib/money";
+import {
+  summarize, pctChange, bucketSeries, granularityFor, rollupBy, type Txn, type Item,
+} from "../../lib/reports";
 
-const supabase = Astro.locals.supabase;
+// Manager-gated (middleware already enforces it; explicit guard for defense-in-depth).
+const profile = Astro.locals.profile;
+if (!profile || !["owner", "manager"].includes(profile.role)) return Astro.redirect("/app");
+const admin = createSupabaseAdminClient();
 
-const days = [7, 14, 30].includes(Number(Astro.url.searchParams.get("days")))
-  ? Number(Astro.url.searchParams.get("days"))
-  : 14;
-const start = new Date();
-start.setDate(start.getDate() - days);
-start.setHours(0, 0, 0, 0);
-const startDate = start.toISOString().slice(0, 10);
+const RANGES = [
+  { key: "7", label: "7 days", days: 7 },
+  { key: "30", label: "30 days", days: 30 },
+  { key: "90", label: "90 days", days: 90 },
+  { key: "365", label: "1 year", days: 365 },
+  { key: "all", label: "All time", days: null as number | null },
+];
+const sel = RANGES.find((r) => r.key === Astro.url.searchParams.get("range")) ?? RANGES[1];
+const DAY = 86400000;
+const now = Date.now();
+const curStartMs = sel.days ? now - sel.days * DAY : null;
+const prevStartMs = sel.days ? now - 2 * sel.days * DAY : null;
 
-const { data: rows } = await supabase
-  .from("sales_report_items")
-  .select("transaction_id, hour_of_day, employee_name, category_name, net_cents")
-  .gte("sale_date", startDate);
+// Pull completed transactions over (at most) the current + previous window, plus
+// their line items, variant costs, and names, then roll up in TS. PostgREST caps
+// a single response at 1000 rows, so every unbounded fetch is paged — otherwise
+// a busy store's totals would silently truncate.
+const fetchStartISO = prevStartMs ? new Date(prevStartMs).toISOString() : null;
+async function fetchAll<T>(make: () => any): Promise<T[]> {
+  const PAGE = 1000;
+  const out: T[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await make().range(from, from + PAGE - 1);
+    if (error || !data || data.length === 0) break;
+    out.push(...(data as T[]));
+    if (data.length < PAGE) break;
+  }
+  return out;
+}
 
-const items = rows ?? [];
-const totalNet = items.reduce((s, r) => s + (r.net_cents ?? 0), 0);
-const txnCount = new Set(items.map((r) => r.transaction_id)).size;
-const avgSale = txnCount ? Math.round(totalNet / txnCount) : 0;
+const allTxns = await fetchAll<Txn>(() => {
+  let qq = admin
+    .from("transactions")
+    .select("id,type,completed_at,employee_id,discount_cents,cash_cents,card_cents,store_credit_cents,customer_id")
+    .eq("status", "completed")
+    .order("completed_at", { ascending: true });
+  if (fetchStartISO) qq = qq.gte("completed_at", fetchStartISO);
+  return qq;
+});
 
-// Busy hours (store hours 10:00–20:00).
+// Items filtered by their parent's status/date via an inner embed (avoids a giant
+// .in() of transaction ids), then the embed is stripped off.
+const itemsRaw = await fetchAll<any>(() => {
+  let qq = admin
+    .from("transaction_items")
+    .select("transaction_id,variant_id,category_id,kind,description,qty,unit_price_cents,discount_cents,transactions!inner(status,completed_at)")
+    .eq("transactions.status", "completed")
+    .order("transaction_id", { ascending: true });
+  if (fetchStartISO) qq = qq.gte("transactions.completed_at", fetchStartISO);
+  return qq;
+});
+const items: Item[] = itemsRaw.map(({ transactions, ...rest }) => rest as Item);
+
+// Variant costs for the (distinct) sold variants — chunked so the .in() URL
+// stays within limits even for a large catalog.
+const variantIds = [...new Set(items.map((i) => i.variant_id).filter(Boolean))] as string[];
+const costOf = new Map<string, number>();
+for (let i = 0; i < variantIds.length; i += 300) {
+  const { data } = await admin.from("product_variants").select("id,cost_cents").in("id", variantIds.slice(i, i + 300));
+  (data ?? []).forEach((v: any) => costOf.set(v.id, v.cost_cents));
+}
+const { data: catData } = await admin.from("categories").select("id,name");
+const catName = new Map<string, string>((catData ?? []).map((c: any) => [c.id, c.name]));
+const empIds = [...new Set(allTxns.map((t) => t.employee_id).filter(Boolean))] as string[];
+const empName = new Map<string, string>();
+if (empIds.length) {
+  const { data } = await admin.from("profiles").select("id,full_name").in("id", empIds);
+  (data ?? []).forEach((p: any) => empName.set(p.id, p.full_name));
+}
+
+// Split into current vs previous period.
+const tms = (t: Txn) => (t.completed_at ? Date.parse(t.completed_at) : 0);
+const curTxns = curStartMs === null ? allTxns : allTxns.filter((t) => tms(t) >= curStartMs);
+const prevTxns = curStartMs === null ? [] : allTxns.filter((t) => tms(t) < curStartMs && tms(t) >= prevStartMs!);
+const curIds = new Set(curTxns.map((t) => t.id));
+const prevIds = new Set(prevTxns.map((t) => t.id));
+const curItems = items.filter((i) => curIds.has(i.transaction_id));
+const prevItems = items.filter((i) => prevIds.has(i.transaction_id));
+
+const cur = summarize(curTxns, curItems, costOf);
+const prev = summarize(prevTxns, prevItems, costOf);
+const hasPrev = prevTxns.length > 0;
+
+// Trend series.
+const earliest = curTxns.reduce((m, t) => Math.min(m, tms(t) || m), now);
+const trendStart = curStartMs ?? earliest;
+const spanDays = sel.days ?? Math.max(1, Math.ceil((now - trendStart) / DAY));
+const gran = granularityFor(spanDays);
+const series = bucketSeries(curTxns, curItems, trendStart, now, gran);
+const maxSeries = Math.max(1, ...series.map((b) => b.net));
+const showVals = series.length <= 14;
+const labStep = Math.max(1, Math.ceil(series.length / 12));
+
+// Breakdowns (current period).
+const txnById = new Map(curTxns.map((t) => [t.id, t]));
+const catRows = [...rollupBy(curItems, (it) => it.category_id, costOf).entries()]
+  .map(([id, v]) => ({ name: id === "—" ? "—" : catName.get(id) ?? "—", ...v }))
+  .sort((a, b) => b.net - a.net);
+const maxCat = Math.max(1, ...catRows.map((r) => r.net));
+
+const empAgg = rollupBy(curItems, (it) => txnById.get(it.transaction_id)?.employee_id ?? null);
+const empTxnCount = new Map<string, Set<string>>();
+for (const it of curItems) {
+  if (it.kind !== "sale" && it.kind !== "service") continue;
+  const e = txnById.get(it.transaction_id)?.employee_id ?? "—";
+  if (!empTxnCount.has(e)) empTxnCount.set(e, new Set());
+  empTxnCount.get(e)!.add(it.transaction_id);
+}
+const empRows = [...empAgg.entries()]
+  .map(([id, v]) => ({ name: id === "—" ? "—" : empName.get(id) ?? "—", txns: empTxnCount.get(id)?.size ?? 0, ...v }))
+  .sort((a, b) => b.net - a.net);
+const maxEmp = Math.max(1, ...empRows.map((r) => r.net));
+
+const topProducts = [...rollupBy(curItems, (it) => it.description || "—").entries()]
+  .map(([name, v]) => ({ name, ...v }))
+  .sort((a, b) => b.net - a.net)
+  .slice(0, 10);
+const maxProd = Math.max(1, ...topProducts.map((r) => r.net));
+
+// Busiest hours (Portland-local), store hours 10:00–20:00.
 const HOURS = Array.from({ length: 11 }, (_, i) => i + 10);
+const hourFmt = new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", hour: "2-digit", hourCycle: "h23" });
 const byHour = new Map<number, number>(HOURS.map((h) => [h, 0]));
-for (const r of items) if (byHour.has(r.hour_of_day)) byHour.set(r.hour_of_day, byHour.get(r.hour_of_day)! + r.net_cents);
+for (const it of curItems) {
+  if (it.kind !== "sale" && it.kind !== "service") continue;
+  const t = txnById.get(it.transaction_id);
+  if (!t?.completed_at) continue;
+  const h = parseInt(hourFmt.format(new Date(t.completed_at)), 10);
+  if (byHour.has(h)) byHour.set(h, byHour.get(h)! + (it.unit_price_cents * it.qty - it.discount_cents));
+}
 const maxHour = Math.max(1, ...byHour.values());
 
-function rollup(key: "employee_name" | "category_name") {
-  const m = new Map<string, number>();
-  for (const r of items) {
-    const k = (r as any)[key] ?? "—";
-    m.set(k, (m.get(k) ?? 0) + r.net_cents);
-  }
-  return [...m.entries()].sort((a, b) => b[1] - a[1]);
-}
-const byEmployee = rollup("employee_name");
-const byCategory = rollup("category_name");
-const maxEmp = Math.max(1, ...byEmployee.map((e) => e[1]));
-const maxCat = Math.max(1, ...byCategory.map((e) => e[1]));
-
+const fmtDay = (ms: number) =>
+  new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", month: "short", day: "numeric" }).format(new Date(ms));
+const rangeLabel =
+  curStartMs !== null ? `${fmtDay(curStartMs)} – ${fmtDay(now)}`
+  : curTxns.length ? `${fmtDay(trendStart)} – ${fmtDay(now)}` : "All time";
 const hourLabel = (h: number) => (h === 12 ? "12p" : h < 12 ? `${h}a` : `${h - 12}p`);
-const ranges = [7, 14, 30];
+// Margin only applies when there were net sales; for a zero/negative-net row
+// (e.g. refunds only) a percentage would mislead, so callers show "—".
+const marginOf = (r: { net: number; cogs: number }): number | null =>
+  r.net > 0 ? Math.round(((r.net - r.cogs) / r.net) * 100) : null;
+const marginTxt = (r: { net: number; cogs: number }) => { const m = marginOf(r); return m === null ? "—" : `${m}%`; };
+
+function delta(curV: number, prevV: number, points = false) {
+  if (!hasPrev) return null;
+  if (points) { const dp = curV - prevV; return { txt: `${dp >= 0 ? "+" : ""}${dp.toFixed(1)} pts`, up: dp >= 0 }; }
+  const p = pctChange(curV, prevV);
+  return p === null ? null : { txt: `${p >= 0 ? "+" : ""}${p.toFixed(0)}%`, up: p >= 0 };
+}
+const cards = [
+  { n: fmt(cur.netSales), l: "Net sales", d: delta(cur.netSales, prev.netSales) },
+  { n: fmt(cur.grossProfit), l: "Gross profit", d: delta(cur.grossProfit, prev.grossProfit) },
+  { n: `${cur.marginPct.toFixed(1)}%`, l: "Margin", d: delta(cur.marginPct, prev.marginPct, true) },
+  { n: String(cur.txnCount), l: "Transactions", d: delta(cur.txnCount, prev.txnCount) },
+  { n: String(cur.unitsSold), l: "Units sold", d: delta(cur.unitsSold, prev.unitsSold) },
+  { n: fmt(cur.avgOrder), l: "Avg. order", d: delta(cur.avgOrder, prev.avgOrder) },
+];
+const totalTender = cur.payments.cash + cur.payments.card + cur.payments.storeCredit;
+const payRows = [
+  { l: "Cash", v: cur.payments.cash },
+  { l: "Card", v: cur.payments.card },
+  { l: "Store credit", v: cur.payments.storeCredit },
+];
+
+// Server-built CSV export (stashed in a hidden textarea — Astro escapes it, the
+// client reads .value), so arbitrary product names can't break out.
+// Quote per RFC-4180, and neutralize CSV/formula injection: a cell starting with
+// = + - @ (or a control char) is prefixed with a quote so spreadsheets treat it
+// as text, not a formula.
+const cEsc = (raw: string) => {
+  let s = raw;
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+const d2 = (c: number) => (c / 100).toFixed(2);
+const csv =
+  `TimeLag sales report,${cEsc(rangeLabel)}\n\nSummary\nMetric,Value\n` +
+  `Gross sales,${d2(cur.grossSales)}\nDiscounts,${d2(cur.discounts)}\nReturns,${d2(cur.returns)}\n` +
+  `Net sales,${d2(cur.netSales)}\nCost of goods,${d2(cur.cogs)}\nGross profit,${d2(cur.grossProfit)}\n` +
+  `Margin %,${cur.marginPct.toFixed(1)}\nTransactions,${cur.txnCount}\nUnits sold,${cur.unitsSold}\n` +
+  `Avg order,${d2(cur.avgOrder)}\nTrade-in payout,${d2(cur.tradeInPayout)}\n\n` +
+  `Net sales by ${gran}\nPeriod,Net\n` + series.map((b) => `${cEsc(b.label)},${d2(b.net)}`).join("\n") +
+  `\n\nBy category\nCategory,Net,Units,Margin %\n` +
+  catRows.map((r) => `${cEsc(r.name)},${d2(r.net)},${r.units},${marginOf(r) ?? ""}`).join("\n") +
+  `\n\nBy employee\nEmployee,Net,Transactions\n` +
+  empRows.map((r) => `${cEsc(r.name)},${d2(r.net)},${r.txns}`).join("\n") +
+  `\n\nTop products\nProduct,Net,Units\n` +
+  topProducts.map((r) => `${cEsc(r.name)},${d2(r.net)},${r.units}`).join("\n");
+const csvName = `timelag-report-${sel.key}.csv`;
+
+const gaTraffic = false; // GA Data API not wired yet — see panel below.
 ---
 
 <AppLayout title="Reports" active="reports">
-  <div slot="actions">
-    <div style="display:flex;gap:0.4rem;">
-      {ranges.map((d) => (
-        <a href={`/app/reports?days=${d}`} class={`chip ${d === days ? "" : ""}`} style={d === days ? "border-color:var(--cyan);color:var(--cyan);" : ""}>
-          {d}d
-        </a>
-      ))}
-    </div>
+  <div slot="actions" class="rep-actions">
+    {RANGES.map((r) => (
+      <a href={`/app/reports?range=${r.key}`} class:list={["chip", { on: r.key === sel.key }]}>{r.label}</a>
+    ))}
+    <button id="rep-csv" class="btn btn-ghost btn-sm" type="button">⬇ CSV</button>
+    <button id="rep-print" class="btn btn-ghost btn-sm" type="button">🖨 Print</button>
   </div>
 
-  <p class="muted" style="margin-bottom:1.25rem;">Completed sales over the last {days} days.</p>
+  <p class="muted rep-sub">Completed sales · <strong>{rangeLabel}</strong>{hasPrev ? " · vs. previous period" : ""}</p>
 
-  <div class="pos-grid cards" style="margin-bottom:1.25rem;">
-    <div class="pos-panel stat"><span class="n">{fmt(totalNet)}</span><span class="l">Net sales</span></div>
-    <div class="pos-panel stat"><span class="n">{txnCount}</span><span class="l">Transactions</span></div>
-    <div class="pos-panel stat"><span class="n">{fmt(avgSale)}</span><span class="l">Avg. sale</span></div>
-    <div class="pos-panel stat"><span class="n">{items.length}</span><span class="l">Line items sold</span></div>
-  </div>
-
-  <div class="pos-panel" style="margin-bottom:1rem;">
-    <h2>Busiest hours <span class="sub">— sales by hour of day</span></h2>
-    {totalNet === 0 ? (
-      <p class="empty">No sales in this period.</p>
-    ) : (
-      <div class="bars">
-        {HOURS.map((h) => {
-          const v = byHour.get(h)!;
-          return (
-            <div class="bar-col">
-              <span class="val">{v ? "$" + Math.round(v / 100) : ""}</span>
-              <div class="bar" style={`height:${Math.round((v / maxHour) * 100)}%`}></div>
-              <span class="lab">{hourLabel(h)}</span>
-            </div>
-          );
-        })}
+  {cur.txnCount === 0 && cur.returns === 0 ? (
+    <div class="pos-panel"><p class="empty">No completed sales in this period.</p></div>
+  ) : (
+    <>
+      {/* ---- KPI cards ---- */}
+      <div class="pos-grid cards rep-kpis">
+        {cards.map((c) => (
+          <div class="pos-panel stat">
+            <span class="n">{c.n}</span>
+            <span class="l">{c.l}</span>
+            {c.d && <span class:list={["delta", c.d.up ? "up" : "down"]}>{c.d.up ? "▲" : "▼"} {c.d.txt}</span>}
+          </div>
+        ))}
       </div>
-    )}
-  </div>
 
-  <div class="pos-grid two">
-    <div class="pos-panel">
-      <h2>Sales by employee</h2>
-      {byEmployee.length === 0 && <p class="empty">No data.</p>}
-      {byEmployee.map(([name, val]) => (
-        <div class="hbar-row">
-          <span>{name}</span>
-          <div class="hbar-track"><div class="hbar-fill" style={`width:${Math.round((val / maxEmp) * 100)}%`}></div></div>
-          <span class="num">{fmt(val)}</span>
+      {/* ---- Sales trend ---- */}
+      <div class="pos-panel rep-block">
+        <h2>Sales trend <span class="sub">— net sales by {gran}</span></h2>
+        <div class="bars">
+          {series.map((b, i) => (
+            <div class="bar-col">
+              <span class="val">{showVals && b.net ? "$" + Math.round(b.net / 100) : ""}</span>
+              <div class="bar" style={`height:${Math.round((b.net / maxSeries) * 100)}%`} title={`${b.label}: ${fmt(b.net)}`}></div>
+              <span class="lab">{i % labStep === 0 ? b.label : ""}</span>
+            </div>
+          ))}
         </div>
-      ))}
-    </div>
+      </div>
 
-    <div class="pos-panel">
-      <h2>Sales by category</h2>
-      {byCategory.length === 0 && <p class="empty">No data.</p>}
-      {byCategory.map(([name, val]) => (
-        <div class="hbar-row">
-          <span>{name}</span>
-          <div class="hbar-track"><div class="hbar-fill" style={`width:${Math.round((val / maxCat) * 100)}%`}></div></div>
-          <span class="num">{fmt(val)}</span>
+      <div class="pos-grid two rep-block">
+        {/* ---- Revenue → profit waterfall ---- */}
+        <div class="pos-panel">
+          <h2>Revenue &amp; profit</h2>
+          <div class="rev">
+            <div class="rev-row"><span>Gross sales</span><span class="num">{fmt(cur.grossSales)}</span></div>
+            <div class="rev-row neg"><span>Discounts</span><span class="num">−{fmt(cur.discounts)}</span></div>
+            <div class="rev-row neg"><span>Returns / refunds</span><span class="num">−{fmt(cur.returns)}</span></div>
+            <div class="rev-row total"><span>Net sales</span><span class="num">{fmt(cur.netSales)}</span></div>
+            <div class="rev-row neg"><span>Cost of goods</span><span class="num">−{fmt(cur.cogs)}</span></div>
+            <div class="rev-row total"><span>Gross profit <span class="pill green">{cur.marginPct.toFixed(1)}%</span></span><span class="num">{fmt(cur.grossProfit)}</span></div>
+          </div>
+          {cur.costUnknownUnits > 0 && (
+            <p class="rep-note">Cost basis known for {cur.costKnownUnits} of {cur.costKnownUnits + cur.costUnknownUnits} units — margin may be overstated.</p>
+          )}
+          <p class="rep-note">Margin uses each item's current average cost (COGS isn't snapshotted at sale time).</p>
         </div>
-      ))}
-    </div>
-  </div>
+
+        {/* ---- Payment mix + trade-ins ---- */}
+        <div class="pos-panel">
+          <h2>Payments <span class="sub">— tender on sales</span></h2>
+          {totalTender === 0 ? <p class="empty">No tender recorded.</p> : payRows.map((p) => (
+            <div class="hbar-row">
+              <span>{p.l}</span>
+              <div class="hbar-track"><div class="hbar-fill" style={`width:${Math.round((p.v / Math.max(1, totalTender)) * 100)}%`}></div></div>
+              <span class="num">{fmt(p.v)}</span>
+            </div>
+          ))}
+          <div class="rep-trade">
+            <div class="stat"><span class="n">{fmt(cur.tradeInPayout)}</span><span class="l">Trade-in payout</span></div>
+            <div class="stat"><span class="n">{cur.tradeInCount}</span><span class="l">Trade-ins</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="pos-grid two rep-block">
+        {/* ---- By category (with margin) ---- */}
+        <div class="pos-panel">
+          <h2>By category</h2>
+          {catRows.length === 0 && <p class="empty">No data.</p>}
+          {catRows.map((r) => (
+            <div class="hbar-row">
+              <span>{r.name} <span class="pill muted">{marginTxt(r)}</span></span>
+              <div class="hbar-track"><div class="hbar-fill" style={`width:${Math.round((r.net / maxCat) * 100)}%`}></div></div>
+              <span class="num">{fmt(r.net)}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* ---- By employee ---- */}
+        <div class="pos-panel">
+          <h2>By employee</h2>
+          {empRows.length === 0 && <p class="empty">No data.</p>}
+          {empRows.map((r) => (
+            <div class="hbar-row">
+              <span>{r.name} <span class="muted-2" style="font-size:0.78rem;">{r.txns} txns</span></span>
+              <div class="hbar-track"><div class="hbar-fill" style={`width:${Math.round((r.net / maxEmp) * 100)}%`}></div></div>
+              <span class="num">{fmt(r.net)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div class="pos-grid two rep-block">
+        {/* ---- Top products ---- */}
+        <div class="pos-panel">
+          <h2>Top products <span class="sub">— by revenue</span></h2>
+          {topProducts.length === 0 && <p class="empty">No data.</p>}
+          {topProducts.map((r) => (
+            <div class="hbar-row">
+              <span class="prod-name" title={r.name}>{r.name}</span>
+              <div class="hbar-track"><div class="hbar-fill" style={`width:${Math.round((r.net / maxProd) * 100)}%`}></div></div>
+              <span class="num">{fmt(r.net)}<span class="muted-2" style="font-size:0.74rem;"> · {r.units}u</span></span>
+            </div>
+          ))}
+        </div>
+
+        {/* ---- Busiest hours ---- */}
+        <div class="pos-panel">
+          <h2>Busiest hours <span class="sub">— sales by hour</span></h2>
+          <div class="bars">
+            {HOURS.map((h) => {
+              const v = byHour.get(h)!;
+              return (
+                <div class="bar-col">
+                  <span class="val">{v ? "$" + Math.round(v / 100) : ""}</span>
+                  <div class="bar" style={`height:${Math.round((v / maxHour) * 100)}%`}></div>
+                  <span class="lab">{hourLabel(h)}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* ---- Website traffic (GA) ---- */}
+      <div class="pos-panel rep-block rep-ga">
+        <h2>Website traffic <span class="sub">— Google Analytics</span></h2>
+        {gaTraffic ? null : (
+          <p class="muted">
+            Page views, sessions and traffic sources will appear here once the storefront is public and
+            the Google Analytics <strong>Data API</strong> is connected (a GA4 property ID + service-account
+            key). Analytics is already collecting via the site tag.
+          </p>
+        )}
+      </div>
+    </>
+  )}
+
+  <textarea id="rep-csv-data" hidden set:text={csv}></textarea>
+  <span id="rep-csv-name" hidden>{csvName}</span>
 </AppLayout>
+
+<style>
+  .rep-actions { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
+  .chip.on { border-color: var(--cyan); color: var(--cyan); }
+  .rep-sub { margin-bottom: 1.1rem; }
+  .rep-block { margin-top: 1rem; }
+  .rep-kpis .stat { position: relative; }
+  .delta { font-size: 0.72rem; font-weight: 700; margin-top: 0.1rem; }
+  .delta.up { color: var(--green, #36d399); }
+  .delta.down { color: var(--magenta, #ff49d0); }
+  .rev-row { display: flex; justify-content: space-between; align-items: center; padding: 0.45rem 0; border-bottom: 1px solid rgba(127,127,127,0.14); font-size: 0.95rem; }
+  .rev-row.total { font-weight: 800; border-bottom: 2px solid var(--border-strong); }
+  .rev-row.neg span:last-child { color: var(--muted); }
+  .rev-row .num { font-variant-numeric: tabular-nums; }
+  .rep-note { color: var(--muted-2); font-size: 0.76rem; margin-top: 0.6rem; }
+  .rep-trade { display: flex; gap: 1.5rem; margin-top: 1rem; padding-top: 0.8rem; border-top: 1px solid var(--border-strong); }
+  .prod-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rep-ga { border-style: dashed; }
+  @media print {
+    .app-side, .rep-actions, #alerts-btn { display: none !important; }
+    .app-main { margin: 0 !important; }
+  }
+</style>
+
+<script>
+  const $ = (id: string) => document.getElementById(id);
+  $("rep-csv")?.addEventListener("click", () => {
+    const data = ($("rep-csv-data") as HTMLTextAreaElement | null)?.value ?? "";
+    const name = $("rep-csv-name")?.textContent?.trim() || "report.csv";
+    const blob = new Blob([data], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+  $("rep-print")?.addEventListener("click", () => window.print());
+</script>
