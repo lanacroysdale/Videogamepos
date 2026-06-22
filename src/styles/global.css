@@ -285,6 +285,15 @@
   --glow-strength: 1.35;
 }
 
+/* "Alarm clock" 14-segment display font for Wii headlines (DSEG, SIL OFL). Lazy:
+   only downloads when a Wii headline actually uses it. */
+@font-face {
+  font-family: "DSEG14 Wii";
+  src: url("https://cdn.jsdelivr.net/npm/dseg@0.46.0/fonts/DSEG14-Classic/DSEG14Classic-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+
 /* Nintendo Wii — clean white/silver menu with the signature glossy blue. */
 :root[data-theme="wii"] {
   --bg: #eef3f6;
@@ -353,6 +362,16 @@
 /* Channel hover lift + blue ring, very Wii. */
 :root[data-theme="wii"] .tile-btn:hover,
 :root[data-theme="wii"] .shop-card:hover { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(0, 164, 228, 0.28); }
+
+/* Alarm-clock 14-segment display font for the page headline + stat numbers. */
+:root[data-theme="wii"] .app-top h1,
+:root[data-theme="wii"] .stat .n {
+  font-family: "DSEG14 Wii", "Courier New", monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 400;
+}
+:root[data-theme="wii"] .app-top h1 { font-size: 1.05rem; }
 
 /* =========================================================================
    Sidebar accent (data-sidebar) — recolors ONLY the POS sidebar, layered on
