@@ -1,6 +1,7 @@
 import type { APIRoute } from "astro";
 import { createSupabaseAdminClient } from "../../../lib/supabase";
 import { THEME_KEYS, SIDEBAR_KEYS } from "../../../lib/themeSettings";
+import { AI_MODELS } from "../../../lib/ai";
 
 export const prerender = false;
 const json = (d: unknown, s = 200) =>
@@ -27,6 +28,8 @@ export const POST: APIRoute = async ({ locals, request }) => {
   if (b.defaultSidebar !== undefined) settings.defaultSidebar = SIDEBAR_KEYS.includes(String(b.defaultSidebar)) ? String(b.defaultSidebar) : "default";
   if (b.themePosOnly !== undefined) settings.themePosOnly = !!b.themePosOnly;
   if (b.gemEffectEnabled !== undefined) settings.gemEffectEnabled = !!b.gemEffectEnabled;
+  if (b.aiDescriptionPrompt !== undefined) settings.aiDescriptionPrompt = String(b.aiDescriptionPrompt).slice(0, 4000);
+  if (b.aiModel !== undefined) settings.aiModel = AI_MODELS.some((m) => m.key === String(b.aiModel)) ? String(b.aiModel) : undefined;
 
   const { error } = await admin.from("store_settings").update({ settings }).eq("id", 1);
   if (error) return json({ error: error.message }, 500);

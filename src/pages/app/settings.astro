@@ -4,12 +4,15 @@ export const prerender = false;
 import AppLayout from "../../layouts/AppLayout.astro";
 import { lowStockSettings, freeShipSettings } from "../../lib/lowStock";
 import { themeSettings, THEMES, SIDEBARS } from "../../lib/themeSettings";
+import { aiSettings, aiConfigured, AI_MODELS } from "../../lib/ai";
 
 const supabase = Astro.locals.supabase;
 const { data: row } = await supabase.from("store_settings").select("settings").eq("id", 1).maybeSingle();
 const ls = lowStockSettings(row?.settings);
 const fs = freeShipSettings(row?.settings);
 const th = themeSettings(row?.settings);
+const ai = aiSettings(row?.settings);
+const aiReady = aiConfigured();
 const minPriceDollars = (ls.lowStockMinPriceCents / 100).toFixed(2);
 const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
 ---
@@ -119,6 +122,35 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       <span id="fs-status" class="muted"></span>
     </div>
   </div>
+
+  <div class="pos-panel set-panel" style="margin-top:1.25rem;">
+    <h2>AI assistant</h2>
+    <p class="muted set-desc">
+      Powers the “✨ Write with AI” description button (more skills coming).
+      Status: {aiReady
+        ? <span style="color:var(--green);font-weight:700;">● Connected</span>
+        : <span style="color:var(--magenta);font-weight:700;">● Not configured</span>}
+      {!aiReady && <span class="muted"> — add <code>ANTHROPIC_API_KEY</code> to your env (.env + Vercel) to enable.</span>}
+    </p>
+
+    <label class="set-row" style="display:block;">
+      <strong>Model</strong>
+      <select id="ai-model" style="margin-top:0.4rem;width:100%;max-width:320px;">
+        {AI_MODELS.map((m) => <option value={m.key} selected={m.key === ai.model}>{m.label}</option>)}
+      </select>
+    </label>
+
+    <label class="set-row" style="display:block;">
+      <strong>Brand voice for descriptions</strong><br />
+      <span class="muted">The rules applied to every generated description — this is what keeps them consistent.</span>
+      <textarea id="ai-prompt" rows="8" style="margin-top:0.5rem;width:100%;font-family:var(--font-mono);font-size:0.82rem;line-height:1.5;">{ai.descriptionPrompt}</textarea>
+    </label>
+
+    <div class="set-actions">
+      <button id="ai-save" class="btn btn-primary">Save AI settings</button>
+      <span id="ai-status" class="muted"></span>
+    </div>
+  </div>
 </AppLayout>
 
 <style>
@@ -177,6 +209,11 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     lowStockMinPriceCents: Math.round((parseFloat(minprice.value) || 0) * 100),
     lowStockHoverOnly: hover.checked,
   }, document.getElementById("set-status")!, e.currentTarget as HTMLButtonElement));
+
+  document.getElementById("ai-save")!.addEventListener("click", (e) => save({
+    aiModel: (document.getElementById("ai-model") as HTMLSelectElement).value,
+    aiDescriptionPrompt: (document.getElementById("ai-prompt") as HTMLTextAreaElement).value,
+  }, document.getElementById("ai-status")!, e.currentTarget as HTMLButtonElement));
 
   document.getElementById("fs-save")!.addEventListener("click", (e) => save({
     freeShipEnabled: $("fs-enabled").checked,

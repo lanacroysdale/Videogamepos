@@ -551,7 +551,7 @@ const posData = {
           <label>Image<div class="img-field"><input id="m-image" value="${esc(p.imageUrl)}" placeholder="https://… or upload →"><label class="btn btn-ghost btn-sm img-up">📷 Upload<input type="file" id="m-imgfile" accept="image/*" hidden></label></div></label>
         </div>
         <div id="m-imgprev" class="img-prev"${p.imageUrl ? "" : " hidden"}>${p.imageUrl ? `<img src="${esc(p.imageUrl)}" alt="">` : ""}</div>
-        <div class="m-field"><label>Description (web)<textarea id="m-desc" rows="2" placeholder="Shown on the website listing">${esc(p.description)}</textarea></label></div>
+        <div class="m-field"><label style="display:flex;align-items:center;gap:0.5rem;justify-content:space-between;">Description (web) <button type="button" class="btn btn-ghost btn-sm" id="m-ai-desc" data-pid="${p.id}">✨ Write with AI</button></label><textarea id="m-desc" rows="3" placeholder="Shown on the website listing">${esc(p.description)}</textarea></div>
       </div>
 
       <div class="m-section">
@@ -596,6 +596,26 @@ const posData = {
         if (e.description && !($("m-desc") as HTMLTextAreaElement).value.trim()) ($("m-desc") as HTMLTextAreaElement).value = e.description;
         toast("✓ Filled from IGDB · " + e.matchedName);
       } catch (err: any) { alert(err.message); }
+    });
+
+    // Write an on-brand SEO description with the AI assistant.
+    $("m-ai-desc").addEventListener("click", async (ev) => {
+      const btn = ev.currentTarget as HTMLButtonElement;
+      const title = ($("m-title") as HTMLInputElement).value.trim();
+      if (!title) { alert("Enter a title first"); return; }
+      const orig = btn.textContent;
+      btn.disabled = true; btn.textContent = "✨ Writing…";
+      try {
+        const r = await fetch("/api/pos/ai/describe", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ productId: btn.dataset.pid, title, platform: ($("m-platform") as HTMLInputElement).value.trim() }),
+        });
+        const j = await r.json();
+        if (!r.ok || !j.ok) throw new Error(j.error || "Failed");
+        ($("m-desc") as HTMLTextAreaElement).value = j.description;
+        toast("✓ Description written — review & Save");
+      } catch (err: any) { alert(err.message); }
+      finally { btn.disabled = false; btn.textContent = orig; }
     });
 
     // Image upload → stores in Supabase, fills the URL + preview.
