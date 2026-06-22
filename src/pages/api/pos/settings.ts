@@ -29,6 +29,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
   if (b.themePosOnly !== undefined) settings.themePosOnly = !!b.themePosOnly;
   if (b.gemEffectEnabled !== undefined) settings.gemEffectEnabled = !!b.gemEffectEnabled;
   if (b.aiDescriptionPrompt !== undefined) settings.aiDescriptionPrompt = String(b.aiDescriptionPrompt).slice(0, 4000);
+  if (b.notifyTaskComplete !== undefined) settings.notifyTaskComplete = !!b.notifyTaskComplete;
   if (b.aiProvider !== undefined && AI_PROVIDERS.some((p) => p.key === String(b.aiProvider))) settings.aiProvider = String(b.aiProvider);
   if (b.aiQuality !== undefined && AI_QUALITIES.some((q) => q.key === String(b.aiQuality))) settings.aiQuality = String(b.aiQuality);
 

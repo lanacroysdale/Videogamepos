@@ -145,8 +145,14 @@ const tt = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "n
 
       {/* Open */}
       <div class="pos-panel" style="margin-top:1rem;">
-        <h2 style="display:flex;align-items:center;gap:0.7rem;">Open <span class="muted" style="font-weight:400;">({openTasks.length})</span>
-          <input id="td-search" class="td-search" type="search" placeholder="Search tasks…" autocomplete="off" />
+        <h2 style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;">Open <span class="muted" style="font-weight:400;">({openTasks.length})</span>
+          <span style="margin-left:auto;display:flex;gap:0.5rem;">
+            <select id="td-person" class="td-person" title="Filter by person">
+              <option value="">Everyone</option>
+              {roster?.map((r: any) => <option value={r.id}>{r.full_name}</option>)}
+            </select>
+            <input id="td-search" class="td-search" type="search" placeholder="Search…" autocomplete="off" />
+          </span>
         </h2>
         <p id="td-noresults" class="empty" hidden>No tasks match.</p>
         <ul class="td-list" id="td-open">
@@ -181,7 +187,7 @@ const tt = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "n
           <h2>Done <span class="muted" style="font-weight:400;">({doneTasks.length})</span></h2>
           <ul class="td-list" id="td-done">
             {doneTasks.map((tk: any) => (
-              <li class="td-item done" data-id={tk.id} data-search={`${tk.title} ${tk.notes ?? ""}`.toLowerCase()}>
+              <li class="td-item done" data-id={tk.id} data-completer={tk.completed_by ?? ""} data-search={`${tk.title} ${tk.notes ?? ""}`.toLowerCase()}>
                 <input type="checkbox" class="td-check" checked />
                 <span class="td-body">
                   <span class="td-title">{tk.title}{tk.notes && <span class="td-noteflag" title="Has notes">📝</span>}</span>
@@ -248,7 +254,8 @@ const tt = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "n
   .lb-rank { font-family: var(--font-mono); font-weight: 800; color: var(--muted-2); width: 1.4rem; }
   .lb-name { flex: 1; font-weight: 600; }
   .lb-pts { font-weight: 800; color: var(--yellow); }
-  .td-search { margin-left: auto; max-width: 220px; padding: 0.4rem 0.7rem; font-size: 0.88rem; font-weight: 400; }
+  .td-search { max-width: 180px; padding: 0.4rem 0.7rem; font-size: 0.88rem; font-weight: 400; }
+  .td-person { padding: 0.4rem 0.5rem; font-size: 0.85rem; font-weight: 400; }
   .td-edit { background: none; border: none; color: var(--muted-2); cursor: pointer; font-size: 0.95rem; flex: none; }
   .td-edit:hover { color: var(--cyan); }
   .td-noteflag { font-size: 0.8rem; opacity: 0.7; }
@@ -334,21 +341,26 @@ const tt = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "n
     });
   });
 
-  // ---- Search (open + done) ----
+  // ---- Search + person filter (open by assignee, done by completer) ----
   const search = $("td-search") as HTMLInputElement | null;
-  search?.addEventListener("input", () => {
-    const q = search.value.trim().toLowerCase();
+  const person = $("td-person") as HTMLSelectElement | null;
+  function applyFilter() {
+    const q = (search?.value || "").trim().toLowerCase();
+    const who = person?.value || "";
     let shown = 0;
     document.querySelectorAll<HTMLElement>("#td-open .td-item").forEach((li) => {
-      const hit = !q || (li.dataset.search || "").includes(q);
+      const hit = (!q || (li.dataset.search || "").includes(q)) && (!who || (li.dataset.assignee || "") === who);
       li.style.display = hit ? "" : "none";
       if (hit) shown++;
     });
     document.querySelectorAll<HTMLElement>("#td-done .td-item").forEach((li) => {
-      li.style.display = !q || (li.dataset.search || "").includes(q) ? "" : "none";
+      const hit = (!q || (li.dataset.search || "").includes(q)) && (!who || (li.dataset.completer || "") === who);
+      li.style.display = hit ? "" : "none";
     });
-    const nr = $("td-noresults"); if (nr) nr.hidden = shown > 0 || !q;
-  });
+    const nr = $("td-noresults"); if (nr) nr.hidden = shown > 0 || (!q && !who);
+  }
+  search?.addEventListener("input", applyFilter);
+  person?.addEventListener("change", applyFilter);
 
   // ---- Edit modal ----
   const modal = $("td-modal");

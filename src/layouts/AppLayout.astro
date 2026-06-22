@@ -58,6 +58,7 @@ const nav = [
                 <span class="label">{item.label}</span>
                 {item.key === "leads" && <span class="nav-badge" id="leads-badge" hidden>0</span>}
                 {item.key === "inventory" && <span class="nav-badge warn" id="inv-badge" title="Listings needing images or data" hidden>0</span>}
+                {item.key === "todos" && <span class="nav-badge open" id="todos-badge" title="Open tasks" hidden>0</span>}
               </a>
             ))
           }
@@ -101,6 +102,7 @@ const nav = [
         text-align: center;
       }
       .nav-badge.warn { background: var(--yellow, #ffd23f); color: #3a2c00; }
+      .nav-badge.open { background: var(--green, #5aa6b8); color: #04222a; }
       #alerts-btn { margin-bottom: 0.4rem; width: 100%; }
     </style>
 
@@ -159,6 +161,30 @@ const nav = [
             .catch(function () {});
         }
 
+        // Open-task badge + manager alerts on freshly-completed tasks.
+        var todosBadge = document.getElementById("todos-badge");
+        var TKEY = "tl_tasks_seen";
+        function notifyTask(t) {
+          if (!("Notification" in window) || Notification.permission !== "granted") return;
+          var n = new Notification("✅ Task completed", { body: t.title, tag: "tl-task-" + t.id });
+          n.onclick = function () { window.focus(); window.location.href = "/app/todos"; n.close(); };
+        }
+        function pollTasks() {
+          var since = localStorage.getItem(TKEY) || "";
+          fetch("/api/pos/task-stats" + (since ? "?since=" + encodeURIComponent(since) : ""), { headers: { "x-requested-with": "fetch" } })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (j) {
+              if (!j || !j.ok) return;
+              if (todosBadge) {
+                if (j.openCount > 0) { todosBadge.textContent = String(j.openCount); todosBadge.hidden = false; }
+                else { todosBadge.hidden = true; }
+              }
+              (j.fresh || []).forEach(notifyTask); // server only returns these when notify is on + viewer is a manager
+              localStorage.setItem(TKEY, new Date().toISOString());
+            })
+            .catch(function () {});
+        }
+
         function poll() {
           fetch("/api/pos/leads?since=" + seen(), { headers: { "x-requested-with": "fetch" } })
             .then(function (r) { return r.ok ? r.json() : null; })
@@ -173,6 +199,7 @@ const nav = [
             })
             .catch(function () {});
           pollInventoryHealth();
+          pollTasks();
         }
 
         poll();

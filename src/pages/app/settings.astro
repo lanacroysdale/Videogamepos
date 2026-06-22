@@ -12,6 +12,7 @@ const ls = lowStockSettings(row?.settings);
 const fs = freeShipSettings(row?.settings);
 const th = themeSettings(row?.settings);
 const ai = aiSettings(row?.settings);
+const notifyTasks = !!(row?.settings as any)?.notifyTaskComplete;
 const aiSt = aiStatus(ai.provider);
 const aiProviderLabel = aiSt.provider === "gemini" ? "Gemini" : aiSt.provider === "anthropic" ? "Claude" : "";
 const minPriceDollars = (ls.lowStockMinPriceCents / 100).toFixed(2);
@@ -125,6 +126,19 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   </div>
 
   <div class="pos-panel set-panel" style="margin-top:1.25rem;">
+    <h2>Tasks</h2>
+    <label class="set-row set-toggle">
+      <input type="checkbox" id="notify-tasks" checked={notifyTasks} />
+      <span><strong>Notify managers when a task is completed</strong><br />
+        <span class="muted">Managers with alerts enabled get a desktop notification as tasks get checked off.</span></span>
+    </label>
+    <div class="set-actions">
+      <button id="notify-save" class="btn btn-primary">Save</button>
+      <span id="notify-status" class="muted"></span>
+    </div>
+  </div>
+
+  <div class="pos-panel set-panel" style="margin-top:1.25rem;">
     <h2>AI assistant</h2>
     <p class="muted set-desc">
       Powers the “✨ Write with AI” description button (more skills coming).
@@ -217,6 +231,10 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     lowStockMinPriceCents: Math.round((parseFloat(minprice.value) || 0) * 100),
     lowStockHoverOnly: hover.checked,
   }, document.getElementById("set-status")!, e.currentTarget as HTMLButtonElement));
+
+  document.getElementById("notify-save")!.addEventListener("click", (e) => save({
+    notifyTaskComplete: ($("notify-tasks") as HTMLInputElement).checked,
+  }, document.getElementById("notify-status")!, e.currentTarget as HTMLButtonElement));
 
   document.getElementById("ai-save")!.addEventListener("click", (e) => save({
     aiProvider: (document.getElementById("ai-provider") as HTMLSelectElement).value,
