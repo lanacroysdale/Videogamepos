@@ -145,21 +145,29 @@ const tt = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "n
 
       {/* Open */}
       <div class="pos-panel" style="margin-top:1rem;">
-        <h2>Open <span class="muted" style="font-weight:400;">({openTasks.length})</span></h2>
+        <h2 style="display:flex;align-items:center;gap:0.7rem;">Open <span class="muted" style="font-weight:400;">({openTasks.length})</span>
+          <input id="td-search" class="td-search" type="search" placeholder="Search tasks…" autocomplete="off" />
+        </h2>
+        <p id="td-noresults" class="empty" hidden>No tasks match.</p>
         <ul class="td-list" id="td-open">
           {openTasks.map((tk: any) => (
-            <li class={`td-item pr-row-${tk.priority || "normal"}`} data-id={tk.id}>
+            <li class={`td-item pr-row-${tk.priority || "normal"}`} data-id={tk.id}
+                data-title={tk.title} data-notes={tk.notes ?? ""} data-priority={tk.priority ?? "normal"}
+                data-points={tk.points ?? 0} data-assignee={tk.assignee_id ?? ""} data-due={tk.due_date ?? ""}
+                data-search={`${tk.title} ${tk.notes ?? ""}`.toLowerCase()}>
               <input type="checkbox" class="td-check" />
               <span class="td-body">
                 <span class="td-title">{tk.title}
                   {v2Ready && tk.priority && tk.priority !== "normal" && <span class={`pr pr-${tk.priority}`}>{tk.priority}</span>}
                   {v2Ready && tk.points > 0 && <span class="pts">+{tk.points}</span>}
+                  {tk.notes && <span class="td-noteflag" title="Has notes">📝</span>}
                 </span>
                 <span class="td-meta">
                   {tk.assignee_id && <span class="td-who">{nameById.get(tk.assignee_id) ?? "—"}</span>}
                   {tk.due_date && <span class={`td-due td-due--${dueState(tk.due_date)}`}>{fmtDue(tk.due_date)}</span>}
                 </span>
               </span>
+              <button class="td-edit" title="Edit" aria-label="Edit">✎</button>
               <button class="td-del" title="Delete" aria-label="Delete">✕</button>
             </li>
           ))}
@@ -173,10 +181,10 @@ const tt = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "n
           <h2>Done <span class="muted" style="font-weight:400;">({doneTasks.length})</span></h2>
           <ul class="td-list" id="td-done">
             {doneTasks.map((tk: any) => (
-              <li class="td-item done" data-id={tk.id}>
+              <li class="td-item done" data-id={tk.id} data-search={`${tk.title} ${tk.notes ?? ""}`.toLowerCase()}>
                 <input type="checkbox" class="td-check" checked />
                 <span class="td-body">
-                  <span class="td-title">{tk.title}</span>
+                  <span class="td-title">{tk.title}{tk.notes && <span class="td-noteflag" title="Has notes">📝</span>}</span>
                   {v2Ready && tk.completed_by && <span class="td-meta"><span class="td-who">✓ {nameById.get(tk.completed_by) ?? "—"}</span></span>}
                 </span>
                 <button class="td-del" title="Delete" aria-label="Delete">✕</button>
@@ -185,6 +193,25 @@ const tt = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "n
           </ul>
         </div>
       )}
+
+      {/* Edit task modal */}
+      <div class="td-modal" id="td-modal" hidden>
+        <div class="td-modal-card">
+          <h3 style="margin-bottom:0.8rem;">Edit task</h3>
+          <label class="ed-field">Title<input id="ed-title" /></label>
+          <div class="ed-grid">
+            <label class="ed-field">Priority<select id="ed-prio">{PRIORITIES.map((p) => <option value={p.key}>{p.label}</option>)}</select></label>
+            <label class="ed-field">Points<span class="td-money">⭐<input id="ed-points" type="number" min="0" max="100" /></span></label>
+            <label class="ed-field">Assign<select id="ed-assignee"><option value="">Anyone</option>{roster?.map((r: any) => <option value={r.id}>{r.full_name}</option>)}</select></label>
+            <label class="ed-field">Due<input id="ed-due" type="date" /></label>
+          </div>
+          <label class="ed-field">Notes<textarea id="ed-notes" rows="4" placeholder="Details, links, context…"></textarea></label>
+          <div class="ed-actions">
+            <button id="ed-save" class="btn btn-primary btn-sm">Save changes</button>
+            <button id="ed-cancel" class="btn btn-ghost btn-sm">Cancel</button>
+          </div>
+        </div>
+      </div>
     </div>
   )}
 </AppLayout>
@@ -221,6 +248,18 @@ const tt = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "n
   .lb-rank { font-family: var(--font-mono); font-weight: 800; color: var(--muted-2); width: 1.4rem; }
   .lb-name { flex: 1; font-weight: 600; }
   .lb-pts { font-weight: 800; color: var(--yellow); }
+  .td-search { margin-left: auto; max-width: 220px; padding: 0.4rem 0.7rem; font-size: 0.88rem; font-weight: 400; }
+  .td-edit { background: none; border: none; color: var(--muted-2); cursor: pointer; font-size: 0.95rem; flex: none; }
+  .td-edit:hover { color: var(--cyan); }
+  .td-noteflag { font-size: 0.8rem; opacity: 0.7; }
+  .td-modal { position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,.55); display: grid; place-items: center; padding: 1rem; }
+  .td-modal[hidden] { display: none; }
+  .td-modal-card { width: 100%; max-width: 520px; background: var(--panel); border: 1px solid var(--border-strong); padding: 1.2rem 1.3rem; max-height: 90vh; overflow: auto; }
+  .ed-field { display: grid; gap: 0.3rem; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.8rem; }
+  .ed-field textarea { font-family: inherit; }
+  .ed-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.7rem; }
+  @media (max-width: 520px) { .ed-grid { grid-template-columns: 1fr; } }
+  .ed-actions { display: flex; gap: 0.7rem; margin-top: 0.4rem; }
 </style>
 
 <script>
@@ -293,5 +332,57 @@ const tt = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "n
     li.querySelector<HTMLButtonElement>(".td-del")?.addEventListener("click", async () => {
       try { await api({ action: "delete", id }); li.remove(); } catch (err: any) { alert(err.message); }
     });
+  });
+
+  // ---- Search (open + done) ----
+  const search = $("td-search") as HTMLInputElement | null;
+  search?.addEventListener("input", () => {
+    const q = search.value.trim().toLowerCase();
+    let shown = 0;
+    document.querySelectorAll<HTMLElement>("#td-open .td-item").forEach((li) => {
+      const hit = !q || (li.dataset.search || "").includes(q);
+      li.style.display = hit ? "" : "none";
+      if (hit) shown++;
+    });
+    document.querySelectorAll<HTMLElement>("#td-done .td-item").forEach((li) => {
+      li.style.display = !q || (li.dataset.search || "").includes(q) ? "" : "none";
+    });
+    const nr = $("td-noresults"); if (nr) nr.hidden = shown > 0 || !q;
+  });
+
+  // ---- Edit modal ----
+  const modal = $("td-modal");
+  let editingId: string | null = null;
+  function openEdit(li: HTMLElement) {
+    editingId = li.dataset.id!;
+    ($("ed-title") as HTMLInputElement).value = li.dataset.title || "";
+    ($("ed-prio") as HTMLSelectElement).value = li.dataset.priority || "normal";
+    ($("ed-points") as HTMLInputElement).value = li.dataset.points || "0";
+    ($("ed-assignee") as HTMLSelectElement).value = li.dataset.assignee || "";
+    ($("ed-due") as HTMLInputElement).value = li.dataset.due || "";
+    ($("ed-notes") as HTMLTextAreaElement).value = li.dataset.notes || "";
+    if (modal) modal.hidden = false;
+  }
+  const closeEdit = () => { if (modal) modal.hidden = true; editingId = null; };
+  document.querySelectorAll<HTMLElement>("#td-open .td-item").forEach((li) => {
+    li.querySelector<HTMLButtonElement>(".td-edit")?.addEventListener("click", () => openEdit(li));
+  });
+  $("ed-cancel")?.addEventListener("click", closeEdit);
+  modal?.addEventListener("click", (e) => { if (e.target === modal) closeEdit(); });
+  $("ed-save")?.addEventListener("click", async () => {
+    if (!editingId) return;
+    const title = ($("ed-title") as HTMLInputElement).value.trim();
+    if (!title) { alert("Title can't be empty"); return; }
+    try {
+      await api({
+        action: "update", id: editingId, title,
+        priority: ($("ed-prio") as HTMLSelectElement).value,
+        points: ($("ed-points") as HTMLInputElement).value,
+        assigneeId: ($("ed-assignee") as HTMLSelectElement).value,
+        dueDate: ($("ed-due") as HTMLInputElement).value,
+        notes: ($("ed-notes") as HTMLTextAreaElement).value,
+      });
+      location.reload();
+    } catch (err: any) { alert(err.message); }
   });
 </script>
