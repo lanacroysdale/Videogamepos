@@ -564,6 +564,18 @@ const posData = {
         <p class="web-hint">${conditionPricing ? "Set one condition's price and tap ↻ to re‑price the others by your rule. " : ""}Leave “Online $” blank to use the in‑store price; “Web” publishes that condition to the shop.</p>
       </div>
 
+      ${data.isManager ? `
+      <div class="m-section">
+        <div class="m-label" style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;">Running cost <small class="muted" style="font-weight:400;">weighted avg paid per unit (trade-ins)</small>
+          <select id="cost-tf" style="margin-left:auto;">
+            <option value="90">Last 3 months</option>
+            <option value="365">Last year</option>
+            <option value="0">All time</option>
+          </select>
+        </div>
+        <div id="cost-body" class="muted" style="margin-top:0.4rem;">Loading…</div>
+      </div>` : ""}
+
       <div class="m-section">
         <div class="m-label">Barcodes</div>
         <div id="bc-blocks">${bcBlocks}</div>
@@ -578,6 +590,35 @@ const posData = {
     bindReprice(p);
     wireModalComps();
     $("add-cond").addEventListener("click", () => addCondition(p));
+
+    // Running-average cost (managers): weighted avg paid per unit from trade-ins,
+    // over a selectable timeframe.
+    if (data.isManager) {
+      let costEvents: Record<string, { q: number; c: number; d: string }[]> = {};
+      const renderCost = () => {
+        const body = document.getElementById("cost-body");
+        if (!body) return;
+        const tf = Number((document.getElementById("cost-tf") as HTMLSelectElement)?.value || "90");
+        const cutoff = tf ? Date.now() - tf * 86400000 : 0;
+        body.classList.remove("muted");
+        body.innerHTML = p.variants.map((v: any) => {
+          const evs = (costEvents[v.id] || []).filter((e) => !cutoff || new Date(e.d).getTime() >= cutoff);
+          const units = evs.reduce((s, e) => s + e.q, 0);
+          const total = evs.reduce((s, e) => s + e.c * e.q, 0);
+          const avg = units ? total / units : null;
+          const cur = v.costCents != null ? `<span class="muted">current ${money(v.costCents)}</span>` : "";
+          const avgTxt = avg != null
+            ? `<strong>${money(avg)}</strong> <span class="muted">avg · ${units} unit${units !== 1 ? "s" : ""}</span>`
+            : `<span class="muted">no trade-in purchases</span>`;
+          return `<div style="display:flex;justify-content:space-between;gap:1rem;padding:0.35rem 0;border-top:1px solid var(--border);font-size:0.88rem;"><span>${esc(condLabel(v))}</span><span style="text-align:right;">${avgTxt}${cur ? " · " + cur : ""}</span></div>`;
+        }).join("") || `<span class="muted">No conditions.</span>`;
+      };
+      document.getElementById("cost-tf")?.addEventListener("change", renderCost);
+      fetch("/api/pos/cost-history", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ productId: p.id }) })
+        .then((r) => r.json())
+        .then((j) => { if (j.ok) costEvents = j.events || {}; renderCost(); })
+        .catch(() => { const b = document.getElementById("cost-body"); if (b) b.textContent = "Couldn't load cost history."; });
+    }
 
     // Auto-fill from IGDB (cover, description) — no productId so it doesn't
     // persist; the user reviews and Saves.
