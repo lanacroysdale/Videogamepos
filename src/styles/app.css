@@ -41,7 +41,7 @@
 .app-brand:hover { text-decoration: none; }
 .app-brand span { color: var(--sb-brand); }
 
-.app-nav { display: flex; flex-direction: column; gap: 0.2rem; flex: 1; }
+.app-nav { display: flex; flex-direction: column; gap: 0.2rem; flex: 1; min-height: 0; overflow-y: auto; }
 .app-nav a {
   display: flex;
   align-items: center;
