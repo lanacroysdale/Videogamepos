@@ -50,7 +50,7 @@ const selectLabel = (g: any) => {
 const clientData = {
   groups: groups.map((g: any) => ({ id: g.id, name: g.name, minSelect: g.min_select, maxSelect: g.max_select,
     options: (optsByGroup.get(g.id) ?? []).map((o: any) => ({ name: o.name, priceDelta: o.price_delta_cents / 100, isDefault: o.is_default, isAvailable: o.is_available })) })),
-  items: items.map((i: any) => ({ id: i.id, sectionId: i.section_id, name: i.name, description: i.description ?? "",
+  items: items.map((i: any) => ({ id: i.id, sectionId: i.section_id, name: i.name, description: i.description ?? "", imageUrl: i.image_url ?? "",
     basePrice: i.base_price_cents / 100, cost: i.cost_cents / 100, isAvailable: i.is_available, onlineOrderable: i.online_orderable, abv: i.abv,
     sizes: (sizesByItem.get(i.id) ?? []).map((s: any) => ({ label: s.label, price: s.price_cents / 100, isDefault: s.is_default, isAvailable: s.is_available })),
     groupIds: groupIdsByItem.get(i.id) ?? [] })),
@@ -58,7 +58,8 @@ const clientData = {
 ---
 
 <AppLayout title="Menu" active="menu">
-  <div slot="actions">
+  <div slot="actions" class="menu-head">
+    <button id="photos-toggle" class="btn btn-ghost btn-sm" type="button" title="Show or hide item photos (this device)">🖼 Photos</button>
     <div class="menu-tabs">
       <button class="mtab on" data-tab="items" type="button">Items</button>
       <button class="mtab" data-tab="mods" type="button">Modifiers</button>
@@ -102,6 +103,7 @@ const clientData = {
                   {(itemsBySection.get(sec ? sec.id : null) ?? []).map((it: any) => (
                     <div class:list={["menu-tile", { oos: !it.is_available }]} data-search={`${it.name} ${it.description ?? ""}`.toLowerCase()}>
                       <button class="menu-tile-main" data-item-edit={it.id} type="button">
+                        {it.image_url && <img class="menu-tile-img" src={it.image_url} alt="" loading="lazy" />}
                         <span class="mt-name">{it.name}</span>
                         {it.description && <span class="mt-desc">{it.description}</span>}
                         <span class="mt-foot">
@@ -149,6 +151,15 @@ const clientData = {
           <div class="mm-grid">
             <label class="mm-field grow">Name<input id="im-name" autocomplete="off" /></label>
             <label class="mm-field">Section<select id="im-section"><option value="">—</option>{sections.map((s: any) => <option value={s.id}>{s.name}</option>)}</select></label>
+          </div>
+          <div class="mm-image">
+            <img id="im-img-preview" class="mm-img-preview" alt="" hidden />
+            <div class="mm-img-controls">
+              <label class="btn btn-ghost btn-sm mm-img-pick">📷 Photo<input type="file" id="im-img-file" accept="image/*" hidden /></label>
+              <button id="im-img-remove" class="link-btn" type="button" hidden>Remove</button>
+              <span id="im-img-status" class="muted-2"></span>
+            </div>
+            <input type="hidden" id="im-img-url" />
           </div>
           <label class="mm-field">Description<textarea id="im-desc" rows="2"></textarea></label>
           <div class="mm-grid three">
@@ -229,6 +240,13 @@ const clientData = {
   /* Tile grid — auto-fills columns by width, so it adapts across phone/tablet/desktop. */
   .menu-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.55rem; }
   @media (max-width: 560px) { .menu-tiles { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 0.45rem; } }
+  .menu-head { display: flex; align-items: center; gap: 0.5rem; }
+  #photos-toggle.on { background: var(--cyan); border-color: var(--cyan); color: #04222a; }
+  .menu-tile-img { display: none; width: calc(100% + 1.3rem); height: 96px; object-fit: cover; margin: -0.55rem -0.65rem 0.35rem; }
+  .photos-on .menu-tile-img { display: block; }
+  .mm-image { display: grid; gap: 0.4rem; }
+  .mm-img-preview { width: 100%; max-height: 170px; object-fit: cover; border: 1px solid var(--border); }
+  .mm-img-controls { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
   .menu-tile { position: relative; display: flex; }
   .menu-tile-main { appearance: none; -webkit-appearance: none; font: inherit; flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.3rem; text-align: left; padding: 0.55rem 0.65rem; background: rgba(255,255,255,.02); border: 1px solid var(--border); color: var(--text); cursor: pointer; }
   .menu-tile-main:hover { border-color: var(--cyan); background: rgba(255,255,255,.05); }
@@ -294,6 +312,21 @@ const clientData = {
       $("tab-items")!.hidden = tab !== "items";
       $("tab-mods")!.hidden = tab !== "mods";
     });
+  });
+
+  // ---- Photos toggle (per device, localStorage) ----
+  const tabItems = $("tab-items");
+  const photosBtn = $("photos-toggle");
+  function applyPhotos() {
+    let on = true; try { on = localStorage.getItem("tl-menu-photos") !== "0"; } catch {}
+    tabItems?.classList.toggle("photos-on", on);
+    photosBtn?.classList.toggle("on", on);
+  }
+  applyPhotos();
+  photosBtn?.addEventListener("click", () => {
+    let on = true; try { on = localStorage.getItem("tl-menu-photos") !== "0"; } catch {}
+    try { localStorage.setItem("tl-menu-photos", on ? "0" : "1"); } catch {}
+    applyPhotos();
   });
 
   // ---- Search (filter sections + items) ----
@@ -370,6 +403,9 @@ const clientData = {
     ($("im-abv") as HTMLInputElement).value = it?.abv != null ? String(it.abv) : "";
     ($("im-avail") as HTMLInputElement).checked = it ? !!it.isAvailable : true;
     ($("im-online") as HTMLInputElement).checked = it ? !!it.onlineOrderable : true;
+    ($("im-img-url") as HTMLInputElement).value = it?.imageUrl || "";
+    setImgPreview(it?.imageUrl || "");
+    $("im-img-status")!.textContent = "";
     $("im-sizes")!.innerHTML = "";
     (it?.sizes || []).forEach((s: any) => addSizeRow(s.label, s.price, s.isDefault, s.isAvailable));
     renderGroupChecks(it?.groupIds || []);
@@ -382,6 +418,31 @@ const clientData = {
   $("im-add-size")?.addEventListener("click", () => addSizeRow());
   $("im-cancel")?.addEventListener("click", () => { if (itemModal) itemModal.hidden = true; });
   itemModal?.addEventListener("click", (e) => { if (e.target === itemModal) itemModal.hidden = true; });
+
+  // ---- Item photo ----
+  function setImgPreview(url: string) {
+    const img = $<HTMLImageElement>("im-img-preview");
+    const rm = $("im-img-remove");
+    if (img) { if (url) { img.src = url; img.hidden = false; } else { img.hidden = true; img.removeAttribute("src"); } }
+    if (rm) rm.hidden = !url;
+  }
+  $("im-img-file")?.addEventListener("change", async (e) => {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+    const status = $("im-img-status"); if (status) status.textContent = "Uploading…";
+    try {
+      const fd = new FormData(); fd.append("file", file);
+      const r = await fetch("/api/pos/menu-image", { method: "POST", body: fd });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) throw new Error(j.error || "Upload failed");
+      ($("im-img-url") as HTMLInputElement).value = j.url;
+      setImgPreview(j.url);
+      if (status) status.textContent = "";
+    } catch (err: any) { if (status) status.textContent = ""; alert(err.message); }
+    finally { input.value = ""; }
+  });
+  $("im-img-remove")?.addEventListener("click", () => { ($("im-img-url") as HTMLInputElement).value = ""; setImgPreview(""); });
 
   $("im-save")?.addEventListener("click", async () => {
     const name = ($("im-name") as HTMLInputElement).value.trim();
@@ -399,7 +460,7 @@ const clientData = {
         sectionId: ($("im-section") as HTMLSelectElement).value || null, name,
         description: ($("im-desc") as HTMLTextAreaElement).value,
         basePrice: ($("im-price") as HTMLInputElement).value, cost: ($("im-cost") as HTMLInputElement).value,
-        abv: ($("im-abv") as HTMLInputElement).value,
+        abv: ($("im-abv") as HTMLInputElement).value, imageUrl: ($("im-img-url") as HTMLInputElement).value,
         isAvailable: ($("im-avail") as HTMLInputElement).checked, onlineOrderable: ($("im-online") as HTMLInputElement).checked,
         sizes, groupIds });
       location.reload();

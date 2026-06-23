@@ -44,6 +44,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
       section_id: b.sectionId || null,
       name: name.slice(0, 120),
       description: b.description ? String(b.description).slice(0, 1000) : null,
+      image_url: b.imageUrl !== undefined ? (b.imageUrl ? String(b.imageUrl).slice(0, 1000) : null) : undefined,
       base_price_cents: cents(b.basePrice),
       cost_cents: cents(b.cost),
       is_available: b.isAvailable === undefined ? true : !!b.isAvailable,
