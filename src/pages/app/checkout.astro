@@ -112,9 +112,6 @@ const posData = { catalog, categories: categories ?? [], customer };
   @media (min-width: 980px) { .checkout-grid { grid-template-columns: 1.5fr 1fr; } }
   .cart-panel { position: sticky; top: 90px; }
   .cust-bar { display:flex; justify-content:space-between; gap:1rem; padding:0.6rem 0.8rem; margin-bottom:0.8rem; background:rgba(44,230,224,.08); border:1px solid rgba(44,230,224,.3); border-radius:10px; font-size:0.9rem; }
-  .prod-row { display:grid; grid-template-columns:1fr auto auto; align-items:center; gap:0.8rem; padding:0.55rem 0.7rem; border:1px solid var(--border); border-radius:10px; background:rgba(255,255,255,.02); }
-  .prod-row .meta { color:var(--muted-2); font-size:0.8rem; }
-  .prod-row .stock-0 { color:#ff9aa2; }
   .receipt { margin-top:1rem; padding:1rem; border:1px solid rgba(128,255,114,.4); background:rgba(128,255,114,.08); border-radius:12px; text-align:center; }
   .receipt h3 { color:var(--green); margin-bottom:0.3rem; }
 
@@ -145,6 +142,17 @@ const posData = { catalog, categories: categories ?? [], customer };
   .held-chip-main small { grid-column:1 / -1; color:var(--muted-2); font-size:0.72rem; white-space:nowrap; }
   .held-chip-del { position:absolute; top:1px; right:1px; width:1.3rem; height:1.3rem; display:grid; place-items:center; font-size:0.72rem; color:var(--muted-2); background:none; border:none; cursor:pointer; }
   .held-chip-del:hover { color:#ff6b6b; }
+
+  /* Product rows are built via innerHTML too → must be global. */
+  .prod-row { appearance:none; -webkit-appearance:none; font:inherit; display:flex; align-items:center; justify-content:space-between; gap:0.8rem; width:100%; text-align:left; padding:0.55rem 0.7rem; border:1px solid var(--border); background:rgba(255,255,255,.02); color:var(--text); cursor:pointer; }
+  .prod-row:hover { border-color:var(--cyan); background:rgba(255,255,255,.06); }
+  .prod-info { display:flex; flex-direction:column; gap:0.1rem; min-width:0; }
+  .prod-title { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .prod-meta { font-size:0.78rem; color:var(--muted-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .prod-meta .oos { color:#ff9aa2; font-weight:600; }
+  .prod-price { font-weight:700; flex:none; white-space:nowrap; }
+  .prod-row[data-oos] .prod-price { color:var(--muted-2); }
+  .prod-hint, .prod-more { color:var(--muted-2); font-size:0.84rem; text-align:center; padding:0.7rem 0.3rem; }
 </style>
 
 <script>
@@ -292,7 +300,8 @@ const posData = { catalog, categories: categories ?? [], customer };
 
   // ---------- Product list ----------
   function filtered() {
-    const q = search.toLowerCase();
+    const q = search.trim().toLowerCase();
+    if (!activeCat && !q) return []; // keep the full catalog hidden until needed
     return catalog.filter((v) => {
       if (activeCat && v.categoryId !== activeCat) return false;
       if (!q) return true;
@@ -300,17 +309,26 @@ const posData = { catalog, categories: categories ?? [], customer };
     });
   }
   function renderProducts() {
-    const rows = filtered();
-    $("prod-list").innerHTML = rows.length
-      ? rows.map((v) => `
-        <div class="prod-row">
-          <span><strong>${esc(v.title)}</strong>
-            <span class="meta" style="display:block;">${esc(v.platform)} · ${esc(v.condition)}${v.completeness ? " · " + esc(v.completeness) : ""}</span></span>
-          <span class="meta ${v.qty === 0 ? "stock-0" : ""}">${v.qty} in stock</span>
-          <button class="btn btn-ghost btn-sm" data-add="${v.variantId}">${money(v.priceCents)} ＋</button>
-        </div>`).join("")
-      : `<p class="empty">No matching items.</p>`;
-    $("prod-list").querySelectorAll<HTMLButtonElement>("[data-add]").forEach((b) =>
+    const list = $("prod-list");
+    // Nothing below the grid until the cashier searches or picks a category.
+    if (!activeCat && !search.trim()) {
+      list.innerHTML = `<p class="prod-hint">Search or tap a category to add items.</p>`;
+      return;
+    }
+    const all = filtered();
+    if (!all.length) { list.innerHTML = `<p class="empty">No matching items.</p>`; return; }
+    const CAP = 40;
+    const rows = all.slice(0, CAP);
+    list.innerHTML = rows.map((v) => `
+      <button class="prod-row" type="button" data-add="${v.variantId}"${v.qty === 0 ? ' data-oos="1"' : ""}>
+        <span class="prod-info">
+          <span class="prod-title">${esc(v.title)}</span>
+          <span class="prod-meta">${esc(v.platform)}${v.condition ? " · " + esc(v.condition) : ""}${v.completeness ? " · " + esc(v.completeness) : ""} · ${v.qty === 0 ? '<span class="oos">out of stock</span>' : v.qty + " in stock"}</span>
+        </span>
+        <span class="prod-price">${money(v.priceCents)}</span>
+      </button>`).join("")
+      + (all.length > CAP ? `<p class="prod-more">+${all.length - CAP} more — keep typing to narrow it down</p>` : "");
+    list.querySelectorAll<HTMLButtonElement>("[data-add]").forEach((b) =>
       b.addEventListener("click", () => addVariant(b.dataset.add!)));
   }
 
