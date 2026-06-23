@@ -214,7 +214,18 @@ const fileIcon = (mime: string | null) => {
             {bodyHtml ? (
               <div class="sop-body" set:html={bodyHtml} />
             ) : (
-              <p class="empty">No written content — see attachments below.</p>
+              <p class="empty">No written content — see links / attachments below.</p>
+            )}
+
+            {Array.isArray(selected.links) && selected.links.filter((l: any) => /^https?:\/\//i.test(String(l?.url || ""))).length > 0 && (
+              <div class="sop-attach">
+                <div class="sop-attach-h">Documentation</div>
+                <div class="sop-link-btns">
+                  {selected.links.filter((l: any) => /^https?:\/\//i.test(String(l?.url || ""))).map((l: any) => (
+                    <a class="btn btn-ghost btn-sm" href={l.url} target="_blank" rel="noopener noreferrer">🔗 {l.title || l.url}</a>
+                  ))}
+                </div>
+              </div>
             )}
 
             {selectedFiles.length > 0 && (
@@ -244,6 +255,7 @@ const fileIcon = (mime: string | null) => {
                 expression (so "</textarea>" / "<" can't break out) and the
                 browser returns the original text via .value. */}
             <textarea id="sop-raw" hidden set:text={selected?.body_md ?? ""}></textarea>
+            <textarea id="sop-links-raw" hidden set:text={JSON.stringify(selected?.links ?? [])}></textarea>
             <div class="ed-row">
               <label class="ed-field grow">Title<input id="ed-title" placeholder="e.g. Opening checklist" /></label>
               <label class="ed-field">Category
@@ -276,6 +288,12 @@ const fileIcon = (mime: string | null) => {
                 <span class="ed-lbl">Preview</span>
                 <div id="ed-preview" class="sop-body ed-preview"></div>
               </div>
+            </div>
+
+            <div class="ed-links">
+              <span class="ed-lbl">Documentation links <span class="muted-2">— shown as buttons</span></span>
+              <div id="ed-links-list" class="ed-links-list"></div>
+              <button id="ed-add-link" class="btn btn-ghost btn-sm" type="button">+ Add link</button>
             </div>
 
             <div id="ed-files-wrap" class="ed-attach">
@@ -383,6 +401,13 @@ const fileIcon = (mime: string | null) => {
   .ed-preview { padding: 0.6rem 0.8rem; background: var(--bg); border: 1px solid var(--border); min-height: 8rem; overflow: auto; }
   .ed-attach { border-top: 1px solid var(--border-strong); padding-top: 0.8rem; }
   .ed-upload { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.6rem; flex-wrap: wrap; }
+  .sop-link-btns { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+  .ed-links { border-top: 1px solid var(--border-strong); padding-top: 0.8rem; display: grid; gap: 0.5rem; }
+  .ed-links-list { display: grid; gap: 0.4rem; }
+  .ed-link-row { display: grid; grid-template-columns: 1fr 1.5fr auto; gap: 0.4rem; align-items: center; }
+  @media (max-width: 520px) { .ed-link-row { grid-template-columns: 1fr; } }
+  .ed-link-row input { font: inherit; padding: 0.4rem 0.5rem; background: var(--bg); color: var(--text); border: 1px solid var(--border-strong); min-width: 0; }
+  .ed-link-row .link-btn { justify-self: start; }
   .ed-actions { display: flex; align-items: center; gap: 0.7rem; margin-top: 0.3rem; }
 </style>
 
@@ -513,6 +538,7 @@ const fileIcon = (mime: string | null) => {
       if (elFilesHint) elFilesHint.hidden = false;
       if (elUploadRow) elUploadRow.hidden = true;
       loadFiles([]);
+      loadLinks([]);
     } else if (view) {
       if (elId) elId.value = view.dataset.id || "";
       if (elTitle) elTitle.value = view.dataset.title || "";
@@ -522,6 +548,7 @@ const fileIcon = (mime: string | null) => {
       if (elFilesHint) elFilesHint.hidden = true;
       if (elUploadRow) elUploadRow.hidden = false;
       loadCurrentFiles();
+      try { loadLinks(JSON.parse($<HTMLTextAreaElement>("sop-links-raw")?.value || "[]")); } catch { loadLinks([]); }
     }
     renderPreview();
     if (view) view.hidden = true;
@@ -542,6 +569,38 @@ const fileIcon = (mime: string | null) => {
   $("sop-edit")?.addEventListener("click", () => openEditor("edit"));
   $("ed-cancel")?.addEventListener("click", closeEditor);
 
+  // ---- Documentation links (editor rows; saved with the SOP) ----
+  function addLinkRow(title: string, url: string) {
+    const list = $("ed-links-list");
+    if (!list) return;
+    const row = document.createElement("div");
+    row.className = "ed-link-row";
+    const t = document.createElement("input");
+    t.className = "ed-link-title"; t.placeholder = "Title (e.g. iFixit guide)"; t.value = title || "";
+    const u = document.createElement("input");
+    u.className = "ed-link-url"; u.type = "url"; u.placeholder = "https://…"; u.value = url || "";
+    const rm = document.createElement("button");
+    rm.type = "button"; rm.className = "link-btn"; rm.textContent = "Remove";
+    rm.addEventListener("click", () => row.remove());
+    row.append(t, u, rm);
+    list.appendChild(row);
+  }
+  function loadLinks(arr: any[]) {
+    const list = $("ed-links-list");
+    if (list) list.innerHTML = "";
+    (Array.isArray(arr) ? arr : []).forEach((l) => addLinkRow(l?.title || "", l?.url || ""));
+  }
+  function collectLinks() {
+    const out: { title: string; url: string }[] = [];
+    document.querySelectorAll<HTMLElement>("#ed-links-list .ed-link-row").forEach((row) => {
+      const url = (row.querySelector<HTMLInputElement>(".ed-link-url")?.value || "").trim();
+      const title = (row.querySelector<HTMLInputElement>(".ed-link-title")?.value || "").trim();
+      if (/^https?:\/\//i.test(url)) out.push({ title: title || url, url });
+    });
+    return out;
+  }
+  $("ed-add-link")?.addEventListener("click", () => addLinkRow("", ""));
+
   // ---- Save ----
   $("ed-save")?.addEventListener("click", async () => {
     const title = (elTitle?.value || "").trim();
@@ -553,6 +612,7 @@ const fileIcon = (mime: string | null) => {
       category: (elCat?.value || "").trim() || "General",
       bodyMd: elBody?.value || "",
       pinned: !!elPinned?.checked,
+      links: collectLinks(),
     };
     try {
       const existingId = elId?.value;

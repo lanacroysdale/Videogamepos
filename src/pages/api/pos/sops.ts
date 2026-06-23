@@ -18,15 +18,27 @@ export const POST: APIRoute = async ({ locals, request }) => {
   const isOwner = role === "owner";
   const uid = locals.user.id;
   const now = new Date().toISOString();
-  // Tolerate running before the approval migration is applied: if a write hits a
-  // missing approval column, we retry without those fields. Requires BOTH an
-  // approval-column name AND a missing-column phrase, so an unrelated DB error
+  // Tolerate running before the approval/links migrations are applied: if a write
+  // hits a missing optional column, retry without those fields. Requires BOTH an
+  // optional-column name AND a missing-column phrase, so an unrelated DB error
   // (e.g. a not-null violation) isn't silently swallowed.
-  const approvalColMissing = (msg: string) =>
-    /status|approved_by|approved_at/i.test(msg) && /does not exist|schema cache|column/i.test(msg);
+  const optionalColMissing = (msg: string) =>
+    /status|approved_by|approved_at|links/i.test(msg) && /does not exist|schema cache|column/i.test(msg);
   // A SOP is visible to a cashier once it's been approved at least once. Pre-migration
   // rows have no approved_at field at all → treat as visible (old behavior).
   const everApproved = (s: any) => !("approved_at" in s) || s.approved_at != null;
+
+  // Validate documentation links: http/https only, titled, capped.
+  const cleanLinks = (raw: any): { title: string; url: string }[] => {
+    if (!Array.isArray(raw)) return [];
+    const out: { title: string; url: string }[] = [];
+    for (const l of raw.slice(0, 30)) {
+      const url = String(l?.url ?? "").trim();
+      if (!/^https?:\/\//i.test(url)) continue; // only real web links
+      out.push({ title: (String(l?.title ?? "").trim() || url).slice(0, 200), url: url.slice(0, 2000) });
+    }
+    return out;
+  };
 
   const admin = createSupabaseAdminClient();
   const b = await request.json().catch(() => ({} as any));
@@ -102,6 +114,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
         status: sop.status ?? "approved",
         approvedBy: sop.approved_by ? names.get(sop.approved_by) ?? "" : "",
         approvedAt: sop.approved_at ?? null,
+        links: Array.isArray(sop.links) ? sop.links : [],
       },
       files: withUrls,
     });
@@ -123,8 +136,13 @@ export const POST: APIRoute = async ({ locals, request }) => {
     };
     // Owner's own SOPs are auto-approved; a manager's go to the owner pending.
     const approval = isOwner ? { status: "approved", approved_by: uid, approved_at: now } : { status: "pending" };
-    let { data, error } = await admin.from("sops").insert({ ...base, ...approval }).select("id").single();
-    if (error && approvalColMissing(error.message)) ({ data, error } = await admin.from("sops").insert(base).select("id").single());
+    const links = cleanLinks(b.links);
+    // Drop the optional columns in stages if their migrations aren't applied yet.
+    let { data, error } = await admin.from("sops").insert({ ...base, ...approval, links }).select("id").single();
+    if (error && optionalColMissing(error.message)) {
+      ({ data, error } = await admin.from("sops").insert({ ...base, ...approval }).select("id").single());
+      if (error && optionalColMissing(error.message)) ({ data, error } = await admin.from("sops").insert(base).select("id").single());
+    }
     if (error) return json({ error: error.message }, 500);
     return json({ ok: true, id: data!.id, status: isOwner ? "approved" : "pending" });
   }
@@ -133,7 +151,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
     if (!isOwner) return json({ error: "Only the owner can approve SOPs." }, 403);
     if (!b.id) return json({ error: "id required" }, 400);
     const { error } = await admin.from("sops").update({ status: "approved", approved_by: uid, approved_at: now }).eq("id", b.id);
-    if (error) return json({ error: approvalColMissing(error.message) ? "Run the SOP approval migration first." : error.message }, 500);
+    if (error) return json({ error: optionalColMissing(error.message) ? "Run the SOP approval migration first." : error.message }, 500);
     return json({ ok: true });
   }
 
@@ -154,8 +172,12 @@ export const POST: APIRoute = async ({ locals, request }) => {
     // visible to cashiers while the new version awaits approval).
     const contentEdit = b.title !== undefined || b.category !== undefined || b.bodyMd !== undefined;
     const approval = !contentEdit ? {} : isOwner ? { status: "approved", approved_by: uid, approved_at: now } : { status: "pending" };
-    let { error } = await admin.from("sops").update({ ...patch, ...approval }).eq("id", b.id);
-    if (error && approvalColMissing(error.message)) ({ error } = await admin.from("sops").update(patch).eq("id", b.id));
+    const linkPatch = b.links !== undefined ? { links: cleanLinks(b.links) } : {};
+    let { error } = await admin.from("sops").update({ ...patch, ...approval, ...linkPatch }).eq("id", b.id);
+    if (error && optionalColMissing(error.message)) {
+      ({ error } = await admin.from("sops").update({ ...patch, ...approval }).eq("id", b.id));
+      if (error && optionalColMissing(error.message)) ({ error } = await admin.from("sops").update(patch).eq("id", b.id));
+    }
     if (error) return json({ error: error.message }, 500);
     return json({ ok: true });
   }
