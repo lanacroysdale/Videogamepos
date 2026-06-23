@@ -16,7 +16,16 @@ const { title, active } = Astro.props;
 const profile = Astro.locals.profile;
 const isManager = !!profile && ["owner", "manager"].includes(profile.role);
 
+// The F&B Menu is opt-in per store (Settings → Food & Bev). Off by default so a
+// retail-only license doesn't show it; this store enables it.
+let menuEnabled = false;
+if (isManager) {
+  const { data: ss } = await Astro.locals.supabase.from("store_settings").select("settings").eq("id", 1).maybeSingle();
+  menuEnabled = (ss?.settings as any)?.menuEnabled === true;
+}
+
 const nav = [
+  ...(isManager && menuEnabled ? [{ key: "menu", label: "Menu", href: "/app/menu", icon: "🍔" }] : []),
   { key: "dashboard", label: "Dashboard", href: "/app", icon: "🏠" },
   { key: "leads", label: "Leads", href: "/app/leads", icon: "📥" },
   { key: "checkout", label: "Checkout", href: "/app/checkout", icon: "🧾" },
@@ -30,7 +39,6 @@ const nav = [
   { key: "sops", label: "SOPs", href: "/app/sops", icon: "📋" },
   ...(isManager
     ? [
-        { key: "menu", label: "Menu", href: "/app/menu", icon: "🍔" },
         { key: "reports", label: "Reports", href: "/app/reports", icon: "📊" },
         { key: "pricing", label: "Pricing", href: "/app/pricing", icon: "🏷️" },
       ]

@@ -33,6 +33,7 @@ const fs = freeShipSettings(row?.settings);
 const th = themeSettings(row?.settings);
 const ai = aiSettings(row?.settings);
 const notifyTasks = !!(row?.settings as any)?.notifyTaskComplete;
+const menuEnabled = (row?.settings as any)?.menuEnabled === true;
 const aiSt = aiStatus(ai.provider);
 const aiProviderLabel = aiSt.provider === "gemini" ? "Gemini" : aiSt.provider === "anthropic" ? "Claude" : "";
 const minPriceDollars = (ls.lowStockMinPriceCents / 100).toFixed(2);
@@ -188,6 +189,19 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   </div>
 
   <div class="pos-panel set-panel" style="margin-top:1.25rem;">
+    <h2>Food &amp; Beverage</h2>
+    <label class="set-row set-toggle">
+      <input type="checkbox" id="menu-enabled" checked={menuEnabled} />
+      <span><strong>Enable the Menu in the POS</strong><br />
+        <span class="muted">Shows the “Menu” builder at the top of the sidebar (managers only). Turn off for a retail-only setup.</span></span>
+    </label>
+    <div class="set-actions">
+      <button id="menu-save" class="btn btn-primary">Save</button>
+      <span id="menu-status" class="muted"></span>
+    </div>
+  </div>
+
+  <div class="pos-panel set-panel" style="margin-top:1.25rem;">
     <h2>Tasks</h2>
     <label class="set-row set-toggle">
       <input type="checkbox" id="notify-tasks" checked={notifyTasks} />
@@ -336,6 +350,10 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   document.getElementById("notify-save")!.addEventListener("click", (e) => save({
     notifyTaskComplete: ($("notify-tasks") as HTMLInputElement).checked,
   }, document.getElementById("notify-status")!, e.currentTarget as HTMLButtonElement));
+
+  document.getElementById("menu-save")!.addEventListener("click", (e) => save({
+    menuEnabled: ($("menu-enabled") as HTMLInputElement).checked,
+  }, document.getElementById("menu-status")!, e.currentTarget as HTMLButtonElement));
 
   document.getElementById("ai-save")!.addEventListener("click", (e) => save({
     aiProvider: (document.getElementById("ai-provider") as HTMLSelectElement).value,

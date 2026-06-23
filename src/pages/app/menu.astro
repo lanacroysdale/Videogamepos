@@ -75,6 +75,7 @@ const clientData = {
       {/* ---------- ITEMS ---------- */}
       <div id="tab-items">
         <div class="menu-toolbar">
+          <div class="search menu-search"><span class="mag" aria-hidden="true">🔎</span><input id="menu-search" type="search" placeholder="Search sections & items…" autocomplete="off" /></div>
           <button id="add-section" class="btn btn-ghost btn-sm" type="button">+ Section</button>
           <button id="add-item" class="btn btn-primary btn-sm" type="button">+ Item</button>
         </div>
@@ -82,34 +83,44 @@ const clientData = {
         {items.length === 0 && sections.length === 0 ? (
           <div class="pos-panel"><p class="empty">No menu yet — add a section (e.g. “Cocktails” or “Snacks”), then add items.</p></div>
         ) : (
-          renderSections.map((sec: any) => (
-            <div class="pos-panel menu-section">
-              <div class="menu-sec-head">
-                <h2>{sec ? sec.name : "Unsectioned"} {sec && !sec.is_active && <span class="pill muted">hidden</span>}</h2>
-                {sec && (
-                  <span class="menu-sec-tools">
-                    <button class="link-btn" data-sec-edit={sec.id} data-name={sec.name} data-active={sec.is_active ? "1" : "0"}>rename</button>
-                    <button class="link-btn" data-sec-del={sec.id} data-name={sec.name}>delete</button>
-                  </span>
-                )}
-              </div>
-              <div class="menu-items">
-                {(itemsBySection.get(sec ? sec.id : null) ?? []).map((it: any) => (
-                  <div class:list={["menu-item-row", { oos: !it.is_available }]}>
-                    <button class="menu-item-main" data-item-edit={it.id} type="button">
-                      <span class="mi-name">{it.name}
-                        {!it.is_available && <span class="pill magenta">86</span>}
-                        {!it.online_orderable && <span class="pill muted" title="Not on the online/QR menu">in-house</span>}
-                      </span>
-                      <span class="mi-sub">{priceLabel(it)}{(groupIdsByItem.get(it.id) ?? []).length ? " · " + (groupIdsByItem.get(it.id) ?? []).map((g) => groupName.get(g)).filter(Boolean).join(", ") : ""}</span>
-                    </button>
-                    <button class="link-btn mi-86" data-toggle86={it.id} data-avail={it.is_available ? "1" : "0"}>{it.is_available ? "86" : "un-86"}</button>
-                  </div>
-                ))}
-                {(itemsBySection.get(sec ? sec.id : null) ?? []).length === 0 && <p class="empty mi-empty">No items yet.</p>}
-              </div>
-            </div>
-          ))
+          <>
+            {renderSections.map((sec: any) => (
+              <section class="menu-section" data-secname={(sec ? sec.name : "Unsectioned").toLowerCase()}>
+                <div class="menu-sec-head">
+                  <h2>{sec ? sec.name : "Unsectioned"}
+                    <span class="sec-count">{(itemsBySection.get(sec ? sec.id : null) ?? []).length}</span>
+                    {sec && !sec.is_active && <span class="pill muted">hidden</span>}
+                  </h2>
+                  {sec && (
+                    <span class="menu-sec-tools">
+                      <button class="link-btn" data-sec-edit={sec.id} data-name={sec.name} data-active={sec.is_active ? "1" : "0"}>rename</button>
+                      <button class="link-btn" data-sec-del={sec.id} data-name={sec.name}>delete</button>
+                    </span>
+                  )}
+                </div>
+                <div class="menu-tiles">
+                  {(itemsBySection.get(sec ? sec.id : null) ?? []).map((it: any) => (
+                    <div class:list={["menu-tile", { oos: !it.is_available }]} data-search={`${it.name} ${it.description ?? ""}`.toLowerCase()}>
+                      <button class="menu-tile-main" data-item-edit={it.id} type="button">
+                        <span class="mt-name">{it.name}</span>
+                        {it.description && <span class="mt-desc">{it.description}</span>}
+                        <span class="mt-foot">
+                          <span class="mt-price">{priceLabel(it)}</span>
+                          <span class="mt-tags">
+                            {!it.online_orderable && <span class="pill muted" title="Not on the online/QR menu">in-house</span>}
+                            {(groupIdsByItem.get(it.id) ?? []).map((g) => <span class="pill cyan">{groupName.get(g)}</span>)}
+                          </span>
+                        </span>
+                      </button>
+                      <button class="menu-tile-86" data-toggle86={it.id} data-avail={it.is_available ? "1" : "0"} title={it.is_available ? "86 — mark unavailable" : "Un-86"}>{it.is_available ? "86" : "↺ 86"}</button>
+                    </div>
+                  ))}
+                  {(itemsBySection.get(sec ? sec.id : null) ?? []).length === 0 && <p class="empty mi-empty">No items yet.</p>}
+                </div>
+              </section>
+            ))}
+            <p id="menu-noresults" class="empty" hidden>No items match your search.</p>
+          </>
         )}
       </div>
 
@@ -205,19 +216,37 @@ const clientData = {
   .mtab { font-size: 0.85rem; padding: 0.35rem 0.8rem; border: 1px solid var(--border-strong); background: transparent; color: var(--muted); cursor: pointer; }
   .mtab.on { background: var(--cyan); border-color: var(--cyan); color: #04222a; font-weight: 700; }
   .menu-toolbar { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
-  .menu-section { margin-bottom: 1rem; }
-  .menu-sec-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 0.5rem; }
-  .menu-sec-head h2 { margin: 0; }
-  .menu-sec-tools { display: flex; gap: 0.7rem; font-size: 0.82rem; }
-  .menu-items { display: grid; gap: 0.4rem; }
-  .menu-item-row { display: flex; align-items: center; gap: 0.5rem; }
-  .menu-item-main, .menu-group-main { appearance: none; -webkit-appearance: none; font: inherit; flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; text-align: left; padding: 0.5rem 0.7rem; background: rgba(255,255,255,.02); border: 1px solid var(--border); color: var(--text); cursor: pointer; }
-  .menu-item-main:hover, .menu-group-main:hover { border-color: var(--cyan); background: rgba(255,255,255,.05); }
-  .menu-item-row.oos .menu-item-main { opacity: 0.6; }
+  .menu-search { position: relative; flex: 1; max-width: 320px; }
+  .menu-search .mag { position: absolute; left: 0.7rem; top: 50%; transform: translateY(-50%); pointer-events: none; opacity: 0.7; }
+  .menu-search input { width: 100%; padding: 0.45rem 0.6rem 0.45rem 2.2rem; background: var(--bg); color: var(--text); border: 1px solid var(--border-strong); font: inherit; }
+
+  .menu-section { margin-bottom: 1.5rem; }
+  .menu-sec-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin: 0 0 0.6rem; padding-bottom: 0.35rem; border-bottom: 2px solid var(--border-strong); }
+  .menu-sec-head h2 { margin: 0; display: flex; align-items: center; gap: 0.5rem; }
+  .sec-count { font-size: 0.72rem; font-weight: 700; color: var(--muted-2); background: rgba(127,127,127,.15); padding: 0.05rem 0.5rem; border-radius: 999px; }
+  .menu-sec-tools { display: flex; gap: 0.7rem; font-size: 0.82rem; flex: none; }
+
+  /* Tile grid — auto-fills columns by width, so it adapts across phone/tablet/desktop. */
+  .menu-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.55rem; }
+  @media (max-width: 560px) { .menu-tiles { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 0.45rem; } }
+  .menu-tile { position: relative; display: flex; }
+  .menu-tile-main { appearance: none; -webkit-appearance: none; font: inherit; flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.3rem; text-align: left; padding: 0.55rem 0.65rem; background: rgba(255,255,255,.02); border: 1px solid var(--border); color: var(--text); cursor: pointer; }
+  .menu-tile-main:hover { border-color: var(--cyan); background: rgba(255,255,255,.05); }
+  .menu-tile.oos .menu-tile-main { opacity: 0.5; }
+  .mt-name { font-weight: 700; padding-right: 2rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mt-desc { font-size: 0.72rem; color: var(--muted-2); line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .mt-foot { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-top: auto; padding-top: 0.15rem; }
+  .mt-price { font-weight: 800; color: var(--cyan); white-space: nowrap; }
+  .mt-tags { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.2rem; min-width: 0; }
+  .mt-tags .pill { font-size: 0.6rem; }
+  .menu-tile-86 { position: absolute; top: 5px; right: 5px; z-index: 1; font-size: 0.6rem; font-weight: 800; line-height: 1; padding: 0.15rem 0.35rem; background: var(--panel); border: 1px solid var(--border-strong); color: var(--muted-2); cursor: pointer; }
+  .menu-tile-86:hover { border-color: var(--magenta); color: var(--magenta); }
+  .menu-tile.oos .menu-tile-86 { color: var(--magenta); border-color: var(--magenta); }
   .menu-groups { display: grid; gap: 0.4rem; }
+  .menu-group-main { appearance: none; -webkit-appearance: none; font: inherit; width: 100%; min-width: 0; display: flex; flex-direction: column; gap: 0.15rem; text-align: left; padding: 0.5rem 0.7rem; background: rgba(255,255,255,.02); border: 1px solid var(--border); color: var(--text); cursor: pointer; }
+  .menu-group-main:hover { border-color: var(--cyan); background: rgba(255,255,255,.05); }
   .mi-name { font-weight: 600; display: inline-flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
   .mi-sub { font-size: 0.78rem; color: var(--muted-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .mi-86 { flex: none; font-size: 0.8rem; }
   .mi-empty { padding: 0.3rem 0 !important; }
 
   .menu-modal { position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,.55); display: grid; place-items: center; padding: 1rem; }
@@ -265,6 +294,25 @@ const clientData = {
       $("tab-items")!.hidden = tab !== "items";
       $("tab-mods")!.hidden = tab !== "mods";
     });
+  });
+
+  // ---- Search (filter sections + items) ----
+  const menuSearch = $<HTMLInputElement>("menu-search");
+  menuSearch?.addEventListener("input", () => {
+    const q = menuSearch.value.trim().toLowerCase();
+    let any = false;
+    document.querySelectorAll<HTMLElement>(".menu-section").forEach((sec) => {
+      const secMatch = !!q && (sec.dataset.secname || "").includes(q);
+      let shown = 0;
+      sec.querySelectorAll<HTMLElement>(".menu-tile").forEach((t) => {
+        const hit = !q || secMatch || (t.dataset.search || "").includes(q);
+        t.style.display = hit ? "" : "none";
+        if (hit) shown++;
+      });
+      sec.style.display = shown > 0 ? "" : "none";
+      if (shown > 0) any = true;
+    });
+    const nr = $("menu-noresults"); if (nr) nr.hidden = any || !q;
   });
 
   // ---- Sections ----
