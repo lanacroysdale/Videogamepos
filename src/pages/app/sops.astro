@@ -114,12 +114,20 @@ const fileIcon = (mime: string | null) => {
           <span class="mag">🔎</span>
           <input id="sop-search" type="search" placeholder="Search SOPs…" autocomplete="off" />
         </div>
+        {categories.length > 1 && (
+          <div class="sop-cat-filters" id="sop-cat-filters">
+            <button class="cat-chip on" data-cat-filter="" type="button">All</button>
+            {categories.map((cat) => (
+              <button class="cat-chip" data-cat-filter={cat} type="button">{cat}</button>
+            ))}
+          </div>
+        )}
         <div class="sop-index">
           {sops.length === 0 ? (
             <p class="empty">No SOPs yet.{isManager ? " Create the first one." : ""}</p>
           ) : (
             categories.map((cat) => (
-              <div class="sop-group" data-group>
+              <div class="sop-group" data-group data-cat={cat}>
                 <div class="sop-cat">{cat}</div>
                 {byCat.get(cat)!.map((s) => (
                   <a
@@ -231,6 +239,18 @@ const fileIcon = (mime: string | null) => {
             <div class="ed-split">
               <label class="ed-field grow">
                 <span class="ed-lbl">Content <span class="muted-2">(Markdown)</span></span>
+                <div class="md-toolbar" id="md-toolbar">
+                  <button type="button" data-md="bold" title="Bold (Ctrl+B)"><strong>B</strong></button>
+                  <button type="button" data-md="italic" title="Italic (Ctrl+I)"><em>I</em></button>
+                  <button type="button" data-md="h2" title="Heading">H</button>
+                  <span class="md-sep"></span>
+                  <button type="button" data-md="ol" title="Numbered list">1.</button>
+                  <button type="button" data-md="ul" title="Bulleted list">•</button>
+                  <button type="button" data-md="check" title="Checklist">☑</button>
+                  <span class="md-sep"></span>
+                  <button type="button" data-md="link" title="Link">🔗</button>
+                  <button type="button" data-md="code" title="Code">&lt;/&gt;</button>
+                </div>
                 <textarea id="ed-body" rows="16" placeholder="# Heading&#10;&#10;Steps:&#10;1. First&#10;2. Second&#10;&#10;- [ ] a checklist item&#10;**bold**, *italic*, `code`, [links](https://…)"></textarea>
               </label>
               <div class="ed-field grow">
@@ -316,6 +336,16 @@ const fileIcon = (mime: string | null) => {
   .sop-file .fs { font-size: 0.78rem; white-space: nowrap; }
   .sop-file .fr { flex-shrink: 0; }
 
+  .sop-cat-filters { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.6rem 0 0.2rem; }
+  .cat-chip { font-size: 0.74rem; padding: 0.2rem 0.55rem; border: 1px solid var(--border-strong); background: transparent; color: var(--muted); cursor: pointer; }
+  .cat-chip:hover { color: var(--text); }
+  .cat-chip.on { background: var(--cyan); border-color: var(--cyan); color: #04222a; font-weight: 700; }
+
+  .md-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.2rem; }
+  .md-toolbar button { min-width: 1.9rem; height: 1.7rem; padding: 0 0.45rem; font-size: 0.82rem; line-height: 1; background: var(--bg); border: 1px solid var(--border-strong); color: var(--text); cursor: pointer; }
+  .md-toolbar button:hover { border-color: var(--cyan); color: var(--cyan); }
+  .md-sep { width: 1px; height: 1.1rem; background: var(--border-strong); margin: 0 0.2rem; }
+
   .sop-editor { display: grid; gap: 0.8rem; }
   .ed-row { display: flex; gap: 0.8rem; flex-wrap: wrap; }
   .ed-field { display: grid; gap: 0.3rem; font-size: 0.85rem; font-weight: 600; }
@@ -337,16 +367,19 @@ const fileIcon = (mime: string | null) => {
 
   const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T | null;
 
-  // ---- Sidebar search ----
+  // ---- Sidebar search + category filter ----
   const search = $<HTMLInputElement>("sop-search");
-  search?.addEventListener("input", () => {
-    const q = search.value.trim().toLowerCase();
+  let catFilter = "";
+  function applyFilter() {
+    const q = (search?.value || "").trim().toLowerCase();
     let anyVisible = false;
     document.querySelectorAll<HTMLElement>("[data-group]").forEach((group) => {
+      const catHit = !catFilter || group.dataset.cat === catFilter;
       let groupVisible = false;
       group.querySelectorAll<HTMLElement>(".sop-link").forEach((link) => {
-        const hit = !q || (link.dataset.title || "").includes(q) ||
+        const textHit = !q || (link.dataset.title || "").includes(q) ||
           (link.querySelector(".sop-link-title")?.textContent || "").toLowerCase().includes(q);
+        const hit = catHit && textHit;
         link.style.display = hit ? "" : "none";
         if (hit) groupVisible = true;
       });
@@ -355,6 +388,14 @@ const fileIcon = (mime: string | null) => {
     });
     const none = $("sop-noresults");
     if (none) none.hidden = anyVisible;
+  }
+  search?.addEventListener("input", applyFilter);
+  document.querySelectorAll<HTMLButtonElement>("#sop-cat-filters .cat-chip").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      catFilter = chip.dataset.catFilter || "";
+      document.querySelectorAll("#sop-cat-filters .cat-chip").forEach((c) => c.classList.toggle("on", c === chip));
+      applyFilter();
+    });
   });
 
   // ---- API helper ----
@@ -385,6 +426,57 @@ const fileIcon = (mime: string | null) => {
     if (elPreview && elBody) elPreview.innerHTML = renderMarkdown(elBody.value);
   }
   elBody?.addEventListener("input", renderPreview);
+
+  // ---- Markdown formatting toolbar ----
+  function afterEdit(ta: HTMLTextAreaElement, selStart: number, selEnd: number) {
+    ta.selectionStart = selStart;
+    ta.selectionEnd = selEnd;
+    renderPreview();
+    ta.focus();
+  }
+  function surround(before: string, after: string, placeholder: string) {
+    const ta = elBody; if (!ta) return;
+    const s = ta.selectionStart, e = ta.selectionEnd;
+    const sel = ta.value.slice(s, e) || placeholder;
+    ta.value = ta.value.slice(0, s) + before + sel + after + ta.value.slice(e);
+    afterEdit(ta, s + before.length, s + before.length + sel.length);
+  }
+  function linePrefix(kind: "ul" | "ol" | "check" | "h2") {
+    const ta = elBody; if (!ta) return;
+    const s = ta.selectionStart, e = ta.selectionEnd;
+    const lineStart = ta.value.lastIndexOf("\n", s - 1) + 1;
+    let lineEnd = ta.value.indexOf("\n", e);
+    if (lineEnd === -1) lineEnd = ta.value.length;
+    const out = ta.value.slice(lineStart, lineEnd).split("\n").map((ln, i) =>
+      kind === "ol" ? `${i + 1}. ${ln}` : kind === "ul" ? `- ${ln}` : kind === "check" ? `- [ ] ${ln}` : `## ${ln}`,
+    ).join("\n");
+    ta.value = ta.value.slice(0, lineStart) + out + ta.value.slice(lineEnd);
+    afterEdit(ta, lineStart, lineStart + out.length);
+  }
+  function insertLink() {
+    const ta = elBody; if (!ta) return;
+    const s = ta.selectionStart, e = ta.selectionEnd;
+    const sel = ta.value.slice(s, e) || "link text";
+    ta.value = ta.value.slice(0, s) + `[${sel}](url)` + ta.value.slice(e);
+    const urlAt = s + sel.length + 3; // past "[<sel>]("
+    afterEdit(ta, urlAt, urlAt + 3); // selects "url"
+  }
+  const mdActions: Record<string, () => void> = {
+    bold: () => surround("**", "**", "bold text"),
+    italic: () => surround("*", "*", "italic text"),
+    code: () => surround("`", "`", "code"),
+    h2: () => linePrefix("h2"), ul: () => linePrefix("ul"), ol: () => linePrefix("ol"), check: () => linePrefix("check"),
+    link: insertLink,
+  };
+  document.querySelectorAll<HTMLButtonElement>("#md-toolbar [data-md]").forEach((b) =>
+    b.addEventListener("click", () => mdActions[b.dataset.md!]?.()),
+  );
+  elBody?.addEventListener("keydown", (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    const k = e.key.toLowerCase();
+    if (k === "b") { e.preventDefault(); surround("**", "**", "bold text"); }
+    else if (k === "i") { e.preventDefault(); surround("*", "*", "italic text"); }
+  });
 
   function openEditor(mode: "new" | "edit") {
     if (!editor) return;

@@ -68,10 +68,14 @@ const nav = [
           <div class="who">{profile?.full_name ?? "—"}</div>
           <div class="role">{profile?.role ?? ""}</div>
           <button id="alerts-btn" class="btn btn-ghost btn-sm" type="button">🔔 Enable alerts</button>
-          {isManager && <a href="/app/settings" class:list={["btn", "btn-ghost", "btn-sm", { active: active === "settings" }]}>⚙️ Settings</a>}
-          <form method="POST" action="/app/logout">
-            <button class="btn btn-ghost btn-sm" type="submit">Log out</button>
-          </form>
+          <div class="app-user-actions">
+            <form method="POST" action="/app/logout" class="logout-form">
+              <button class="btn btn-ghost btn-sm" type="submit">Log out</button>
+            </form>
+            {isManager && (
+              <a href="/app/settings" class:list={["btn", "btn-ghost", "btn-sm", "settings-icon", { active: active === "settings" }]} title="Settings" aria-label="Settings">⚙️</a>
+            )}
+          </div>
         </div>
       </aside>
 
@@ -105,6 +109,10 @@ const nav = [
       .nav-badge.warn { background: var(--yellow, #ffd23f); color: #3a2c00; }
       .nav-badge.open { background: var(--green, #5aa6b8); color: #04222a; }
       #alerts-btn { margin-bottom: 0.4rem; width: 100%; }
+      .app-user-actions { display: flex; gap: 0.5rem; align-items: stretch; }
+      .app-user-actions .logout-form { flex: 1; min-width: 0; }
+      .app-user-actions .logout-form button { width: 100%; }
+      .settings-icon { flex: none; }
     </style>
 
     <script is:inline>
