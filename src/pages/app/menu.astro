@@ -1,0 +1,419 @@
+---
+export const prerender = false;
+import AppLayout from "../../layouts/AppLayout.astro";
+import { createSupabaseAdminClient } from "../../lib/supabase";
+import { fmt } from "../../lib/money";
+
+// Manager-gated (middleware also enforces it).
+const profile = Astro.locals.profile;
+if (!profile || !["owner", "manager"].includes(profile.role)) return Astro.redirect("/app");
+const admin = createSupabaseAdminClient();
+
+let needsMigration = false;
+const { data: secData, error: secErr } = await admin.from("menu_sections").select("*").order("sort_order").order("name");
+if (secErr) needsMigration = true;
+const sections: any[] = secData ?? [];
+const fetchOr = async (q: any) => (needsMigration ? [] : ((await q).data ?? []));
+const items = await fetchOr(admin.from("menu_items").select("*").order("sort_order").order("name"));
+const sizes = await fetchOr(admin.from("menu_item_sizes").select("*").order("sort_order"));
+const links = await fetchOr(admin.from("menu_item_modifier_groups").select("*").order("sort_order"));
+const groups = await fetchOr(admin.from("menu_modifier_groups").select("*").order("sort_order").order("name"));
+const options = await fetchOr(admin.from("menu_modifier_options").select("*").order("sort_order"));
+
+const push = <T,>(m: Map<any, T[]>, k: any, v: T) => { if (!m.has(k)) m.set(k, []); m.get(k)!.push(v); };
+const sizesByItem = new Map<string, any[]>(); for (const s of sizes) push(sizesByItem, s.menu_item_id, s);
+const groupIdsByItem = new Map<string, string[]>(); for (const l of links) push(groupIdsByItem, l.menu_item_id, l.group_id);
+const optsByGroup = new Map<string, any[]>(); for (const o of options) push(optsByGroup, o.group_id, o);
+const itemsBySection = new Map<string | null, any[]>(); for (const it of items) push(itemsBySection, it.section_id ?? null, it);
+const groupName = new Map<string, string>(groups.map((g: any) => [g.id, g.name]));
+
+// Sections to render: each real section, plus an "Unsectioned" bucket if needed.
+const renderSections: any[] = [...sections];
+if (itemsBySection.has(null)) renderSections.push(null);
+
+const priceLabel = (it: any) => {
+  const sz = sizesByItem.get(it.id) ?? [];
+  if (sz.length) return `from ${fmt(Math.min(...sz.map((s) => s.price_cents)))}`;
+  return fmt(it.base_price_cents);
+};
+const selectLabel = (g: any) => {
+  const mn = g.min_select, mx = g.max_select;
+  if (mn === 1 && mx === 1) return "choose 1";
+  if (mn === 0 && mx === 1) return "up to 1";
+  if (mn === 0 && mx == null) return "any";
+  if (mn > 0 && mx == null) return `choose ${mn}+`;
+  if (mn === 0) return `up to ${mx}`;
+  return `${mn}–${mx}`;
+};
+
+// Compact JSON for the client editors (dollars, not cents).
+const clientData = {
+  groups: groups.map((g: any) => ({ id: g.id, name: g.name, minSelect: g.min_select, maxSelect: g.max_select,
+    options: (optsByGroup.get(g.id) ?? []).map((o: any) => ({ name: o.name, priceDelta: o.price_delta_cents / 100, isDefault: o.is_default, isAvailable: o.is_available })) })),
+  items: items.map((i: any) => ({ id: i.id, sectionId: i.section_id, name: i.name, description: i.description ?? "",
+    basePrice: i.base_price_cents / 100, cost: i.cost_cents / 100, isAvailable: i.is_available, onlineOrderable: i.online_orderable, abv: i.abv,
+    sizes: (sizesByItem.get(i.id) ?? []).map((s: any) => ({ label: s.label, price: s.price_cents / 100, isDefault: s.is_default, isAvailable: s.is_available })),
+    groupIds: groupIdsByItem.get(i.id) ?? [] })),
+};
+---
+
+<AppLayout title="Menu" active="menu">
+  <div slot="actions">
+    <div class="menu-tabs">
+      <button class="mtab on" data-tab="items" type="button">Items</button>
+      <button class="mtab" data-tab="mods" type="button">Modifiers</button>
+    </div>
+  </div>
+
+  {needsMigration ? (
+    <div class="pos-panel">
+      <h2>Set up the menu</h2>
+      <p class="muted" style="margin-top:0.6rem;">Run <code>supabase/migrations/20260623000001_bar_menu_and_tabs.sql</code> in the Supabase SQL editor, then refresh.</p>
+    </div>
+  ) : (
+    <>
+      {/* ---------- ITEMS ---------- */}
+      <div id="tab-items">
+        <div class="menu-toolbar">
+          <button id="add-section" class="btn btn-ghost btn-sm" type="button">+ Section</button>
+          <button id="add-item" class="btn btn-primary btn-sm" type="button">+ Item</button>
+        </div>
+
+        {items.length === 0 && sections.length === 0 ? (
+          <div class="pos-panel"><p class="empty">No menu yet — add a section (e.g. “Cocktails” or “Snacks”), then add items.</p></div>
+        ) : (
+          renderSections.map((sec: any) => (
+            <div class="pos-panel menu-section">
+              <div class="menu-sec-head">
+                <h2>{sec ? sec.name : "Unsectioned"} {sec && !sec.is_active && <span class="pill muted">hidden</span>}</h2>
+                {sec && (
+                  <span class="menu-sec-tools">
+                    <button class="link-btn" data-sec-edit={sec.id} data-name={sec.name} data-active={sec.is_active ? "1" : "0"}>rename</button>
+                    <button class="link-btn" data-sec-del={sec.id} data-name={sec.name}>delete</button>
+                  </span>
+                )}
+              </div>
+              <div class="menu-items">
+                {(itemsBySection.get(sec ? sec.id : null) ?? []).map((it: any) => (
+                  <div class:list={["menu-item-row", { oos: !it.is_available }]}>
+                    <button class="menu-item-main" data-item-edit={it.id} type="button">
+                      <span class="mi-name">{it.name}
+                        {!it.is_available && <span class="pill magenta">86</span>}
+                        {!it.online_orderable && <span class="pill muted" title="Not on the online/QR menu">in-house</span>}
+                      </span>
+                      <span class="mi-sub">{priceLabel(it)}{(groupIdsByItem.get(it.id) ?? []).length ? " · " + (groupIdsByItem.get(it.id) ?? []).map((g) => groupName.get(g)).filter(Boolean).join(", ") : ""}</span>
+                    </button>
+                    <button class="link-btn mi-86" data-toggle86={it.id} data-avail={it.is_available ? "1" : "0"}>{it.is_available ? "86" : "un-86"}</button>
+                  </div>
+                ))}
+                {(itemsBySection.get(sec ? sec.id : null) ?? []).length === 0 && <p class="empty mi-empty">No items yet.</p>}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* ---------- MODIFIERS ---------- */}
+      <div id="tab-mods" hidden>
+        <div class="menu-toolbar"><button id="add-group" class="btn btn-primary btn-sm" type="button">+ Modifier group</button></div>
+        {groups.length === 0 ? (
+          <div class="pos-panel"><p class="empty">No modifier groups yet — e.g. “Milk” (choose 1) or “Add-ons” (choose any). Create them here, then attach to items.</p></div>
+        ) : (
+          <div class="pos-panel menu-groups">
+            {groups.map((g: any) => (
+              <button class="menu-group-main" data-group-edit={g.id} type="button">
+                <span class="mi-name">{g.name} <span class="pill muted">{selectLabel(g)}</span></span>
+                <span class="mi-sub">{(optsByGroup.get(g.id) ?? []).map((o: any) => o.name).join(", ") || "no options"}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ---------- Item editor ---------- */}
+      <div class="menu-modal" id="item-modal" hidden>
+        <div class="menu-modal-card">
+          <h3 id="im-title">New item</h3>
+          <input type="hidden" id="im-id" />
+          <div class="mm-grid">
+            <label class="mm-field grow">Name<input id="im-name" autocomplete="off" /></label>
+            <label class="mm-field">Section<select id="im-section"><option value="">—</option>{sections.map((s: any) => <option value={s.id}>{s.name}</option>)}</select></label>
+          </div>
+          <label class="mm-field">Description<textarea id="im-desc" rows="2"></textarea></label>
+          <div class="mm-grid three">
+            <label class="mm-field">Base price $<input id="im-price" type="number" min="0" step="0.01" placeholder="0.00" /></label>
+            <label class="mm-field">Cost $ <span class="muted-2">(margin)</span><input id="im-cost" type="number" min="0" step="0.01" placeholder="0.00" /></label>
+            <label class="mm-field">ABV %<input id="im-abv" type="number" min="0" step="0.1" placeholder="—" /></label>
+          </div>
+          <div class="mm-toggles">
+            <label><input type="checkbox" id="im-avail" checked /> Available</label>
+            <label><input type="checkbox" id="im-online" checked /> Show on online / QR menu</label>
+          </div>
+          <div class="mm-sub">
+            <div class="mm-sub-h">Sizes <span class="muted-2">— optional; a chosen size overrides the base price</span></div>
+            <div id="im-sizes"></div>
+            <button id="im-add-size" class="btn btn-ghost btn-sm" type="button">+ Size</button>
+          </div>
+          <div class="mm-sub">
+            <div class="mm-sub-h">Modifier groups</div>
+            <div id="im-groups" class="mm-groups"></div>
+            <p class="muted-2" id="im-no-groups" hidden>No groups yet — create them in the Modifiers tab.</p>
+          </div>
+          <div class="mm-actions">
+            <button id="im-save" class="btn btn-primary btn-sm" type="button">Save item</button>
+            <button id="im-delete" class="btn btn-magenta btn-sm" type="button" hidden>Delete</button>
+            <button id="im-cancel" class="btn btn-ghost btn-sm" type="button">Cancel</button>
+            <span id="im-status" class="muted-2"></span>
+          </div>
+        </div>
+      </div>
+
+      {/* ---------- Group editor ---------- */}
+      <div class="menu-modal" id="group-modal" hidden>
+        <div class="menu-modal-card">
+          <h3 id="gm-title">New modifier group</h3>
+          <input type="hidden" id="gm-id" />
+          <label class="mm-field">Name<input id="gm-name" placeholder="e.g. Milk, Add-ons, Temperature" autocomplete="off" /></label>
+          <div class="mm-grid">
+            <label class="mm-field">Min select<input id="gm-min" type="number" min="0" value="0" /></label>
+            <label class="mm-field">Max select <span class="muted-2">(blank = any)</span><input id="gm-max" type="number" min="1" placeholder="any" /></label>
+          </div>
+          <p class="muted-2" style="margin:0;">Tip: min 1 / max 1 = a required single choice (radio). min 0 = optional.</p>
+          <div class="mm-sub">
+            <div class="mm-sub-h">Options</div>
+            <div id="gm-options"></div>
+            <button id="gm-add-opt" class="btn btn-ghost btn-sm" type="button">+ Option</button>
+          </div>
+          <div class="mm-actions">
+            <button id="gm-save" class="btn btn-primary btn-sm" type="button">Save group</button>
+            <button id="gm-delete" class="btn btn-magenta btn-sm" type="button" hidden>Delete</button>
+            <button id="gm-cancel" class="btn btn-ghost btn-sm" type="button">Cancel</button>
+            <span id="gm-status" class="muted-2"></span>
+          </div>
+        </div>
+      </div>
+    </>
+  )}
+
+  <textarea id="menu-data" hidden set:text={JSON.stringify(clientData)}></textarea>
+</AppLayout>
+
+<!-- Menu builder styles are global: much of the UI (size/option rows, group
+     checkboxes) is built at runtime via JS, which Astro's scoped styles don't reach. -->
+<style is:global>
+  .menu-tabs { display: flex; gap: 0.3rem; }
+  .mtab { font-size: 0.85rem; padding: 0.35rem 0.8rem; border: 1px solid var(--border-strong); background: transparent; color: var(--muted); cursor: pointer; }
+  .mtab.on { background: var(--cyan); border-color: var(--cyan); color: #04222a; font-weight: 700; }
+  .menu-toolbar { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+  .menu-section { margin-bottom: 1rem; }
+  .menu-sec-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 0.5rem; }
+  .menu-sec-head h2 { margin: 0; }
+  .menu-sec-tools { display: flex; gap: 0.7rem; font-size: 0.82rem; }
+  .menu-items { display: grid; gap: 0.4rem; }
+  .menu-item-row { display: flex; align-items: center; gap: 0.5rem; }
+  .menu-item-main, .menu-group-main { appearance: none; -webkit-appearance: none; font: inherit; flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; text-align: left; padding: 0.5rem 0.7rem; background: rgba(255,255,255,.02); border: 1px solid var(--border); color: var(--text); cursor: pointer; }
+  .menu-item-main:hover, .menu-group-main:hover { border-color: var(--cyan); background: rgba(255,255,255,.05); }
+  .menu-item-row.oos .menu-item-main { opacity: 0.6; }
+  .menu-groups { display: grid; gap: 0.4rem; }
+  .mi-name { font-weight: 600; display: inline-flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+  .mi-sub { font-size: 0.78rem; color: var(--muted-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mi-86 { flex: none; font-size: 0.8rem; }
+  .mi-empty { padding: 0.3rem 0 !important; }
+
+  .menu-modal { position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,.55); display: grid; place-items: center; padding: 1rem; }
+  .menu-modal[hidden] { display: none !important; }
+  .menu-modal-card { width: 100%; max-width: 560px; max-height: 92vh; overflow: auto; background: var(--panel); border: 1px solid var(--border-strong); padding: 1.2rem 1.3rem; display: grid; gap: 0.8rem; }
+  .menu-modal-card h3 { margin: 0; }
+  .mm-grid { display: flex; gap: 0.7rem; flex-wrap: wrap; }
+  .mm-grid.three .mm-field { flex: 1; min-width: 120px; }
+  .mm-field { display: grid; gap: 0.25rem; font-size: 0.82rem; font-weight: 600; flex: 1; min-width: 140px; }
+  .mm-field.grow { flex: 2; }
+  .mm-field input, .mm-field select, .mm-field textarea { font: inherit; font-weight: 400; padding: 0.45rem 0.55rem; background: var(--bg); color: var(--text); border: 1px solid var(--border-strong); min-width: 0; }
+  .mm-toggles { display: flex; gap: 1.2rem; flex-wrap: wrap; font-size: 0.88rem; }
+  .mm-toggles label { display: flex; align-items: center; gap: 0.4rem; }
+  .mm-sub { border-top: 1px solid var(--border-strong); padding-top: 0.7rem; display: grid; gap: 0.5rem; }
+  .mm-sub-h { font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted-2); font-weight: 700; }
+  .mm-row { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
+  .mm-row input[type=text], .mm-row input[type=number] { font: inherit; padding: 0.35rem 0.5rem; background: var(--bg); color: var(--text); border: 1px solid var(--border-strong); }
+  .mm-row .rl { flex: 1; min-width: 90px; }
+  .mm-row .rp { width: 6rem; }
+  .mm-row label { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.78rem; white-space: nowrap; }
+  .mm-groups { display: grid; gap: 0.3rem; }
+  .mm-groups label { display: flex; align-items: center; gap: 0.5rem; font-size: 0.88rem; padding: 0.25rem 0; }
+  .mm-actions { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.2rem; }
+</style>
+
+<script>
+  const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T | null;
+  const raw = $<HTMLTextAreaElement>("menu-data")?.value || "{}";
+  let DATA: any = {}; try { DATA = JSON.parse(raw); } catch { DATA = {}; }
+  const groups: any[] = DATA.groups || [];
+  const items: any[] = DATA.items || [];
+
+  async function api(body: any) {
+    const r = await fetch("/api/pos/menu", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) throw new Error(j.error || "Failed");
+    return j;
+  }
+
+  // ---- Tabs ----
+  document.querySelectorAll<HTMLButtonElement>(".mtab").forEach((t) => {
+    t.addEventListener("click", () => {
+      document.querySelectorAll(".mtab").forEach((b) => b.classList.toggle("on", b === t));
+      const tab = t.dataset.tab;
+      $("tab-items")!.hidden = tab !== "items";
+      $("tab-mods")!.hidden = tab !== "mods";
+    });
+  });
+
+  // ---- Sections ----
+  $("add-section")?.addEventListener("click", async () => {
+    const name = prompt("Section name (e.g. Cocktails):");
+    if (!name?.trim()) return;
+    try { await api({ action: "section-save", name: name.trim() }); location.reload(); } catch (e: any) { alert(e.message); }
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-sec-edit]").forEach((b) => b.addEventListener("click", async () => {
+    const name = prompt("Rename section:", b.dataset.name || "");
+    if (name === null || !name.trim()) return;
+    try { await api({ action: "section-save", id: b.dataset.secEdit, name: name.trim(), isActive: b.dataset.active === "1" }); location.reload(); } catch (e: any) { alert(e.message); }
+  }));
+  document.querySelectorAll<HTMLButtonElement>("[data-sec-del]").forEach((b) => b.addEventListener("click", async () => {
+    if (!confirm(`Delete section “${b.dataset.name}”? Its items stay but become unsectioned.`)) return;
+    try { await api({ action: "section-delete", id: b.dataset.secDel }); location.reload(); } catch (e: any) { alert(e.message); }
+  }));
+
+  // ---- Quick 86 ----
+  document.querySelectorAll<HTMLButtonElement>("[data-toggle86]").forEach((b) => b.addEventListener("click", async () => {
+    try { await api({ action: "set-available", kind: "item", id: b.dataset.toggle86, available: b.dataset.avail !== "1" }); location.reload(); } catch (e: any) { alert(e.message); }
+  }));
+
+  // ---- Item editor ----
+  const itemModal = $("item-modal");
+  function addSizeRow(label = "", price = "", isDefault = false, isAvailable = true) {
+    const wrap = $("im-sizes")!;
+    const row = document.createElement("div"); row.className = "mm-row";
+    const l = document.createElement("input"); l.type = "text"; l.placeholder = "Label (e.g. Pint)"; l.className = "rl rl-label"; l.value = label;
+    const p = document.createElement("input"); p.type = "number"; p.min = "0"; p.step = "0.01"; p.placeholder = "$"; p.className = "rp rl-price"; p.value = price as any;
+    const dWrap = document.createElement("label"); const d = document.createElement("input"); d.type = "radio"; d.name = "imdefault"; d.className = "rl-default"; d.checked = isDefault; dWrap.append(d, document.createTextNode("default"));
+    const aWrap = document.createElement("label"); const av = document.createElement("input"); av.type = "checkbox"; av.className = "rl-avail"; av.checked = isAvailable; aWrap.append(av, document.createTextNode("avail"));
+    const rm = document.createElement("button"); rm.type = "button"; rm.className = "link-btn"; rm.textContent = "✕"; rm.addEventListener("click", () => row.remove());
+    row.append(l, p, dWrap, aWrap, rm); wrap.appendChild(row);
+  }
+  function renderGroupChecks(checkedIds: string[]) {
+    const wrap = $("im-groups")!; wrap.innerHTML = "";
+    $("im-no-groups")!.hidden = groups.length > 0;
+    for (const g of groups) {
+      const lab = document.createElement("label");
+      const cb = document.createElement("input"); cb.type = "checkbox"; cb.value = g.id; cb.checked = checkedIds.includes(g.id);
+      lab.append(cb, document.createTextNode(` ${g.name}`));
+      wrap.appendChild(lab);
+    }
+  }
+  function openItem(id?: string) {
+    const it = id ? items.find((x) => x.id === id) : null;
+    ($("im-title") as HTMLElement).textContent = it ? "Edit item" : "New item";
+    ($("im-id") as HTMLInputElement).value = it?.id || "";
+    ($("im-name") as HTMLInputElement).value = it?.name || "";
+    ($("im-section") as HTMLSelectElement).value = it?.sectionId || "";
+    ($("im-desc") as HTMLTextAreaElement).value = it?.description || "";
+    ($("im-price") as HTMLInputElement).value = it ? String(it.basePrice) : "";
+    ($("im-cost") as HTMLInputElement).value = it ? String(it.cost) : "";
+    ($("im-abv") as HTMLInputElement).value = it?.abv != null ? String(it.abv) : "";
+    ($("im-avail") as HTMLInputElement).checked = it ? !!it.isAvailable : true;
+    ($("im-online") as HTMLInputElement).checked = it ? !!it.onlineOrderable : true;
+    $("im-sizes")!.innerHTML = "";
+    (it?.sizes || []).forEach((s: any) => addSizeRow(s.label, s.price, s.isDefault, s.isAvailable));
+    renderGroupChecks(it?.groupIds || []);
+    ($("im-delete") as HTMLElement).hidden = !it;
+    $("im-status")!.textContent = "";
+    if (itemModal) itemModal.hidden = false;
+  }
+  $("add-item")?.addEventListener("click", () => openItem());
+  document.querySelectorAll<HTMLButtonElement>("[data-item-edit]").forEach((b) => b.addEventListener("click", () => openItem(b.dataset.itemEdit)));
+  $("im-add-size")?.addEventListener("click", () => addSizeRow());
+  $("im-cancel")?.addEventListener("click", () => { if (itemModal) itemModal.hidden = true; });
+  itemModal?.addEventListener("click", (e) => { if (e.target === itemModal) itemModal.hidden = true; });
+
+  $("im-save")?.addEventListener("click", async () => {
+    const name = ($("im-name") as HTMLInputElement).value.trim();
+    if (!name) { alert("Item needs a name."); return; }
+    const sizes = [...document.querySelectorAll<HTMLElement>("#im-sizes .mm-row")].map((row) => ({
+      label: (row.querySelector(".rl-label") as HTMLInputElement).value.trim(),
+      price: (row.querySelector(".rl-price") as HTMLInputElement).value,
+      isDefault: (row.querySelector(".rl-default") as HTMLInputElement).checked,
+      isAvailable: (row.querySelector(".rl-avail") as HTMLInputElement).checked,
+    })).filter((s) => s.label);
+    const groupIds = [...document.querySelectorAll<HTMLInputElement>("#im-groups input:checked")].map((c) => c.value);
+    $("im-status")!.textContent = "Saving…";
+    try {
+      await api({ action: "item-save", id: ($("im-id") as HTMLInputElement).value || undefined,
+        sectionId: ($("im-section") as HTMLSelectElement).value || null, name,
+        description: ($("im-desc") as HTMLTextAreaElement).value,
+        basePrice: ($("im-price") as HTMLInputElement).value, cost: ($("im-cost") as HTMLInputElement).value,
+        abv: ($("im-abv") as HTMLInputElement).value,
+        isAvailable: ($("im-avail") as HTMLInputElement).checked, onlineOrderable: ($("im-online") as HTMLInputElement).checked,
+        sizes, groupIds });
+      location.reload();
+    } catch (e: any) { $("im-status")!.textContent = ""; alert(e.message); }
+  });
+  $("im-delete")?.addEventListener("click", async () => {
+    const id = ($("im-id") as HTMLInputElement).value; if (!id) return;
+    if (!confirm("Delete this item?")) return;
+    try { await api({ action: "item-delete", id }); location.reload(); } catch (e: any) { alert(e.message); }
+  });
+
+  // ---- Group editor ----
+  const groupModal = $("group-modal");
+  function addOptRow(name = "", priceDelta = "", isDefault = false, isAvailable = true) {
+    const wrap = $("gm-options")!;
+    const row = document.createElement("div"); row.className = "mm-row";
+    const n = document.createElement("input"); n.type = "text"; n.placeholder = "Option (e.g. Oat)"; n.className = "rl rl-name"; n.value = name;
+    const p = document.createElement("input"); p.type = "number"; p.step = "0.01"; p.placeholder = "+$"; p.className = "rp rl-delta"; p.value = priceDelta as any;
+    const dWrap = document.createElement("label"); const d = document.createElement("input"); d.type = "checkbox"; d.className = "rl-default"; d.checked = isDefault; dWrap.append(d, document.createTextNode("default"));
+    const aWrap = document.createElement("label"); const av = document.createElement("input"); av.type = "checkbox"; av.className = "rl-avail"; av.checked = isAvailable; aWrap.append(av, document.createTextNode("avail"));
+    const rm = document.createElement("button"); rm.type = "button"; rm.className = "link-btn"; rm.textContent = "✕"; rm.addEventListener("click", () => row.remove());
+    row.append(n, p, dWrap, aWrap, rm); wrap.appendChild(row);
+  }
+  function openGroup(id?: string) {
+    const g = id ? groups.find((x) => x.id === id) : null;
+    ($("gm-title") as HTMLElement).textContent = g ? "Edit modifier group" : "New modifier group";
+    ($("gm-id") as HTMLInputElement).value = g?.id || "";
+    ($("gm-name") as HTMLInputElement).value = g?.name || "";
+    ($("gm-min") as HTMLInputElement).value = g ? String(g.minSelect) : "0";
+    ($("gm-max") as HTMLInputElement).value = g?.maxSelect != null ? String(g.maxSelect) : "";
+    $("gm-options")!.innerHTML = "";
+    (g?.options || []).forEach((o: any) => addOptRow(o.name, o.priceDelta, o.isDefault, o.isAvailable));
+    if (!g?.options?.length) addOptRow();
+    ($("gm-delete") as HTMLElement).hidden = !g;
+    $("gm-status")!.textContent = "";
+    if (groupModal) groupModal.hidden = false;
+  }
+  $("add-group")?.addEventListener("click", () => openGroup());
+  document.querySelectorAll<HTMLButtonElement>("[data-group-edit]").forEach((b) => b.addEventListener("click", () => openGroup(b.dataset.groupEdit)));
+  $("gm-add-opt")?.addEventListener("click", () => addOptRow());
+  $("gm-cancel")?.addEventListener("click", () => { if (groupModal) groupModal.hidden = true; });
+  groupModal?.addEventListener("click", (e) => { if (e.target === groupModal) groupModal.hidden = true; });
+
+  $("gm-save")?.addEventListener("click", async () => {
+    const name = ($("gm-name") as HTMLInputElement).value.trim();
+    if (!name) { alert("Group needs a name."); return; }
+    const options = [...document.querySelectorAll<HTMLElement>("#gm-options .mm-row")].map((row) => ({
+      name: (row.querySelector(".rl-name") as HTMLInputElement).value.trim(),
+      priceDelta: (row.querySelector(".rl-delta") as HTMLInputElement).value,
+      isDefault: (row.querySelector(".rl-default") as HTMLInputElement).checked,
+      isAvailable: (row.querySelector(".rl-avail") as HTMLInputElement).checked,
+    })).filter((o) => o.name);
+    $("gm-status")!.textContent = "Saving…";
+    try {
+      await api({ action: "group-save", id: ($("gm-id") as HTMLInputElement).value || undefined, name,
+        minSelect: ($("gm-min") as HTMLInputElement).value, maxSelect: ($("gm-max") as HTMLInputElement).value, options });
+      location.reload();
+    } catch (e: any) { $("gm-status")!.textContent = ""; alert(e.message); }
+  });
+  $("gm-delete")?.addEventListener("click", async () => {
+    const id = ($("gm-id") as HTMLInputElement).value; if (!id) return;
+    if (!confirm("Delete this modifier group? It will be removed from any items using it.")) return;
+    try { await api({ action: "group-delete", id }); location.reload(); } catch (e: any) { alert(e.message); }
+  });
+</script>

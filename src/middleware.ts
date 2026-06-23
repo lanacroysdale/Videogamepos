@@ -38,7 +38,8 @@ export const onRequest = defineMiddleware(async (context, next) => {
 
   // RBAC: reporting + pricing are for managers and owners only.
   const managerOnly =
-    pathname.startsWith("/app/reports") || pathname.startsWith("/app/pricing") || pathname.startsWith("/app/settings");
+    pathname.startsWith("/app/reports") || pathname.startsWith("/app/pricing") ||
+    pathname.startsWith("/app/settings") || pathname.startsWith("/app/menu");
   if (managerOnly && profile && !["owner", "manager"].includes(profile.role)) {
     const denied = pathname.startsWith("/app/pricing") ? "pricing" : pathname.startsWith("/app/settings") ? "settings" : "reports";
     return context.redirect(`/app?denied=${denied}`);
