@@ -3,8 +3,10 @@ import { createSupabaseAdminClient } from "../../../lib/supabase";
 
 export const prerender = false;
 const json = (d: unknown, s = 200) => new Response(JSON.stringify(d), { status: s, headers: { "content-type": "application/json" } });
-const cents = (d: any) => Math.max(0, Math.round(Number(d) * 100) || 0);
+// Cap at $999,999.99 and reject non-finite (e.g. "1e308" → Infinity, "1e10" → absurd).
+const cents = (d: any) => { const n = Math.round(Number(d) * 100); return Number.isFinite(n) && n > 0 ? Math.min(n, 99_999_999) : 0; };
 const int = (d: any, def = 0) => { const n = Math.round(Number(d)); return Number.isFinite(n) ? n : def; };
+const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
 
 // Bar / F&B menu builder. Managers/owners only (write); the public QR menu reads
 // server-side via the service-role client elsewhere. Uses "replace children" on
@@ -46,7 +48,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
       cost_cents: cents(b.cost),
       is_available: b.isAvailable === undefined ? true : !!b.isAvailable,
       online_orderable: b.onlineOrderable === undefined ? true : !!b.onlineOrderable,
-      abv: b.abv === "" || b.abv == null ? null : Number(b.abv),
+      abv: b.abv === "" || b.abv == null || !Number.isFinite(Number(b.abv)) ? null : clamp(Number(b.abv), 0, 100),
       tags: Array.isArray(b.tags) ? b.tags.map((t: any) => String(t).trim()).filter(Boolean).slice(0, 20) : [],
       sort_order: int(b.sortOrder),
       updated_at: new Date().toISOString(),
@@ -86,8 +88,8 @@ export const POST: APIRoute = async ({ locals, request }) => {
   if (a === "group-save") {
     const name = String(b.name ?? "").trim();
     if (!name) return json({ error: "Group name is required" }, 400);
-    const max = b.maxSelect === "" || b.maxSelect == null ? null : Math.max(1, int(b.maxSelect, 1));
-    const row = { name: name.slice(0, 80), min_select: Math.max(0, int(b.minSelect)), max_select: max, sort_order: int(b.sortOrder) };
+    const max = b.maxSelect === "" || b.maxSelect == null ? null : clamp(int(b.maxSelect, 1), 1, 99);
+    const row = { name: name.slice(0, 80), min_select: clamp(int(b.minSelect), 0, 99), max_select: max, sort_order: int(b.sortOrder) };
     let groupId = b.id as string | undefined;
     if (groupId) { const { error } = await admin.from("menu_modifier_groups").update(row).eq("id", groupId); if (error) return fail(error); }
     else { const { data, error } = await admin.from("menu_modifier_groups").insert(row).select("id").single(); if (error) return fail(error); groupId = data.id; }
