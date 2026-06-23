@@ -47,6 +47,11 @@ if (tk.error) {
 const openTasks = tasks.filter((t) => t.status !== "done").sort((a, b) => priorityRank(a.priority || "normal") - priorityRank(b.priority || "normal"));
 const doneTasks = tasks.filter((t) => t.status === "done");
 
+// ---- Attachment counts per task (degrade if not migrated yet) ------------
+const fileCountByTask = new Map<string, number>();
+const fcRes = await supabase.from("task_files").select("task_id");
+if (!fcRes.error) for (const r of fcRes.data ?? []) fileCountByTask.set(r.task_id, (fileCountByTask.get(r.task_id) ?? 0) + 1);
+
 // ---- Points, last 7 days (v2) --------------------------------------------
 let leaderboard: { name: string; pts: number }[] = [];
 if (v2Ready) {
@@ -167,6 +172,7 @@ const tt = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "n
                   {v2Ready && tk.priority && tk.priority !== "normal" && <span class={`pr pr-${tk.priority}`}>{tk.priority}</span>}
                   {v2Ready && tk.points > 0 && <span class="pts">+{tk.points}</span>}
                   {tk.notes && <span class="td-noteflag" title="Has notes">📝</span>}
+                  {(fileCountByTask.get(tk.id) ?? 0) > 0 && <span class="td-noteflag" title="Has attachments">📎</span>}
                 </span>
                 <span class="td-meta">
                   {tk.assignee_id && <span class="td-who">{nameById.get(tk.assignee_id) ?? "—"}</span>}
@@ -190,7 +196,7 @@ const tt = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "n
               <li class="td-item done" data-id={tk.id} data-completer={tk.completed_by ?? ""} data-search={`${tk.title} ${tk.notes ?? ""}`.toLowerCase()}>
                 <input type="checkbox" class="td-check" checked />
                 <span class="td-body">
-                  <span class="td-title">{tk.title}{tk.notes && <span class="td-noteflag" title="Has notes">📝</span>}</span>
+                  <span class="td-title">{tk.title}{tk.notes && <span class="td-noteflag" title="Has notes">📝</span>}{(fileCountByTask.get(tk.id) ?? 0) > 0 && <span class="td-noteflag" title="Has attachments">📎</span>}</span>
                   {v2Ready && tk.completed_by && <span class="td-meta"><span class="td-who">✓ {nameById.get(tk.completed_by) ?? "—"}</span></span>}
                 </span>
                 <button class="td-del" title="Delete" aria-label="Delete">✕</button>
@@ -212,6 +218,15 @@ const tt = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "n
             <label class="ed-field">Due<input id="ed-due" type="date" /></label>
           </div>
           <label class="ed-field">Notes<textarea id="ed-notes" rows="4" placeholder="Details, links, context…"></textarea></label>
+          <div class="ed-attach">
+            <div class="ed-attach-h">Attachments</div>
+            <ul id="ed-files" class="td-files"></ul>
+            <div class="ed-upload">
+              <input type="file" id="ed-file-input" />
+              <button id="ed-upload" class="btn btn-ghost btn-sm" type="button">Upload</button>
+              <span id="ed-upload-status" class="muted-2"></span>
+            </div>
+          </div>
           <div class="ed-actions">
             <button id="ed-save" class="btn btn-primary btn-sm">Save changes</button>
             <button id="ed-cancel" class="btn btn-ghost btn-sm">Cancel</button>
@@ -267,6 +282,18 @@ const tt = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "n
   .ed-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.7rem; }
   @media (max-width: 520px) { .ed-grid { grid-template-columns: 1fr; } }
   .ed-actions { display: flex; gap: 0.7rem; margin-top: 0.4rem; }
+  .ed-attach { border-top: 1px solid var(--border-strong); padding-top: 0.7rem; margin-bottom: 0.8rem; }
+  .ed-attach-h { font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted-2); font-weight: 700; margin-bottom: 0.5rem; }
+  .td-files { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.35rem; }
+  .td-file { display: flex; align-items: center; gap: 0.55rem; padding: 0.4rem 0.55rem; background: rgba(127,127,127,0.08); border: 1px solid var(--border); }
+  .td-file .fi { font-size: 1rem; flex: none; }
+  .td-file .fn { flex: 1; min-width: 0; color: var(--cyan); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .td-file .fn:hover { text-decoration: underline; }
+  .td-file .fs { font-size: 0.76rem; white-space: nowrap; flex: none; }
+  .td-file .fr { flex: none; }
+  .ed-upload { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.6rem; flex-wrap: wrap; }
+  .ed-upload input[type=file] { font-size: 0.82rem; max-width: 100%; }
+  .link-btn { background: none; border: none; color: var(--magenta); cursor: pointer; font-size: 0.8rem; padding: 0; }
 </style>
 
 <script>
@@ -373,6 +400,9 @@ const tt = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "n
     ($("ed-assignee") as HTMLSelectElement).value = li.dataset.assignee || "";
     ($("ed-due") as HTMLInputElement).value = li.dataset.due || "";
     ($("ed-notes") as HTMLTextAreaElement).value = li.dataset.notes || "";
+    const us = $("ed-upload-status"); if (us) us.textContent = "";
+    const fin = $("ed-file-input") as HTMLInputElement | null; if (fin) fin.value = "";
+    loadTaskFiles(editingId);
     if (modal) modal.hidden = false;
   }
   const closeEdit = () => { if (modal) modal.hidden = true; editingId = null; };
@@ -396,5 +426,75 @@ const tt = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "n
       });
       location.reload();
     } catch (err: any) { alert(err.message); }
+  });
+
+  // ---- Task attachments (in the edit modal) ----
+  type FileRow = { id: string; fileName: string; mimeType: string | null; sizeBytes: number | null; url: string | null };
+  function iconFor(mime: string | null) {
+    const m = mime || "";
+    if (m.startsWith("image/")) return "🖼️";
+    if (m === "application/pdf") return "📕";
+    if (m.includes("sheet") || m.includes("excel") || m === "text/csv") return "📊";
+    if (m.includes("word") || m.includes("document")) return "📄";
+    if (m.includes("presentation") || m.includes("powerpoint")) return "📽️";
+    return "📎";
+  }
+  function sizeFor(n: number | null) {
+    if (!n) return "";
+    if (n < 1024) return `${n} B`;
+    if (n < 1048576) return `${Math.round(n / 1024)} KB`;
+    return `${(n / 1048576).toFixed(1)} MB`;
+  }
+  // Built with DOM nodes (textContent / .href), never innerHTML — file names are
+  // user-controlled and must not be parsed as HTML.
+  function addFileRow(f: FileRow) {
+    const ul = $("ed-files");
+    if (!ul) return;
+    const li = document.createElement("li");
+    li.className = "td-file";
+    const icon = document.createElement("span"); icon.className = "fi"; icon.textContent = iconFor(f.mimeType);
+    let nameEl: HTMLElement;
+    if (f.url) {
+      const a = document.createElement("a");
+      a.href = f.url; a.target = "_blank"; a.rel = "noopener noreferrer"; a.className = "fn"; a.textContent = f.fileName;
+      nameEl = a;
+    } else {
+      const s = document.createElement("span"); s.className = "fn"; s.textContent = f.fileName; nameEl = s;
+    }
+    const size = document.createElement("span"); size.className = "fs muted-2"; size.textContent = sizeFor(f.sizeBytes);
+    const rm = document.createElement("button"); rm.className = "link-btn fr"; rm.type = "button"; rm.textContent = "Remove";
+    rm.addEventListener("click", async () => {
+      if (!confirm("Remove this attachment?")) return;
+      try { await api({ action: "remove-file", fileId: f.id, taskId: editingId }); li.remove(); } catch (err: any) { alert(err.message); }
+    });
+    li.append(icon, nameEl, size, rm);
+    ul.appendChild(li);
+  }
+  async function loadTaskFiles(taskId: string) {
+    const ul = $("ed-files"); if (ul) ul.innerHTML = "";
+    try { const res = await api({ action: "files", taskId }); (res.files || []).forEach(addFileRow); } catch { /* leave empty */ }
+  }
+  $("ed-upload")?.addEventListener("click", async () => {
+    if (!editingId) return;
+    const input = $("ed-file-input") as HTMLInputElement | null;
+    const status = $("ed-upload-status");
+    const file = input?.files?.[0];
+    if (!file) { alert("Choose a file to upload."); return; }
+    if (status) status.textContent = "Uploading…";
+    try {
+      const fd = new FormData();
+      fd.append("taskId", editingId);
+      fd.append("file", file);
+      const r = await fetch("/api/pos/task-upload", { method: "POST", body: fd });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) throw new Error(j.error || "Upload failed");
+      addFileRow(j.file);
+      if (input) input.value = "";
+      if (status) status.textContent = "Uploaded ✓";
+      setTimeout(() => { if (status) status.textContent = ""; }, 2500);
+    } catch (err: any) {
+      if (status) status.textContent = "";
+      alert(err.message);
+    }
   });
 </script>
