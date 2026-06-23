@@ -193,12 +193,17 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     <label class="set-row set-toggle">
       <input type="checkbox" id="menu-enabled" checked={menuEnabled} />
       <span><strong>Enable the Menu in the POS</strong><br />
-        <span class="muted">Shows the “Menu” builder at the top of the sidebar (managers only). Turn off for a retail-only setup.</span></span>
+        <span class="muted">Shows the “Menu” at the top of the sidebar (managers only), store-wide. Turn off for a retail-only setup.</span></span>
     </label>
     <div class="set-actions">
       <button id="menu-save" class="btn btn-primary">Save</button>
       <span id="menu-status" class="muted"></span>
     </div>
+    <label class="set-row set-toggle" style="margin-top:0.6rem;">
+      <input type="checkbox" id="menu-primary" />
+      <span><strong>Make Menu the primary view on this device</strong><br />
+        <span class="muted">This computer only — saves instantly. Expands the menu sections under “Menu” in the sidebar by default (e.g. set this on the bar POS).</span></span>
+    </label>
   </div>
 
   <div class="pos-panel set-panel" style="margin-top:1.25rem;">
@@ -354,6 +359,15 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   document.getElementById("menu-save")!.addEventListener("click", (e) => save({
     menuEnabled: ($("menu-enabled") as HTMLInputElement).checked,
   }, document.getElementById("menu-status")!, e.currentTarget as HTMLButtonElement));
+
+  // Per-device "Menu primary" — localStorage only, applies on next page load.
+  const menuPrimary = $("menu-primary") as HTMLInputElement | null;
+  if (menuPrimary) {
+    try { menuPrimary.checked = localStorage.getItem("tl-menu-primary") === "1"; } catch {}
+    menuPrimary.addEventListener("change", () => {
+      try { localStorage.setItem("tl-menu-primary", menuPrimary.checked ? "1" : "0"); localStorage.removeItem("tl-menu-open"); } catch {}
+    });
+  }
 
   document.getElementById("ai-save")!.addEventListener("click", (e) => save({
     aiProvider: (document.getElementById("ai-provider") as HTMLSelectElement).value,

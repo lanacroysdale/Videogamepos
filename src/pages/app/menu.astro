@@ -86,7 +86,7 @@ const clientData = {
         ) : (
           <>
             {renderSections.map((sec: any) => (
-              <section class="menu-section" data-secname={(sec ? sec.name : "Unsectioned").toLowerCase()}>
+              <section class="menu-section" id={sec ? `sec-${sec.id}` : "sec-none"} data-secname={(sec ? sec.name : "Unsectioned").toLowerCase()}>
                 <div class="menu-sec-head">
                   <h2>{sec ? sec.name : "Unsectioned"}
                     <span class="sec-count">{(itemsBySection.get(sec ? sec.id : null) ?? []).length}</span>
@@ -313,6 +313,12 @@ const clientData = {
       $("tab-mods")!.hidden = tab !== "mods";
     });
   });
+
+  // ---- Jump to a section from the sidebar sub-nav (?s=<sectionId>) ----
+  try {
+    const sid = new URLSearchParams(location.search).get("s");
+    if (sid) { const el = document.getElementById("sec-" + sid); if (el) el.scrollIntoView({ block: "start", behavior: "smooth" }); }
+  } catch {}
 
   // ---- Photos toggle (per device, localStorage) ----
   const tabItems = $("tab-items");

@@ -19,13 +19,17 @@ const isManager = !!profile && ["owner", "manager"].includes(profile.role);
 // The F&B Menu is opt-in per store (Settings → Food & Bev). Off by default so a
 // retail-only license doesn't show it; this store enables it.
 let menuEnabled = false;
+let menuSections: { id: string; name: string }[] = [];
 if (isManager) {
   const { data: ss } = await Astro.locals.supabase.from("store_settings").select("settings").eq("id", 1).maybeSingle();
   menuEnabled = (ss?.settings as any)?.menuEnabled === true;
+  if (menuEnabled) {
+    const { data: secs } = await Astro.locals.supabase.from("menu_sections").select("id, name").eq("is_active", true).order("sort_order").order("name");
+    menuSections = secs ?? [];
+  }
 }
 
 const nav = [
-  ...(isManager && menuEnabled ? [{ key: "menu", label: "Menu", href: "/app/menu", icon: "🍔" }] : []),
   { key: "dashboard", label: "Dashboard", href: "/app", icon: "🏠" },
   { key: "leads", label: "Leads", href: "/app/leads", icon: "📥" },
   { key: "checkout", label: "Checkout", href: "/app/checkout", icon: "🧾" },
@@ -61,6 +65,25 @@ const nav = [
       <aside class="app-side">
         <a href="/app" class="app-brand"><span class="app-brand-ico">🎮</span> Time&nbsp;Lag <span>POS</span></a>
         <nav class="app-nav">
+          {isManager && menuEnabled && (
+            <div class="nav-menu" id="nav-menu">
+              <div class="nav-menu-head">
+                <a href="/app/menu" class:list={["nav-menu-link", { active: active === "menu" }]}>
+                  <span class="ico" aria-hidden="true">🍔</span><span class="label">Menu</span>
+                </a>
+                {menuSections.length > 0 && (
+                  <button class="nav-menu-caret" id="nav-menu-caret" type="button" aria-label="Show menu sections">▾</button>
+                )}
+              </div>
+              {menuSections.length > 0 && (
+                <ul class="nav-subnav" id="nav-subnav">
+                  {menuSections.map((s) => (
+                    <li><a href={`/app/menu?s=${s.id}`}><span class="label">{s.name}</span></a></li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
           {
             nav.map((item) => (
               <a href={item.href} class={active === item.key ? "active" : ""}>
@@ -74,6 +97,22 @@ const nav = [
             ))
           }
         </nav>
+        <script is:inline>
+          // Menu sub-nav open state, per device. Default-open when this device has
+          // Menu set as its primary mode (Settings → Food & Beverage); the caret
+          // overrides + remembers. Runs inline to avoid a flash.
+          (function () {
+            var wrap = document.getElementById("nav-menu");
+            var caret = document.getElementById("nav-menu-caret");
+            if (!wrap || !caret) return;
+            var g = function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } };
+            var s = function (k, v) { try { localStorage.setItem(k, v); } catch (e) {} };
+            var pref = g("tl-menu-open");
+            var open = pref === null ? g("tl-menu-primary") === "1" : pref === "1";
+            wrap.classList.toggle("open", open);
+            caret.addEventListener("click", function () { open = !open; s("tl-menu-open", open ? "1" : "0"); wrap.classList.toggle("open", open); });
+          })();
+        </script>
         <div class="app-user">
           <div class="who">{profile?.full_name ?? "—"}</div>
           <div class="role">{profile?.role ?? ""}</div>
@@ -104,6 +143,14 @@ const nav = [
 
     <style>
       .app-nav a { display: flex; align-items: center; }
+      .nav-menu-head { display: flex; align-items: center; }
+      .nav-menu-head .nav-menu-link { flex: 1; min-width: 0; }
+      .nav-menu-caret { flex: none; background: none; border: none; color: var(--sb-ink-dim); cursor: pointer; padding: 0.5rem 0.7rem; font-size: 0.7rem; line-height: 1; transition: transform .15s; }
+      .nav-menu.open .nav-menu-caret { transform: rotate(180deg); }
+      .nav-subnav { list-style: none; margin: 0; padding: 0; max-height: 0; overflow: hidden; transition: max-height .22s ease; }
+      .nav-menu.open .nav-subnav { max-height: 55vh; overflow-y: auto; margin-bottom: 0.25rem; }
+      .nav-subnav a { padding: 0.28rem 0.7rem 0.28rem 2.6rem; font-size: 0.84rem; color: var(--sb-ink-dim); }
+      .nav-subnav a:hover { color: var(--sb-ink); background: rgba(127,127,127,0.12); }
       .nav-badge {
         margin-left: auto;
         min-width: 1.5em;
