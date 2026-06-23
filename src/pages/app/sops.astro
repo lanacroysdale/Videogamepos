@@ -595,7 +595,7 @@ const fileIcon = (mime: string | null) => {
     document.querySelectorAll<HTMLElement>("#ed-links-list .ed-link-row").forEach((row) => {
       const url = (row.querySelector<HTMLInputElement>(".ed-link-url")?.value || "").trim();
       const title = (row.querySelector<HTMLInputElement>(".ed-link-title")?.value || "").trim();
-      if (/^https?:\/\//i.test(url)) out.push({ title: title || url, url });
+      if (url) out.push({ title, url }); // server validates + prepends https:// for bare domains
     });
     return out;
   }

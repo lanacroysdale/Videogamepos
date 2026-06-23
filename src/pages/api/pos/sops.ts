@@ -28,13 +28,24 @@ export const POST: APIRoute = async ({ locals, request }) => {
   // rows have no approved_at field at all → treat as visible (old behavior).
   const everApproved = (s: any) => !("approved_at" in s) || s.approved_at != null;
 
-  // Validate documentation links: http/https only, titled, capped.
+  // Normalize a link URL: keep http(s) as-is, reject unsafe schemes, and assume
+  // https:// for a bare domain (so "ifixit.com" works without the scheme).
+  const normalizeUrl = (raw: any): string | null => {
+    const url = String(raw ?? "").trim();
+    if (!url) return null;
+    if (/^https?:\/\//i.test(url)) return url;
+    if (/^(javascript|data|vbscript|file|mailto):/i.test(url)) return null; // unsafe / non-web
+    if (/\s/.test(url)) return null;
+    if (/^[\w-]+(\.[\w-]+)+/.test(url)) return "https://" + url; // bare domain → https
+    return null;
+  };
+  // Validate documentation links: web links only, titled, capped.
   const cleanLinks = (raw: any): { title: string; url: string }[] => {
     if (!Array.isArray(raw)) return [];
     const out: { title: string; url: string }[] = [];
     for (const l of raw.slice(0, 30)) {
-      const url = String(l?.url ?? "").trim();
-      if (!/^https?:\/\//i.test(url)) continue; // only real web links
+      const url = normalizeUrl(l?.url);
+      if (!url) continue;
       out.push({ title: (String(l?.title ?? "").trim() || url).slice(0, 200), url: url.slice(0, 2000) });
     }
     return out;
