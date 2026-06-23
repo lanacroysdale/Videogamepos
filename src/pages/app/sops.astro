@@ -346,6 +346,9 @@ const fileIcon = (mime: string | null) => {
   .md-toolbar button:hover { border-color: var(--cyan); color: var(--cyan); }
   .md-sep { width: 1px; height: 1.1rem; background: var(--border-strong); margin: 0 0.2rem; }
 
+  /* The hidden attribute must win over the display rules below (.sop-editor is
+     display:grid, .ed-upload is flex) — otherwise the editor shows in view mode. */
+  [hidden] { display: none !important; }
   .sop-editor { display: grid; gap: 0.8rem; }
   .ed-row { display: flex; gap: 0.8rem; flex-wrap: wrap; }
   .ed-field { display: grid; gap: 0.3rem; font-size: 0.85rem; font-weight: 600; }
