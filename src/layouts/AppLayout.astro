@@ -60,6 +60,7 @@ const nav = [
                 {item.key === "leads" && <span class="nav-badge" id="leads-badge" hidden>0</span>}
                 {item.key === "inventory" && <span class="nav-badge warn" id="inv-badge" title="Listings needing images or data" hidden>0</span>}
                 {item.key === "todos" && <span class="nav-badge open" id="todos-badge" title="Open tasks" hidden>0</span>}
+                {item.key === "sops" && <span class="nav-badge" id="sops-badge" title="SOPs pending your approval" hidden>0</span>}
               </a>
             ))
           }
@@ -67,7 +68,7 @@ const nav = [
         <div class="app-user">
           <div class="who">{profile?.full_name ?? "—"}</div>
           <div class="role">{profile?.role ?? ""}</div>
-          <button id="alerts-btn" class="btn btn-ghost btn-sm" type="button">🔔 Enable alerts</button>
+          <button id="alerts-btn" class="btn btn-ghost btn-sm" type="button" style="display:none">🔔 Enable alerts</button>
           <div class="app-user-actions">
             <form method="POST" action="/app/logout" class="logout-form">
               <button class="btn btn-ghost btn-sm" type="submit">Log out</button>
@@ -128,9 +129,12 @@ const nav = [
 
         function syncBtn() {
           if (!alertsBtn) return;
-          if (!("Notification" in window)) { alertsBtn.style.display = "none"; return; }
+          // Blocked or unsupported → hide it entirely (a dead "Alerts blocked"
+          // button is pointless; the nav badges are the in-app inbox). Only show
+          // it when it's actionable (Enable) or informative (On).
+          if (!("Notification" in window) || Notification.permission === "denied") { alertsBtn.style.display = "none"; return; }
+          alertsBtn.style.display = "";
           if (Notification.permission === "granted") { alertsBtn.textContent = "🔔 Alerts on"; alertsBtn.disabled = true; }
-          else if (Notification.permission === "denied") { alertsBtn.textContent = "🔕 Alerts blocked"; alertsBtn.disabled = true; }
           else { alertsBtn.textContent = "🔔 Enable alerts"; alertsBtn.disabled = false; }
         }
         if (alertsBtn) {
@@ -194,6 +198,20 @@ const nav = [
             .catch(function () {});
         }
 
+        // SOPs awaiting the owner's approval (server returns 0 for non-owners).
+        var sopsBadge = document.getElementById("sops-badge");
+        function pollSops() {
+          if (!sopsBadge) return;
+          fetch("/api/pos/sops", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "pending-count" }) })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (j) {
+              if (!j || !j.ok) return;
+              if (j.count > 0) { sopsBadge.textContent = String(j.count); sopsBadge.hidden = false; }
+              else { sopsBadge.hidden = true; }
+            })
+            .catch(function () {});
+        }
+
         function poll() {
           fetch("/api/pos/leads?since=" + seen(), { headers: { "x-requested-with": "fetch" } })
             .then(function (r) { return r.ok ? r.json() : null; })
@@ -209,6 +227,7 @@ const nav = [
             .catch(function () {});
           pollInventoryHealth();
           pollTasks();
+          pollSops();
         }
 
         poll();

@@ -9,21 +9,25 @@ import { renderMarkdown } from "../../lib/markdown";
 const profile = Astro.locals.profile;
 if (!profile) return Astro.redirect("/app/login");
 const isManager = ["owner", "manager"].includes(profile.role);
+const isOwner = profile.role === "owner";
 
 const admin = createSupabaseAdminClient();
 const BUCKET = "documents";
 
 // --- SOP list (degrades to an empty "run the migration" state) ---
+// select("*") so the approval columns being absent (pre-migration) doesn't error.
 let needsMigration = false;
 let sops: any[] = [];
 const { data: sopRows, error: sopErr } = await admin
   .from("sops")
-  .select("id, title, category, pinned, updated_at, updated_by")
+  .select("*")
   .order("pinned", { ascending: false })
   .order("category", { ascending: true })
   .order("title", { ascending: true });
 if (sopErr) needsMigration = true;
-else sops = sopRows ?? [];
+// Cashiers only see SOPs that have been approved at least once; managers see all.
+else sops = (sopRows ?? []).filter((s: any) => isManager || !("approved_at" in s) || s.approved_at != null);
+const pendingCount = sops.filter((s: any) => s.status === "pending").length;
 
 // File counts per SOP (for the list badge).
 const fileCounts = new Map<string, number>();
@@ -32,9 +36,9 @@ if (!needsMigration) {
   (files ?? []).forEach((f: any) => fileCounts.set(f.sop_id, (fileCounts.get(f.sop_id) ?? 0) + 1));
 }
 
-// Author display names.
+// Author / editor / approver display names.
 const nameMap = new Map<string, string>();
-const ids = [...new Set(sops.map((s) => s.updated_by).filter(Boolean))] as string[];
+const ids = [...new Set(sops.flatMap((s) => [s.updated_by, s.created_by, s.approved_by]).filter(Boolean))] as string[];
 if (ids.length) {
   const { data: profs } = await admin.from("profiles").select("id, full_name").in("id", ids);
   (profs ?? []).forEach((p: any) => nameMap.set(p.id, p.full_name));
@@ -92,6 +96,9 @@ const fileIcon = (mime: string | null) => {
 
 <AppLayout title="SOPs" active="sops">
   <div slot="actions">
+    {isOwner && pendingCount > 0 && (
+      <span class="sop-pending-count" title="SOPs awaiting your approval">⏳ {pendingCount} pending approval</span>
+    )}
     {isManager && !needsMigration && (
       <button id="sop-new" class="btn btn-primary btn-sm" type="button">+ New SOP</button>
     )}
@@ -137,6 +144,9 @@ const fileIcon = (mime: string | null) => {
                   >
                     {s.pinned && <span class="pin" title="Pinned">📌</span>}
                     <span class="sop-link-title">{s.title}</span>
+                    {isManager && s.status === "pending" && (
+                      <span class="sop-pending" title="Pending approval">⏳</span>
+                    )}
                     {(fileCounts.get(s.id) ?? 0) > 0 && (
                       <span class="sop-files-n" title="Attachments">📎{fileCounts.get(s.id)}</span>
                     )}
@@ -174,15 +184,24 @@ const fileIcon = (mime: string | null) => {
                 <div class="sop-crumb">
                   <span class="pill muted">{selected.category}</span>
                   {selected.pinned && <span class="pill cyan">📌 Pinned</span>}
+                  {selected.status === "pending"
+                    ? <span class="pill magenta">⏳ Pending approval</span>
+                    : ("status" in selected) && <span class="pill green">✓ Approved</span>}
                 </div>
                 <h2 class="sop-title">{selected.title}</h2>
                 <p class="muted-2 sop-meta">
+                  {selected.created_by && nameMap.get(selected.created_by) ? `Written by ${nameMap.get(selected.created_by)} · ` : ""}
                   Updated {fmtDate(selected.updated_at)}
                   {selected.updated_by && nameMap.get(selected.updated_by) ? ` by ${nameMap.get(selected.updated_by)}` : ""}
+                  {selected.status !== "pending" && selected.approved_by && nameMap.get(selected.approved_by)
+                    ? ` · approved by ${nameMap.get(selected.approved_by)}` : ""}
                 </p>
               </div>
               {isManager && (
                 <div class="sop-tools">
+                  {isOwner && selected.status === "pending" && (
+                    <button id="sop-approve" class="btn btn-primary btn-sm" type="button">✓ Approve</button>
+                  )}
                   <button id="sop-pin" class="btn btn-ghost btn-sm" type="button">
                     {selected.pinned ? "Unpin" : "Pin"}
                   </button>
@@ -319,6 +338,8 @@ const fileIcon = (mime: string | null) => {
   .sop-link-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sop-link .pin { font-size: 0.78rem; }
   .sop-files-n { font-size: 0.72rem; color: var(--muted-2); white-space: nowrap; }
+  .sop-pending { font-size: 0.78rem; }
+  .sop-pending-count { font-size: 0.8rem; font-weight: 700; color: var(--magenta); padding: 0.25rem 0.6rem; border: 1px solid var(--magenta); margin-right: 0.5rem; white-space: nowrap; }
 
   .sop-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; margin-bottom: 0.8rem; }
   .sop-crumb { display: flex; gap: 0.4rem; margin-bottom: 0.4rem; }
@@ -565,6 +586,14 @@ const fileIcon = (mime: string | null) => {
     try {
       await api({ action: "delete", id: view.dataset.id });
       location.href = "/app/sops";
+    } catch (err: any) { alert(err.message); }
+  });
+
+  $("sop-approve")?.addEventListener("click", async () => {
+    if (!view) return;
+    try {
+      await api({ action: "approve", id: view.dataset.id });
+      location.reload();
     } catch (err: any) { alert(err.message); }
   });
 
