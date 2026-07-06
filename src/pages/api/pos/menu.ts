@@ -49,6 +49,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
       cost_cents: cents(b.cost),
       is_available: b.isAvailable === undefined ? true : !!b.isAvailable,
       online_orderable: b.onlineOrderable === undefined ? true : !!b.onlineOrderable,
+      station: ["bar", "kitchen"].includes(String(b.station)) ? String(b.station) : "bar",
       abv: b.abv === "" || b.abv == null || !Number.isFinite(Number(b.abv)) ? null : clamp(Number(b.abv), 0, 100),
       tags: Array.isArray(b.tags) ? b.tags.map((t: any) => String(t).trim()).filter(Boolean).slice(0, 20) : [],
       sort_order: int(b.sortOrder),

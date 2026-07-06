@@ -5,7 +5,7 @@ import AppLayout from "../../layouts/AppLayout.astro";
 import { createSupabaseAdminClient } from "../../lib/supabase";
 import { fmt } from "../../lib/money";
 import {
-  summarize, pctChange, bucketSeries, granularityFor, rollupBy, type Txn, type Item,
+  summarize, pctChange, bucketSeries, granularityFor, rollupBy, departmentOf, type Txn, type Item,
 } from "../../lib/reports";
 
 // Manager-gated (middleware already enforces it; explicit guard for defense-in-depth).
@@ -58,7 +58,7 @@ const allTxns = await fetchAll<Txn>(() => {
 const itemsRaw = await fetchAll<any>(() => {
   let qq = admin
     .from("transaction_items")
-    .select("transaction_id,variant_id,category_id,kind,description,qty,unit_price_cents,discount_cents,transactions!inner(status,completed_at)")
+    .select("transaction_id,variant_id,menu_item_id,category_id,department,kind,description,qty,unit_price_cents,discount_cents,transactions!inner(status,completed_at)")
     .eq("transactions.status", "completed")
     .order("transaction_id", { ascending: true });
   if (fetchStartISO) qq = qq.gte("transactions.completed_at", fetchStartISO);
@@ -74,6 +74,23 @@ for (let i = 0; i < variantIds.length; i += 300) {
   const { data } = await admin.from("product_variants").select("id,cost_cents").in("id", variantIds.slice(i, i + 300));
   (data ?? []).forEach((v: any) => costOf.set(v.id, v.cost_cents));
 }
+
+// F&B menu-line cost basis (pour/food cost) keyed by menu_item_id — the parallel
+// of variant cost, so Food & Beverage margin isn't reported as 100%.
+const menuItemIds = [...new Set(items.map((i) => i.menu_item_id).filter(Boolean))] as string[];
+const menuCostOf = new Map<string, number>();
+for (let i = 0; i < menuItemIds.length; i += 300) {
+  const { data } = await admin.from("menu_items").select("id,cost_cents").in("id", menuItemIds.slice(i, i + 300));
+  (data ?? []).forEach((m: any) => menuCostOf.set(m.id, m.cost_cents));
+}
+
+// Department labels/icons for the by-department split (falls back before the
+// departments migration runs).
+const { data: deptData } = await admin.from("store_departments").select("key,name,icon");
+const deptInfo = new Map<string, { name: string; icon: string | null }>((deptData ?? []).map((d: any) => [d.key, { name: d.name, icon: d.icon }]));
+const DEPT_FALLBACK: Record<string, string> = { retail: "Retail", food_bev: "Food & Beverage", arcade: "Arcade", service: "Service", other: "Other" };
+const deptLabel = (key: string) => deptInfo.get(key)?.name ?? DEPT_FALLBACK[key] ?? key;
+const deptIcon = (key: string) => deptInfo.get(key)?.icon ?? "";
 const { data: catData } = await admin.from("categories").select("id,name");
 const catName = new Map<string, string>((catData ?? []).map((c: any) => [c.id, c.name]));
 const empIds = [...new Set(allTxns.map((t) => t.employee_id).filter(Boolean))] as string[];
@@ -92,8 +109,8 @@ const prevIds = new Set(prevTxns.map((t) => t.id));
 const curItems = items.filter((i) => curIds.has(i.transaction_id));
 const prevItems = items.filter((i) => prevIds.has(i.transaction_id));
 
-const cur = summarize(curTxns, curItems, costOf);
-const prev = summarize(prevTxns, prevItems, costOf);
+const cur = summarize(curTxns, curItems, costOf, menuCostOf);
+const prev = summarize(prevTxns, prevItems, costOf, menuCostOf);
 const hasPrev = prevTxns.length > 0;
 
 // Trend series.
@@ -112,6 +129,13 @@ const catRows = [...rollupBy(curItems, (it) => it.category_id, costOf).entries()
   .map(([id, v]) => ({ name: id === "—" ? "—" : catName.get(id) ?? "—", ...v }))
   .sort((a, b) => b.net - a.net);
 const maxCat = Math.max(1, ...catRows.map((r) => r.net));
+
+// The business-department split (Retail vs Food & Beverage vs Arcade) — the
+// headline barcade-vs-retail breakdown the department tag drives.
+const deptRows = [...rollupBy(curItems, departmentOf, costOf, menuCostOf).entries()]
+  .map(([key, v]) => ({ key, name: deptLabel(key), icon: deptIcon(key), ...v }))
+  .sort((a, b) => b.net - a.net);
+const maxDept = Math.max(1, ...deptRows.map((r) => r.net));
 
 const empAgg = rollupBy(curItems, (it) => txnById.get(it.transaction_id)?.employee_id ?? null);
 const empTxnCount = new Map<string, Set<string>>();
@@ -196,6 +220,8 @@ const csv =
   `Margin %,${cur.marginPct.toFixed(1)}\nTransactions,${cur.txnCount}\nUnits sold,${cur.unitsSold}\n` +
   `Avg order,${d2(cur.avgOrder)}\nTrade-in payout,${d2(cur.tradeInPayout)}\n\n` +
   `Net sales by ${gran}\nPeriod,Net\n` + series.map((b) => `${cEsc(b.label)},${d2(b.net)}`).join("\n") +
+  `\n\nBy department\nDepartment,Net,Units,Margin %\n` +
+  deptRows.map((r) => `${cEsc(r.name)},${d2(r.net)},${r.units},${marginOf(r) ?? ""}`).join("\n") +
   `\n\nBy category\nCategory,Net,Units,Margin %\n` +
   catRows.map((r) => `${cEsc(r.name)},${d2(r.net)},${r.units},${marginOf(r) ?? ""}`).join("\n") +
   `\n\nBy employee\nEmployee,Net,Transactions\n` +
@@ -229,6 +255,18 @@ const gaTraffic = false; // GA Data API not wired yet — see panel below.
             <span class="n">{c.n}</span>
             <span class="l">{c.l}</span>
             {c.d && <span class:list={["delta", c.d.up ? "up" : "down"]}>{c.d.up ? "▲" : "▼"} {c.d.txt}</span>}
+          </div>
+        ))}
+      </div>
+
+      {/* ---- By department (the business split) ---- */}
+      <div class="pos-panel rep-block">
+        <h2>By department <span class="sub">— Retail vs Food &amp; Beverage vs Arcade</span></h2>
+        {deptRows.length === 0 ? <p class="empty">No data.</p> : deptRows.map((r) => (
+          <div class="hbar-row">
+            <span>{r.icon} {r.name} <span class="pill muted">{marginTxt(r)}</span> <span class="muted-2" style="font-size:0.78rem;">{r.units}u</span></span>
+            <div class="hbar-track"><div class="hbar-fill" style={`width:${Math.round((r.net / maxDept) * 100)}%`}></div></div>
+            <span class="num">{fmt(r.net)}</span>
           </div>
         ))}
       </div>

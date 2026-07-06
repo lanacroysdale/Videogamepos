@@ -51,7 +51,7 @@ const clientData = {
   groups: groups.map((g: any) => ({ id: g.id, name: g.name, minSelect: g.min_select, maxSelect: g.max_select,
     options: (optsByGroup.get(g.id) ?? []).map((o: any) => ({ name: o.name, priceDelta: o.price_delta_cents / 100, isDefault: o.is_default, isAvailable: o.is_available })) })),
   items: items.map((i: any) => ({ id: i.id, sectionId: i.section_id, name: i.name, description: i.description ?? "", imageUrl: i.image_url ?? "",
-    basePrice: i.base_price_cents / 100, cost: i.cost_cents / 100, isAvailable: i.is_available, onlineOrderable: i.online_orderable, abv: i.abv,
+    basePrice: i.base_price_cents / 100, cost: i.cost_cents / 100, isAvailable: i.is_available, onlineOrderable: i.online_orderable, station: i.station ?? "bar", abv: i.abv,
     sizes: (sizesByItem.get(i.id) ?? []).map((s: any) => ({ label: s.label, price: s.price_cents / 100, isDefault: s.is_default, isAvailable: s.is_available })),
     groupIds: groupIdsByItem.get(i.id) ?? [] })),
 };
@@ -109,6 +109,7 @@ const clientData = {
                         <span class="mt-foot">
                           <span class="mt-price">{priceLabel(it)}</span>
                           <span class="mt-tags">
+                            <span class:list={["pill", it.station === "kitchen" ? "magenta" : "cyan"]} title={it.station === "kitchen" ? "Routes to the kitchen" : "Routes to the bar"}>{it.station === "kitchen" ? "🍳" : "🍺"}</span>
                             {!it.online_orderable && <span class="pill muted" title="Not on the online/QR menu">in-house</span>}
                             {(groupIdsByItem.get(it.id) ?? []).map((g) => <span class="pill cyan">{groupName.get(g)}</span>)}
                           </span>
@@ -151,6 +152,7 @@ const clientData = {
           <div class="mm-grid">
             <label class="mm-field grow">Name<input id="im-name" autocomplete="off" /></label>
             <label class="mm-field">Section<select id="im-section"><option value="">—</option>{sections.map((s: any) => <option value={s.id}>{s.name}</option>)}</select></label>
+            <label class="mm-field">Station<select id="im-station"><option value="bar">🍺 Bar</option><option value="kitchen">🍳 Kitchen</option></select></label>
           </div>
           <div class="mm-image">
             <img id="im-img-preview" class="mm-img-preview" alt="" hidden />
@@ -403,6 +405,7 @@ const clientData = {
     ($("im-id") as HTMLInputElement).value = it?.id || "";
     ($("im-name") as HTMLInputElement).value = it?.name || "";
     ($("im-section") as HTMLSelectElement).value = it?.sectionId || "";
+    ($("im-station") as HTMLSelectElement).value = it?.station || "bar";
     ($("im-desc") as HTMLTextAreaElement).value = it?.description || "";
     ($("im-price") as HTMLInputElement).value = it ? String(it.basePrice) : "";
     ($("im-cost") as HTMLInputElement).value = it ? String(it.cost) : "";
@@ -463,7 +466,8 @@ const clientData = {
     $("im-status")!.textContent = "Saving…";
     try {
       await api({ action: "item-save", id: ($("im-id") as HTMLInputElement).value || undefined,
-        sectionId: ($("im-section") as HTMLSelectElement).value || null, name,
+        sectionId: ($("im-section") as HTMLSelectElement).value || null,
+        station: ($("im-station") as HTMLSelectElement).value, name,
         description: ($("im-desc") as HTMLTextAreaElement).value,
         basePrice: ($("im-price") as HTMLInputElement).value, cost: ($("im-cost") as HTMLInputElement).value,
         abv: ($("im-abv") as HTMLInputElement).value, imageUrl: ($("im-img-url") as HTMLInputElement).value,

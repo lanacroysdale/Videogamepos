@@ -23,7 +23,9 @@ export type Txn = {
 export type Item = {
   transaction_id: string;
   variant_id: string | null;
+  menu_item_id: string | null;
   category_id: string | null;
+  department: string | null; // snapshot dept key: 'retail'|'food_bev'|'arcade'|'other'
   kind: string;
   description: string;
   qty: number;
@@ -52,7 +54,7 @@ export type Summary = {
 const lineNet = (it: Item) => it.unit_price_cents * it.qty - it.discount_cents;
 
 // Roll a set of transactions + their line items into the headline summary.
-export function summarize(txns: Txn[], items: Item[], costOf: Map<string, number>): Summary {
+export function summarize(txns: Txn[], items: Item[], costOf: Map<string, number>, menuCostOf?: Map<string, number>): Summary {
   const txById = new Map(txns.map((t) => [t.id, t]));
   const saleTxnIds = new Set<string>();
   const tradeTxnIds = new Set<string>();
@@ -67,9 +69,10 @@ export function summarize(txns: Txn[], items: Item[], costOf: Map<string, number
       discounts += it.discount_cents;
       saleTxnIds.add(it.transaction_id);
       if (it.kind === "sale") unitsSold += it.qty;
-      // COGS only for stocked goods (a variant). Services have no cost of goods.
-      if (it.variant_id) {
-        const c = costOf.get(it.variant_id) ?? 0;
+      // COGS for stocked goods (variant cost) and F&B menu lines (pour/food cost).
+      // Services + custom lines have no cost basis.
+      if (it.variant_id || (it.menu_item_id && menuCostOf)) {
+        const c = it.variant_id ? (costOf.get(it.variant_id) ?? 0) : (menuCostOf!.get(it.menu_item_id!) ?? 0);
         if (c > 0) { cogs += c * it.qty; costKnownUnits += it.qty; }
         else costUnknownUnits += it.qty;
       }
@@ -77,8 +80,8 @@ export function summarize(txns: Txn[], items: Item[], costOf: Map<string, number
       returns += lineNet(it);
       // Reverse the returned unit's COGS so a same-period sale+return nets to ~0
       // profit (return items carry the original variant_id).
-      if (it.variant_id) {
-        const c = costOf.get(it.variant_id) ?? 0;
+      if (it.variant_id || (it.menu_item_id && menuCostOf)) {
+        const c = it.variant_id ? (costOf.get(it.variant_id) ?? 0) : (menuCostOf!.get(it.menu_item_id!) ?? 0);
         if (c > 0) { cogs -= c * it.qty; costKnownUnits -= it.qty; }
         else costUnknownUnits -= it.qty; // mirror the sale branch so coverage nets out
       }
@@ -197,6 +200,7 @@ export function rollupBy(
   items: Item[],
   keyOf: (it: Item) => string | null,
   costOf?: Map<string, number>,
+  menuCostOf?: Map<string, number>,
 ): Map<string, { net: number; units: number; cogs: number }> {
   const m = new Map<string, { net: number; units: number; cogs: number }>();
   for (const it of items) {
@@ -206,7 +210,17 @@ export function rollupBy(
     cur.net += lineNet(it);
     cur.units += it.qty;
     if (costOf && it.variant_id) cur.cogs += (costOf.get(it.variant_id) ?? 0) * it.qty;
+    else if (menuCostOf && it.menu_item_id) cur.cogs += (menuCostOf.get(it.menu_item_id) ?? 0) * it.qty;
     m.set(k, cur);
   }
   return m;
+}
+
+// The business-department key for a sold line: the stamped snapshot if present,
+// else derived from line shape (menu line → F&B, variant → retail).
+export function departmentOf(it: Item): string {
+  if (it.department) return it.department;
+  if (it.menu_item_id) return "food_bev";
+  if (it.variant_id) return "retail";
+  return "other";
 }

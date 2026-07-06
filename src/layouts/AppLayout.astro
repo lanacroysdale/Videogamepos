@@ -9,21 +9,28 @@ interface Props {
   title: string;
   active?:
     | "dashboard" | "leads" | "checkout" | "tradein" | "inventory" | "returns"
-    | "repairs" | "schedule" | "customers" | "reports" | "pricing" | "settings" | "todos" | "sops" | "menu";
+    | "repairs" | "schedule" | "customers" | "reports" | "pricing" | "settings" | "todos" | "sops" | "menu" | "tabs";
 }
 const { title, active } = Astro.props;
 
 const profile = Astro.locals.profile;
 const isManager = !!profile && ["owner", "manager"].includes(profile.role);
 
-// The F&B Menu is opt-in per store (Settings → Food & Bev). Off by default so a
-// retail-only license doesn't show it; this store enables it.
-let menuEnabled = false;
+// F&B features (Menu builder + Tabs) gate on the Food & Beverage *department*
+// being enabled (Settings → Departments) — the department list is the spine.
+// Falls back to the legacy settings.menuEnabled flag until the departments
+// migration runs. Off by default so a retail-only license shows neither.
+let fnbEnabled = false;
 let menuSections: { id: string; name: string }[] = [];
-if (isManager) {
-  const { data: ss } = await Astro.locals.supabase.from("store_settings").select("settings").eq("id", 1).maybeSingle();
-  menuEnabled = (ss?.settings as any)?.menuEnabled === true;
-  if (menuEnabled) {
+{
+  const { data: dept } = await Astro.locals.supabase.from("store_departments").select("is_enabled").eq("key", "food_bev").maybeSingle();
+  if (dept) {
+    fnbEnabled = dept.is_enabled === true;
+  } else {
+    const { data: ss } = await Astro.locals.supabase.from("store_settings").select("settings").eq("id", 1).maybeSingle();
+    fnbEnabled = (ss?.settings as any)?.menuEnabled === true;
+  }
+  if (isManager && fnbEnabled) {
     const { data: secs } = await Astro.locals.supabase.from("menu_sections").select("id, name").eq("is_active", true).order("sort_order").order("name");
     menuSections = secs ?? [];
   }
@@ -33,6 +40,7 @@ const nav = [
   { key: "dashboard", label: "Dashboard", href: "/app", icon: "🏠" },
   { key: "leads", label: "Leads", href: "/app/leads", icon: "📥" },
   { key: "checkout", label: "Checkout", href: "/app/checkout", icon: "🧾" },
+  ...(fnbEnabled ? [{ key: "tabs", label: "Tabs", href: "/app/tabs", icon: "🍻" }] : []),
   { key: "tradein", label: "Trade-In", href: "/app/trade-in", icon: "🔁" },
   { key: "returns", label: "Returns", href: "/app/returns", icon: "↩️" },
   { key: "inventory", label: "Inventory", href: "/app/inventory", icon: "📦" },
@@ -65,7 +73,7 @@ const nav = [
       <aside class="app-side">
         <a href="/app" class="app-brand"><span class="app-brand-ico">🎮</span> Time&nbsp;Lag <span>POS</span></a>
         <nav class="app-nav">
-          {isManager && menuEnabled && (
+          {isManager && fnbEnabled && (
             <div class="nav-menu" id="nav-menu">
               <div class="nav-menu-head">
                 <a href="/app/menu" class:list={["nav-menu-link", { active: active === "menu" }]}>

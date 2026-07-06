@@ -1,0 +1,453 @@
+---
+export const prerender = false;
+import AppLayout from "../../layouts/AppLayout.astro";
+import { barSettings } from "../../lib/barSettings";
+
+// Tab Management — open / add-to / settle / close bar tabs. Staff-accessible
+// (tabs are shared via RLS); middleware already guaranteed auth. A tab is a
+// long-lived is_tab=true, status='open' transaction on the existing ledger.
+const supabase = Astro.locals.supabase;
+const profile = Astro.locals.profile;
+const isManager = ["owner", "manager"].includes(profile?.role ?? "");
+
+// Tabs require the Food & Beverage department to be enabled.
+let fnbEnabled = false;
+let needsMigration = false;
+{
+  const { data: dept, error } = await supabase.from("store_departments").select("is_enabled").eq("key", "food_bev").maybeSingle();
+  if (error) needsMigration = true;
+  else fnbEnabled = dept?.is_enabled === true;
+}
+
+const { data: ssRow } = await supabase.from("store_settings").select("store_name, settings").eq("id", 1).maybeSingle();
+const storeName = (ssRow as any)?.store_name || "Time Lag";
+const bar = barSettings((ssRow as any)?.settings);
+
+const push = <T,>(m: Map<any, T[]>, k: any, v: T) => { if (!m.has(k)) m.set(k, []); m.get(k)!.push(v); };
+
+let menuData: any = { sections: [], items: [] };
+let openTabs: any[] = [];
+if (fnbEnabled && !needsMigration) {
+  const [{ data: secs }, { data: its }, { data: szs }, { data: lnks }, { data: grps }, { data: opts }, { data: tabs }] = await Promise.all([
+    supabase.from("menu_sections").select("id, name, sort_order").eq("is_active", true).order("sort_order").order("name"),
+    supabase.from("menu_items").select("*").eq("is_available", true).order("sort_order").order("name"),
+    supabase.from("menu_item_sizes").select("*").order("sort_order"),
+    supabase.from("menu_item_modifier_groups").select("*").order("sort_order"),
+    supabase.from("menu_modifier_groups").select("*").order("sort_order").order("name"),
+    supabase.from("menu_modifier_options").select("*").order("sort_order"),
+    supabase
+      .from("transactions")
+      .select("id, human_id, tab_name, table_label, tab_opened_at, total_cents, transaction_items(id, description, qty, unit_price_cents, discount_cents, menu_item_id, variant_id, size_label, station)")
+      .eq("is_tab", true).eq("status", "open").order("tab_opened_at", { ascending: true }),
+  ]);
+
+  const groupsById = new Map((grps ?? []).map((g: any) => [g.id, g]));
+  const optsByGroup = new Map<string, any[]>(); for (const o of opts ?? []) push(optsByGroup, o.group_id, o);
+  const sizesByItem = new Map<string, any[]>(); for (const s of szs ?? []) push(sizesByItem, s.menu_item_id, s);
+  const groupIdsByItem = new Map<string, string[]>(); for (const l of lnks ?? []) push(groupIdsByItem, l.menu_item_id, l.group_id);
+
+  const menuItems = (its ?? []).map((it: any) => ({
+    ...it,
+    sizes: sizesByItem.get(it.id) ?? [],
+    groups: (groupIdsByItem.get(it.id) ?? [])
+      .map((gid) => { const g = groupsById.get(gid); return g ? { ...g, options: optsByGroup.get(gid) ?? [] } : null; })
+      .filter(Boolean),
+  }));
+  menuData = { sections: (secs ?? []).map((s: any) => ({ id: s.id, name: s.name })), items: menuItems };
+  openTabs = tabs ?? [];
+}
+---
+
+<AppLayout title="Tabs" active="tabs">
+  {isManager && fnbEnabled && !needsMigration && (
+    <div slot="actions">
+      <button id="close-all" class="btn btn-ghost btn-sm" type="button" title="Settle every open tab to card with auto-gratuity">🌙 Close out all</button>
+    </div>
+  )}
+
+  {needsMigration ? (
+    <div class="pos-panel">
+      <h2>Set up tabs</h2>
+      <p class="muted" style="margin-top:0.6rem;">Run <code>supabase/migrations/20260623000005_departments_tabs.sql</code> in the Supabase SQL editor, then refresh.</p>
+    </div>
+  ) : !fnbEnabled ? (
+    <div class="pos-panel">
+      <h2>Food &amp; Beverage is off</h2>
+      <p class="muted" style="margin-top:0.6rem;">Enable the <strong>Food &amp; Beverage</strong> department in <a href="/app/settings">Settings → Departments</a> to use bar tabs.</p>
+    </div>
+  ) : (
+    <div class="tabs-shell">
+      <aside class="tabs-rail">
+        <div class="tabs-rail-head">
+          <button id="new-tab" class="btn btn-primary btn-sm" type="button">+ New tab</button>
+          <button id="refresh-tabs" class="btn btn-ghost btn-sm" type="button" title="Refresh">↻</button>
+        </div>
+        <div id="tab-list" class="tab-list"></div>
+      </aside>
+      <section id="tab-detail" class="tab-detail"></section>
+    </div>
+  )}
+
+  <div class="tab-modal" id="tab-modal" hidden><div class="tab-modal-card" id="tab-modal-card"></div></div>
+  <div id="receipt-print"></div>
+
+  <textarea id="tabs-menu" hidden set:text={JSON.stringify(menuData)}></textarea>
+  <textarea id="tabs-init" hidden set:text={JSON.stringify(openTabs)}></textarea>
+  <textarea id="tabs-cfg" hidden set:text={JSON.stringify({ storeName, gratPct: bar.tabAutoGratuityPercent })}></textarea>
+</AppLayout>
+
+<!-- Tab UI is built at runtime via JS, so its styles are global. -->
+<style is:global>
+  .tabs-shell { display: grid; grid-template-columns: 290px 1fr; gap: 1rem; align-items: start; }
+  @media (max-width: 760px) { .tabs-shell { grid-template-columns: 1fr; } }
+
+  .tabs-rail { display: grid; gap: 0.6rem; }
+  .tabs-rail-head { display: flex; gap: 0.4rem; }
+  .tabs-rail-head .btn-primary { flex: 1; }
+  .tab-list { display: grid; gap: 0.4rem; }
+  .tabs-empty { padding: 0.6rem; }
+  .tab-card { appearance: none; font: inherit; text-align: left; display: grid; gap: 0.25rem; padding: 0.6rem 0.7rem; background: rgba(255,255,255,.02); border: 1px solid var(--border); color: var(--text); cursor: pointer; }
+  .tab-card:hover { border-color: var(--cyan); }
+  .tab-card.on { border-color: var(--cyan); background: rgba(0,224,255,.08); box-shadow: inset 3px 0 0 var(--cyan); }
+  .tc-top { display: flex; justify-content: space-between; gap: 0.5rem; align-items: baseline; }
+  .tc-name { font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tc-total { font-weight: 800; color: var(--cyan); white-space: nowrap; }
+  .tc-sub { font-size: 0.75rem; color: var(--muted-2); }
+
+  .tab-detail { min-height: 50vh; }
+  .tab-detail-empty { display: grid; place-items: center; min-height: 40vh; border: 1px dashed var(--border-strong); }
+  .td-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap; padding-bottom: 0.6rem; border-bottom: 2px solid var(--border-strong); }
+  .td-name { margin: 0; }
+  .td-meta { font-size: 0.8rem; }
+  .td-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+  .td-lines { display: grid; gap: 0.1rem; margin: 0.7rem 0; }
+  .tl-row { display: grid; grid-template-columns: 2rem 1fr auto 1.6rem; align-items: center; gap: 0.5rem; padding: 0.4rem 0.2rem; border-bottom: 1px solid rgba(127,127,127,.12); }
+  .tl-qty { color: var(--muted-2); font-weight: 700; }
+  .tl-desc { min-width: 0; }
+  .tl-price { font-variant-numeric: tabular-nums; font-weight: 700; }
+  .tl-rm { appearance: none; background: none; border: none; color: var(--muted-2); cursor: pointer; font-size: 0.9rem; }
+  .tl-rm:hover { color: var(--magenta); }
+  .tl-empty { padding: 0.6rem 0.2rem; }
+  .td-total { display: flex; justify-content: space-between; font-weight: 800; font-size: 1.1rem; padding: 0.5rem 0.2rem; border-bottom: 2px solid var(--border-strong); }
+  .td-add { margin-top: 1rem; }
+  .td-add-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; }
+  .td-add-head h3 { margin: 0; }
+  .td-menu { display: grid; gap: 0.9rem; }
+  .tm-sec-h { font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted-2); font-weight: 700; margin-bottom: 0.35rem; }
+  .tm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.4rem; }
+  .tm-item { appearance: none; font: inherit; display: flex; flex-direction: column; gap: 0.2rem; text-align: left; padding: 0.5rem 0.6rem; background: rgba(255,255,255,.02); border: 1px solid var(--border); color: var(--text); cursor: pointer; }
+  .tm-item:hover { border-color: var(--cyan); background: rgba(255,255,255,.05); }
+  .tm-name { font-weight: 700; font-size: 0.86rem; }
+  .tm-price { font-weight: 800; color: var(--cyan); font-size: 0.82rem; }
+
+  .tab-modal { position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,.55); display: grid; place-items: center; padding: 1rem; }
+  .tab-modal[hidden] { display: none !important; }
+  .tab-modal-card { width: 100%; max-width: 460px; max-height: 92vh; overflow: auto; background: var(--panel); border: 1px solid var(--border-strong); padding: 1.2rem 1.3rem; display: grid; gap: 0.7rem; }
+  .tab-modal-card h3 { margin: 0; }
+  .im-block { border-top: 1px solid var(--border); padding-top: 0.55rem; display: grid; gap: 0.3rem; }
+  .im-h { font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted-2); font-weight: 700; }
+  .im-opt { display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; padding: 0.15rem 0; }
+  .im-opt.off { opacity: 0.45; }
+  .im-opt .im-delta { margin-left: auto; color: var(--muted-2); font-variant-numeric: tabular-nums; }
+  .im-qty { display: flex; align-items: center; gap: 0.6rem; }
+  .im-qty span:first-child { font-weight: 700; }
+  .im-foot { display: flex; justify-content: space-between; align-items: center; gap: 0.6rem; border-top: 1px solid var(--border-strong); padding-top: 0.7rem; }
+  .im-foot > div { display: flex; gap: 0.5rem; }
+  .im-total { font-weight: 800; font-size: 1.05rem; color: var(--cyan); }
+  .dm-field { display: grid; gap: 0.25rem; font-size: 0.82rem; font-weight: 600; }
+  .dm-field input, .dm-field select { font: inherit; font-weight: 400; padding: 0.45rem 0.55rem; background: var(--bg); color: var(--text); border: 1px solid var(--border-strong); }
+  .dm-grid { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+  .dm-grid .dm-field { flex: 1; min-width: 90px; }
+  .st-line { display: flex; justify-content: space-between; padding: 0.3rem 0; }
+  .st-line.total { font-weight: 800; font-size: 1.1rem; border-top: 1px solid var(--border-strong); padding-top: 0.5rem; }
+  .st-block { border-top: 1px solid var(--border); padding-top: 0.55rem; display: grid; gap: 0.4rem; }
+  .st-tips { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+  .st-change { font-size: 0.85rem; color: var(--green); font-weight: 700; min-height: 1.1rem; }
+  .set-money { display: inline-flex; align-items: center; gap: 0.2rem; font-weight: 700; }
+  .set-money input { width: 6rem; text-align: right; padding: 0.4rem 0.5rem; background: var(--bg); color: var(--text); border: 1px solid var(--border-strong); font: inherit; }
+
+  #receipt-print { position: fixed; left: -9999px; top: 0; width: 320px; background: #fff; color: #000; }
+  .rcpt { padding: 12px 16px; font-family: ui-monospace, monospace; }
+  .rcpt h2 { margin: 0 0 4px; text-align: center; }
+  .rcpt-sub { text-align: center; font-size: 12px; margin-bottom: 10px; }
+  .rcpt-tbl { width: 100%; font-size: 13px; border-collapse: collapse; }
+  .rcpt-tbl td { padding: 2px 0; vertical-align: top; }
+  .rcpt-total { display: flex; justify-content: space-between; font-weight: 800; border-top: 1px dashed #000; margin-top: 6px; padding-top: 6px; }
+  .rcpt-foot { text-align: center; font-size: 12px; margin-top: 10px; }
+  @media print {
+    body * { visibility: hidden; }
+    #receipt-print, #receipt-print * { visibility: visible; }
+    #receipt-print { left: 0; }
+  }
+</style>
+
+<script>
+  import { lineTotalCents, validateSelection } from "../../lib/menu";
+
+  const $ = (id: string) => document.getElementById(id) as any;
+  const parse = (id: string) => { try { return JSON.parse($(id)?.value || "null"); } catch { return null; } };
+
+  const MENU: any = parse("tabs-menu") || { sections: [], items: [] };
+  const CFG: any = parse("tabs-cfg") || { storeName: "Time Lag", gratPct: 25 };
+  let TABS: any[] = parse("tabs-init") || [];
+  let selectedId: string | null = TABS[0]?.id ?? null;
+
+  const modal = $("tab-modal");
+  const card = $("tab-modal-card");
+
+  const money = (c: number) => "$" + ((c || 0) / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const esc = (s: any) => String(s ?? "").replace(/[&<>"']/g, (m: string) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m] as string));
+  function ageLabel(iso: string) {
+    if (!iso) return "just now";
+    const mins = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000));
+    if (mins < 1) return "just now";
+    if (mins < 60) return mins + "m";
+    return Math.floor(mins / 60) + "h" + (mins % 60 ? " " + (mins % 60) + "m" : "");
+  }
+  function selLabel(g: any) {
+    const mn = g.min_select, mx = g.max_select;
+    if (mn === 1 && mx === 1) return "choose 1";
+    if (mn === 0 && mx === 1) return "up to 1";
+    if (mn === 0 && mx == null) return "any";
+    if (mn > 0 && mx == null) return `choose ${mn}+`;
+    if (mn === 0) return `up to ${mx}`;
+    return `${mn}–${mx}`;
+  }
+  const priceFrom = (it: any) => { const av = (it.sizes || []).filter((s: any) => s.is_available).map((s: any) => s.price_cents); return av.length ? Math.min(...av) : it.base_price_cents; };
+  const defaultSizeId = (it: any) => { if (!it.sizes?.length) return null; const d = it.sizes.find((s: any) => s.is_default && s.is_available) || it.sizes.find((s: any) => s.is_available); return d ? d.id : null; };
+  function defaultOpts(it: any) { const o: any = {}; for (const g of it.groups || []) { const def = g.options.filter((x: any) => x.is_default && x.is_available).map((x: any) => x.id); o[g.id] = g.max_select === 1 ? def.slice(0, 1) : def; } return o; }
+
+  async function api(body: any) {
+    const r = await fetch("/api/pos/tabs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) throw new Error(j.error || "Failed");
+    return j;
+  }
+  async function refresh() {
+    try {
+      const r = await fetch("/api/pos/tabs");
+      const j = await r.json().catch(() => ({}));
+      if (j.tabs) { TABS = j.tabs; if (!TABS.find((t) => t.id === selectedId)) selectedId = TABS[0]?.id ?? null; }
+    } catch {}
+    renderAll();
+  }
+
+  function showModal(bodyHtml: string, bind: () => void) { card.innerHTML = bodyHtml; modal.hidden = false; bind(); }
+  function closeModal() { modal.hidden = true; card.innerHTML = ""; }
+  modal?.addEventListener("click", (e: any) => { if (e.target === modal) closeModal(); });
+
+  // ---- Rail ----
+  function renderRail() {
+    const list = $("tab-list");
+    if (!list) return;
+    if (!TABS.length) { list.innerHTML = '<p class="muted tabs-empty">No open tabs. Start one →</p>'; return; }
+    list.innerHTML = TABS.map((t) => {
+      const n = (t.transaction_items?.length) || 0;
+      return `<button class="tab-card ${t.id === selectedId ? "on" : ""}" data-tab="${t.id}">
+        <span class="tc-top"><span class="tc-name">${esc(t.tab_name)}</span><span class="tc-total">${money(t.total_cents)}</span></span>
+        <span class="tc-sub">${t.table_label ? esc(t.table_label) + " · " : ""}${n} item${n === 1 ? "" : "s"} · ${ageLabel(t.tab_opened_at)}</span>
+      </button>`;
+    }).join("");
+    list.querySelectorAll("[data-tab]").forEach((b: any) => b.addEventListener("click", () => { selectedId = b.dataset.tab; renderAll(); }));
+  }
+
+  // ---- Detail ----
+  function renderDetail() {
+    const el = $("tab-detail");
+    if (!el) return;
+    const tab = TABS.find((t) => t.id === selectedId);
+    if (!tab) { el.innerHTML = '<div class="tab-detail-empty"><p class="muted">Select a tab, or start a new one.</p></div>'; return; }
+    const items = tab.transaction_items || [];
+    const subtotal = items.reduce((s: number, it: any) => s + (it.unit_price_cents || 0) * (it.qty || 1), 0);
+    const lines = items.length
+      ? items.map((it: any) => `<div class="tl-row">
+          <span class="tl-qty">${it.qty || 1}×</span>
+          <span class="tl-desc">${esc(it.description)}${it.station === "kitchen" ? ' <span class="pill magenta">🍳</span>' : ""}</span>
+          <span class="tl-price">${money((it.unit_price_cents || 0) * (it.qty || 1))}</span>
+          <button class="tl-rm" data-rm="${it.id}" title="Remove">✕</button></div>`).join("")
+      : '<p class="muted tl-empty">No items yet — add from the menu below.</p>';
+    el.innerHTML = `
+      <div class="td-head">
+        <div><h2 class="td-name">${esc(tab.tab_name)}</h2><span class="muted td-meta">${tab.table_label ? esc(tab.table_label) + " · " : ""}#${tab.human_id} · ${ageLabel(tab.tab_opened_at)}</span></div>
+        <div class="td-actions">
+          <button class="btn btn-ghost btn-sm" id="td-print" type="button">🖨 Receipt</button>
+          <button class="btn btn-ghost btn-sm" id="td-void" type="button">Void</button>
+          <button class="btn btn-primary btn-sm" id="td-settle" type="button">Settle ${money(subtotal)}</button>
+        </div>
+      </div>
+      <div class="td-lines">${lines}</div>
+      <div class="td-total"><span>Subtotal</span><span>${money(subtotal)}</span></div>
+      <div class="td-add">
+        <div class="td-add-head"><h3>Add to tab</h3><button class="btn btn-ghost btn-sm" id="td-custom" type="button">+ Custom line</button></div>
+        <div id="td-menu" class="td-menu"></div>
+      </div>`;
+    el.querySelectorAll("[data-rm]").forEach((b: any) => b.addEventListener("click", () => removeItem(tab.id, b.dataset.rm)));
+    $("td-settle").addEventListener("click", () => openSettle(tab));
+    $("td-void").addEventListener("click", () => voidTab(tab));
+    $("td-print").addEventListener("click", () => printReceipt(tab));
+    $("td-custom").addEventListener("click", () => openCustom(tab));
+    renderMenuPicker(tab);
+  }
+
+  function renderMenuPicker(tab: any) {
+    const wrap = $("td-menu");
+    if (!wrap) return;
+    const bySec = new Map<string, any[]>();
+    for (const it of MENU.items) { const k = it.section_id ?? "__none"; if (!bySec.has(k)) bySec.set(k, []); bySec.get(k)!.push(it); }
+    const sec = (name: string, list: any[]) => (!list?.length ? "" : `<div class="tm-sec"><div class="tm-sec-h">${esc(name)}</div><div class="tm-grid">${list.map((it: any) => `<button class="tm-item" data-add="${it.id}"><span class="tm-name">${esc(it.name)}</span><span class="tm-price">${(it.sizes?.length ? "from " : "") + money(priceFrom(it))}</span></button>`).join("")}</div></div>`);
+    let html = "";
+    for (const s of MENU.sections) html += sec(s.name, bySec.get(s.id) || []);
+    if (bySec.get("__none")?.length) html += sec("Other", bySec.get("__none")!);
+    wrap.innerHTML = html || '<p class="muted">No menu items yet — add them in the Menu builder.</p>';
+    wrap.querySelectorAll("[data-add]").forEach((b: any) => b.addEventListener("click", () => {
+      const item = MENU.items.find((x: any) => x.id === b.dataset.add);
+      if (!item) return;
+      if ((item.sizes?.length) || (item.groups?.length)) openItemModal(tab, item);
+      else addMenuItem(tab.id, item, { sizeId: null, optionIdsByGroup: {}, qty: 1 });
+    }));
+  }
+
+  // ---- Item (size + modifiers) modal ----
+  function openItemModal(tab: any, item: any) {
+    const sel: any = { sizeId: defaultSizeId(item), optionIdsByGroup: defaultOpts(item), qty: 1 };
+    const sizesHtml = item.sizes?.length
+      ? `<div class="im-block"><div class="im-h">Size</div>${item.sizes.map((s: any) => `<label class="im-opt ${!s.is_available ? "off" : ""}"><input type="radio" name="size" value="${s.id}" ${sel.sizeId === s.id ? "checked" : ""} ${!s.is_available ? "disabled" : ""}><span>${esc(s.label)}</span><span class="im-delta">${money(s.price_cents)}</span></label>`).join("")}</div>`
+      : "";
+    const groupsHtml = (item.groups || []).map((g: any) => {
+      const single = g.max_select === 1;
+      // Optional single-choice groups get a "None" radio so a pre-checked/priced
+      // default can be cleared (a radio alone can't be unchecked).
+      const noneOpt = (single && (g.min_select || 0) === 0)
+        ? `<label class="im-opt"><input type="radio" name="g_${g.id}" value="" ${(sel.optionIdsByGroup[g.id] || []).length === 0 ? "checked" : ""}><span>None</span><span class="im-delta"></span></label>`
+        : "";
+      return `<div class="im-block"><div class="im-h">${esc(g.name)} <span class="muted-2">${selLabel(g)}</span></div>${noneOpt}${g.options.map((o: any) => `<label class="im-opt ${!o.is_available ? "off" : ""}"><input type="${single ? "radio" : "checkbox"}" name="g_${g.id}" value="${o.id}" ${(sel.optionIdsByGroup[g.id] || []).includes(o.id) ? "checked" : ""} ${!o.is_available ? "disabled" : ""}><span>${esc(o.name)}</span><span class="im-delta">${o.price_delta_cents ? "+" + money(o.price_delta_cents) : ""}</span></label>`).join("")}</div>`;
+    }).join("");
+    const html = `<h3>${esc(item.name)}</h3>${sizesHtml}${groupsHtml}
+      <div class="im-qty"><span>Qty</span><button class="btn btn-ghost btn-sm" data-q="-1" type="button">−</button><span id="im-qval">1</span><button class="btn btn-ghost btn-sm" data-q="1" type="button">+</button></div>
+      <div class="im-foot"><span id="im-price" class="im-total"></span><div><button class="btn btn-ghost btn-sm" id="im-cancel" type="button">Cancel</button><button class="btn btn-primary btn-sm" id="im-add" type="button">Add</button></div></div>`;
+    function syncPrice() {
+      const err = validateSelection(item, sel);
+      $("im-price").textContent = money(lineTotalCents(item, sel));
+      const add = $("im-add"); add.disabled = !!err; add.title = err || "";
+    }
+    showModal(html, () => {
+      card.querySelectorAll('input[name="size"]').forEach((r: any) => r.addEventListener("change", () => { sel.sizeId = r.value; syncPrice(); }));
+      (item.groups || []).forEach((g: any) => card.querySelectorAll(`input[name="g_${g.id}"]`).forEach((inp: any) => inp.addEventListener("change", () => {
+        const checked = [...card.querySelectorAll(`input[name="g_${g.id}"]:checked`)].map((x: any) => x.value).filter(Boolean);
+        sel.optionIdsByGroup[g.id] = g.max_select === 1 ? checked.slice(0, 1) : checked;
+        syncPrice();
+      })));
+      card.querySelectorAll("[data-q]").forEach((b: any) => b.addEventListener("click", () => { sel.qty = Math.max(1, sel.qty + Number(b.dataset.q)); $("im-qval").textContent = String(sel.qty); syncPrice(); }));
+      $("im-cancel").addEventListener("click", closeModal);
+      $("im-add").addEventListener("click", () => addMenuItem(tab.id, item, sel));
+      syncPrice();
+    });
+  }
+
+  async function addMenuItem(tabId: string, item: any, sel: any) {
+    try { await api({ action: "add-item", tabId, menuItemId: item.id, sizeId: sel.sizeId, optionIdsByGroup: sel.optionIdsByGroup, qty: sel.qty }); closeModal(); await refresh(); }
+    catch (e: any) { alert(e.message); }
+  }
+  async function removeItem(tabId: string, itemId: string) {
+    try { await api({ action: "remove-item", tabId, itemId }); await refresh(); } catch (e: any) { alert(e.message); }
+  }
+  async function voidTab(tab: any) {
+    if (!confirm(`Void tab “${tab.tab_name}”? Nothing is charged.`)) return;
+    try { await api({ action: "void", tabId: tab.id }); await refresh(); } catch (e: any) { alert(e.message); }
+  }
+
+  // ---- Custom line ----
+  function openCustom(tab: any) {
+    const html = `<h3>Custom line</h3>
+      <label class="dm-field">Description<input id="cl-desc" placeholder="e.g. Bottle service"></label>
+      <div class="dm-grid">
+        <label class="dm-field">Price $<input id="cl-price" type="number" min="0" step="0.01" placeholder="0.00"></label>
+        <label class="dm-field">Qty<input id="cl-qty" type="number" min="1" value="1"></label>
+        <label class="dm-field">Station<select id="cl-station"><option value="bar">Bar</option><option value="kitchen">Kitchen</option></select></label>
+      </div>
+      <div class="im-foot"><span></span><div><button class="btn btn-ghost btn-sm" id="cl-cancel" type="button">Cancel</button><button class="btn btn-primary btn-sm" id="cl-add" type="button">Add</button></div></div>`;
+    showModal(html, () => {
+      $("cl-cancel").addEventListener("click", closeModal);
+      $("cl-add").addEventListener("click", async () => {
+        const desc = $("cl-desc").value.trim();
+        if (!desc) { alert("Description is required."); return; }
+        try {
+          await api({ action: "add-item", tabId: tab.id, custom: true, description: desc, priceCents: Math.round((parseFloat($("cl-price").value) || 0) * 100), qty: Math.max(1, parseInt($("cl-qty").value) || 1), station: $("cl-station").value });
+          closeModal(); await refresh();
+        } catch (e: any) { alert(e.message); }
+      });
+    });
+  }
+
+  // ---- Settle ----
+  function openSettle(tab: any) {
+    const items = tab.transaction_items || [];
+    if (!items.length) { alert("Add an item before settling."); return; }
+    const subtotal = items.reduce((s: number, it: any) => s + (it.unit_price_cents || 0) * (it.qty || 1), 0);
+    let tipCents = 0;
+    const pcts = [0, 15, 20, CFG.gratPct].filter((v, i, a) => a.indexOf(v) === i);
+    const total = () => subtotal + tipCents;
+    const html = `<h3>Settle ${esc(tab.tab_name)}</h3>
+      <div class="st-line"><span>Subtotal</span><span>${money(subtotal)}</span></div>
+      <div class="st-block"><div class="im-h">Tip (optional)</div><div class="st-tips">${pcts.map((p) => `<button class="btn btn-ghost btn-sm st-tip" data-pct="${p}" type="button">${p === 0 ? "No tip" : p + "%"}</button>`).join("")}<span class="set-money">$<input id="st-tip" type="number" min="0" step="0.01" value="0.00"></span></div></div>
+      <div class="st-line total"><span>Total</span><span id="st-total">${money(total())}</span></div>
+      <div class="st-block"><div class="im-h">Cash tendered <span class="muted-2">(blank = charge full to card)</span></div><span class="set-money">$<input id="st-cash" type="number" min="0" step="0.01"></span><div id="st-change" class="st-change"></div></div>
+      <div class="im-foot"><span></span><div><button class="btn btn-ghost btn-sm" id="st-cancel" type="button">Cancel</button><button class="btn btn-primary btn-sm" id="st-go" type="button">Settle</button></div></div>`;
+    function sync() {
+      $("st-total").textContent = money(total());
+      $("st-go").textContent = "Settle " + money(total());
+      const cash = Math.round((parseFloat($("st-cash").value) || 0) * 100);
+      $("st-change").textContent = cash > 0 ? (cash > total() ? "Change due " + money(cash - total()) : "On card: " + money(Math.max(0, total() - cash))) : "";
+    }
+    showModal(html, () => {
+      card.querySelectorAll(".st-tip").forEach((b: any) => b.addEventListener("click", () => { tipCents = Math.round(subtotal * (Number(b.dataset.pct) / 100)); $("st-tip").value = (tipCents / 100).toFixed(2); sync(); }));
+      $("st-tip").addEventListener("input", () => { tipCents = Math.max(0, Math.round((parseFloat($("st-tip").value) || 0) * 100)); sync(); });
+      $("st-cash").addEventListener("input", sync);
+      $("st-cancel").addEventListener("click", closeModal);
+      $("st-go").addEventListener("click", async () => {
+        try { await api({ action: "settle", tabId: tab.id, tipCents, cashCents: Math.round((parseFloat($("st-cash").value) || 0) * 100) }); closeModal(); await refresh(); }
+        catch (e: any) { alert(e.message); }
+      });
+      sync();
+    });
+  }
+
+  // ---- New tab ----
+  function openNewTab() {
+    const html = `<h3>New tab</h3>
+      <label class="dm-field">Name<input id="nt-name" placeholder="Guest name or seat" autocomplete="off"></label>
+      <label class="dm-field">Table / seat <span class="muted-2">(optional)</span><input id="nt-table" autocomplete="off"></label>
+      <div class="im-foot"><span></span><div><button class="btn btn-ghost btn-sm" id="nt-cancel" type="button">Cancel</button><button class="btn btn-primary btn-sm" id="nt-open" type="button">Open tab</button></div></div>`;
+    showModal(html, () => {
+      $("nt-name").focus();
+      $("nt-cancel").addEventListener("click", closeModal);
+      $("nt-open").addEventListener("click", async () => {
+        const name = $("nt-name").value.trim();
+        if (!name) { alert("Tab needs a name."); return; }
+        try { const j = await api({ action: "open", name, table: $("nt-table").value }); closeModal(); if (j.tab) selectedId = j.tab.id; await refresh(); }
+        catch (e: any) { alert(e.message); }
+      });
+    });
+  }
+
+  // ---- Receipt ----
+  function printReceipt(tab: any) {
+    const items = tab.transaction_items || [];
+    const subtotal = items.reduce((s: number, it: any) => s + (it.unit_price_cents || 0) * (it.qty || 1), 0);
+    const rows = items.map((it: any) => `<tr><td>${it.qty || 1}×</td><td>${esc(it.description)}</td><td style="text-align:right">${money((it.unit_price_cents || 0) * (it.qty || 1))}</td></tr>`).join("");
+    $("receipt-print").innerHTML = `<div class="rcpt"><h2>${esc(CFG.storeName)}</h2><div class="rcpt-sub">Tab: ${esc(tab.tab_name)}${tab.table_label ? " · " + esc(tab.table_label) : ""}<br>#${tab.human_id} · ${new Date().toLocaleString()}</div><table class="rcpt-tbl"><tbody>${rows}</tbody></table><div class="rcpt-total"><span>Subtotal</span><span>${money(subtotal)}</span></div><p class="rcpt-foot">Thanks for visiting!</p></div>`;
+    window.print();
+  }
+
+  function renderAll() { renderRail(); renderDetail(); }
+
+  $("new-tab")?.addEventListener("click", openNewTab);
+  $("refresh-tabs")?.addEventListener("click", refresh);
+  $("close-all")?.addEventListener("click", async () => {
+    if (!confirm("Close out ALL open tabs to card on file (with auto-gratuity)? This ends the night.")) return;
+    try { const j = await api({ action: "close-all" }); alert(`Closed ${j.closed} tab(s)` + (j.voided ? `, voided ${j.voided} empty` : "") + `. ${money(j.grossCents)} billed.`); await refresh(); }
+    catch (e: any) { alert(e.message); }
+  });
+
+  renderAll();
+</script>

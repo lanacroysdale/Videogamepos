@@ -47,6 +47,7 @@ export type MenuItem = {
   image_url: string | null;
   is_available: boolean;
   online_orderable: boolean;
+  station: "bar" | "kitchen"; // F&B routing: kitchen vs bar ticket
   abv: number | null;
   tags: string[];
   sort_order: number;

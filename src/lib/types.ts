@@ -107,6 +107,22 @@ export interface StoreSettings {
   updated_at: string;
 }
 
+// Business departments — the POS spine (Retail / Food & Beverage / Arcade).
+// Configured at setup, then governed (owner/company unlock). Bar vs Kitchen is
+// a station WITHIN Food & Beverage (menu_items.station), not a department.
+export interface StoreDepartment {
+  id: string;
+  key: string;
+  name: string;
+  kind: "retail" | "food_bev" | "arcade" | "service" | "other";
+  color: string | null;
+  icon: string | null;
+  is_enabled: boolean;
+  is_system: boolean;
+  sort_order: number;
+  created_at: string;
+}
+
 export interface CompletenessLevel {
   id: string;
   code: string;
@@ -204,4 +220,12 @@ export interface Transaction {
   note: string | null;
   created_at: string;
   completed_at: string | null;
+  // Gratuity folded into total_cents at settle (bar tabs).
+  tip_cents: number;
+  // Bar tab fields (a tab is a long-lived is_tab=true, status='open' transaction).
+  is_tab: boolean;
+  tab_name: string | null;
+  table_label: string | null;
+  tab_opened_at: string | null;
+  tab_closed_at: string | null;
 }

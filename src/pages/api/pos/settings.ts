@@ -31,6 +31,9 @@ export const POST: APIRoute = async ({ locals, request }) => {
   if (b.aiDescriptionPrompt !== undefined) settings.aiDescriptionPrompt = String(b.aiDescriptionPrompt).slice(0, 4000);
   if (b.notifyTaskComplete !== undefined) settings.notifyTaskComplete = !!b.notifyTaskComplete;
   if (b.menuEnabled !== undefined) settings.menuEnabled = !!b.menuEnabled;
+  if (b.tabClosingTime !== undefined) settings.tabClosingTime = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(b.tabClosingTime)) ? String(b.tabClosingTime) : "";
+  if (b.tabAutoGratuityEnabled !== undefined) settings.tabAutoGratuityEnabled = !!b.tabAutoGratuityEnabled;
+  if (b.tabAutoGratuityPercent !== undefined) settings.tabAutoGratuityPercent = Math.max(0, Math.min(100, Math.round(Number(b.tabAutoGratuityPercent)) || 0));
   if (b.aiProvider !== undefined && AI_PROVIDERS.some((p) => p.key === String(b.aiProvider))) settings.aiProvider = String(b.aiProvider);
   if (b.aiQuality !== undefined && AI_QUALITIES.some((q) => q.key === String(b.aiQuality))) settings.aiQuality = String(b.aiQuality);
 

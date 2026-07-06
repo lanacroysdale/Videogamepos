@@ -5,6 +5,8 @@ import AppLayout from "../../layouts/AppLayout.astro";
 import { lowStockSettings, freeShipSettings } from "../../lib/lowStock";
 import { themeSettings, THEMES, SIDEBARS } from "../../lib/themeSettings";
 import { aiSettings, aiStatus, AI_PROVIDERS, AI_QUALITIES } from "../../lib/ai";
+import { barSettings } from "../../lib/barSettings";
+import type { StoreDepartment } from "../../lib/types";
 import { createSupabaseAdminClient } from "../../lib/supabase";
 
 const supabase = Astro.locals.supabase;
@@ -34,6 +36,14 @@ const th = themeSettings(row?.settings);
 const ai = aiSettings(row?.settings);
 const notifyTasks = !!(row?.settings as any)?.notifyTaskComplete;
 const menuEnabled = (row?.settings as any)?.menuEnabled === true;
+const bar = barSettings(row?.settings);
+const deptLocked = (row?.settings as any)?.departmentsLocked === true;
+const KIND_LABEL: Record<string, string> = { retail: "Retail", food_bev: "Food & Beverage", arcade: "Arcade", service: "Service", other: "Other" };
+let departments: StoreDepartment[] = [];
+if (isOwner) {
+  const { data: depts } = await supabase.from("store_departments").select("*").order("sort_order").order("name");
+  departments = (depts as StoreDepartment[]) ?? [];
+}
 const aiSt = aiStatus(ai.provider);
 const aiProviderLabel = aiSt.provider === "gemini" ? "Gemini" : aiSt.provider === "anthropic" ? "Claude" : "";
 const minPriceDollars = (ls.lowStockMinPriceCents / 100).toFixed(2);
@@ -82,6 +92,73 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
         <button id="inv-send" class="btn btn-primary btn-sm">Invite</button>
       </div>
       <p id="inv-result" class="set-preview" hidden></p>
+    </div>
+  )}
+
+  {isOwner && (
+    <div class="pos-panel set-panel dept-panel" data-locked={deptLocked ? "1" : "0"} style="margin-bottom:1.25rem;">
+      <h2>Departments <span class="dept-lock-pill" id="dept-lock-pill" hidden>🔒 Locked</span></h2>
+      <p class="muted set-desc">
+        The business areas this POS runs. Set these up once, then <strong>lock</strong> them — unlocking to edit
+        needs you (the owner), plus a TimeLag authorization code where the software is licensed. Disabling a
+        department hides its POS features. <strong>Bar vs Kitchen is a station within Food &amp; Beverage</strong>
+        (set per menu item), not a separate department.
+      </p>
+      <table class="tbl dept-tbl">
+        <thead><tr><th></th><th>Department</th><th>Type</th><th>On</th><th class="dept-act-col"></th></tr></thead>
+        <tbody id="dept-rows">
+          {departments.map((d) => (
+            <tr data-dept-id={d.id} data-system={d.is_system ? "1" : "0"} data-name={d.name} data-kind={d.kind} data-icon={d.icon ?? ""}>
+              <td class="dept-ico">{d.icon}</td>
+              <td><strong>{d.name}</strong>{d.is_system && <span class="muted dept-core"> · core</span>}</td>
+              <td class="muted">{KIND_LABEL[d.kind] ?? d.kind}</td>
+              <td><input type="checkbox" class="dept-enabled" checked={d.is_enabled} /></td>
+              <td class="dept-act-col">
+                <button class="link-btn dept-edit" type="button">edit</button>
+                {!d.is_system && <button class="link-btn dept-del" type="button">delete</button>}
+              </td>
+            </tr>
+          ))}
+          {departments.length === 0 && (
+            <tr><td colspan="5" class="muted">No departments yet — run the departments migration, then refresh.</td></tr>
+          )}
+        </tbody>
+      </table>
+      <div class="dept-actions">
+        <button id="dept-add" class="btn btn-ghost btn-sm" type="button">+ Department</button>
+        <span class="dept-lock-actions">
+          <button id="dept-unlock" class="btn btn-ghost btn-sm" type="button" hidden>🔓 Unlock to edit</button>
+          <button id="dept-lock" class="btn btn-ghost btn-sm" type="button" hidden>🔒 Lock</button>
+        </span>
+        <span id="dept-status" class="muted"></span>
+      </div>
+    </div>
+  )}
+
+  {isOwner && (
+    <div class="dept-modal" id="dept-modal" hidden>
+      <div class="dept-modal-card">
+        <h3 id="dm-title">New department</h3>
+        <input type="hidden" id="dm-id" />
+        <label class="dm-field">Name<input id="dm-name" autocomplete="off" placeholder="e.g. Retail, Arcade" /></label>
+        <div class="dm-grid">
+          <label class="dm-field">Type<select id="dm-kind">
+            <option value="retail">Retail</option>
+            <option value="food_bev">Food &amp; Beverage</option>
+            <option value="arcade">Arcade</option>
+            <option value="service">Service</option>
+            <option value="other">Other</option>
+          </select></label>
+          <label class="dm-field">Icon<input id="dm-icon" maxlength="2" placeholder="🎮" /></label>
+        </div>
+        <label class="dm-toggle"><input type="checkbox" id="dm-enabled" checked /> Enabled</label>
+        <p class="muted-2" id="dm-system-note" hidden>This is a core department — its type can't be changed.</p>
+        <div class="dm-actions">
+          <button id="dm-save" class="btn btn-primary btn-sm" type="button">Save</button>
+          <button id="dm-cancel" class="btn btn-ghost btn-sm" type="button">Cancel</button>
+          <span id="dm-status" class="muted-2"></span>
+        </div>
+      </div>
     </div>
   )}
 
@@ -199,6 +276,27 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       <button id="menu-save" class="btn btn-primary">Save</button>
       <span id="menu-status" class="muted"></span>
     </div>
+
+    <h3 class="set-subh">Bar tabs</h3>
+    <label class="set-row">
+      <span><strong>Auto-close tabs at closing time</strong><br />
+        <span class="muted">Tabs left open at closing are settled to card on file. Blank = never auto-close.</span></span>
+      <input type="time" id="tab-closing" value={bar.tabClosingTime} />
+    </label>
+    <label class="set-row set-toggle">
+      <input type="checkbox" id="tab-grat-enabled" checked={bar.tabAutoGratuityEnabled} />
+      <span><strong>Add auto-gratuity to tabs left open</strong><br />
+        <span class="muted">Applied only when a tab is auto-closed at closing — never on a normal settle.</span></span>
+    </label>
+    <label class="set-row">
+      <span><strong>Auto-gratuity percent</strong></span>
+      <span class="set-money"><input type="number" id="tab-grat-pct" min="0" max="100" step="1" value={bar.tabAutoGratuityPercent} />%</span>
+    </label>
+    <div class="set-actions">
+      <button id="tab-save" class="btn btn-primary">Save bar settings</button>
+      <span id="tab-status" class="muted"></span>
+    </div>
+
     <label class="set-row set-toggle" style="margin-top:0.6rem;">
       <input type="checkbox" id="menu-primary" />
       <span><strong>Make Menu the primary view on this device</strong><br />
@@ -283,6 +381,28 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   .inv-grid { display: grid; grid-template-columns: 1fr 1fr auto auto; gap: 0.5rem; margin-top: 0.5rem; }
   @media (max-width: 640px) { .inv-grid { grid-template-columns: 1fr; } }
   #inv-result code { color: var(--cyan); font-weight: 700; }
+
+  /* Departments */
+  .dept-tbl { margin: 0.4rem 0 0.2rem; }
+  .dept-tbl th, .dept-tbl td { vertical-align: middle; }
+  .dept-ico { font-size: 1.15rem; width: 1.8rem; }
+  .dept-core { font-size: 0.74rem; }
+  .dept-act-col { text-align: right; white-space: nowrap; }
+  .dept-act-col .link-btn { margin-left: 0.6rem; }
+  .dept-enabled { width: 1.2rem; height: 1.2rem; accent-color: var(--cyan); }
+  .dept-actions { display: flex; align-items: center; gap: 0.9rem; margin-top: 0.9rem; flex-wrap: wrap; }
+  .dept-lock-actions { display: inline-flex; gap: 0.5rem; }
+  .dept-lock-pill { font-size: 0.7rem; font-weight: 700; color: var(--magenta); border: 1px solid var(--magenta); padding: 0.05rem 0.45rem; vertical-align: middle; }
+  .dept-panel[data-locked="1"] .dept-tbl { opacity: 0.6; }
+  .dept-modal { position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,.55); display: grid; place-items: center; padding: 1rem; }
+  .dept-modal[hidden] { display: none !important; }
+  .dept-modal-card { width: 100%; max-width: 420px; background: var(--panel); border: 1px solid var(--border-strong); padding: 1.2rem 1.3rem; display: grid; gap: 0.8rem; }
+  .dept-modal-card h3 { margin: 0; }
+  .dm-grid { display: flex; gap: 0.7rem; flex-wrap: wrap; }
+  .dm-field { display: grid; gap: 0.25rem; font-size: 0.82rem; font-weight: 600; flex: 1; min-width: 120px; }
+  .dm-field input, .dm-field select { font: inherit; font-weight: 400; padding: 0.45rem 0.55rem; background: var(--bg); color: var(--text); border: 1px solid var(--border-strong); }
+  .dm-toggle { display: flex; align-items: center; gap: 0.4rem; font-size: 0.9rem; }
+  .dm-actions { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.3rem; }
 </style>
 
 <script>
@@ -437,4 +557,96 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   document.getElementById("gem-save")!.addEventListener("click", (e) => save({
     gemEffectEnabled: $("gem-effect").checked,
   }, document.getElementById("gem-status")!, e.currentTarget as HTMLButtonElement));
+
+  // ---- Bar tabs (closing time + auto-gratuity) ----
+  document.getElementById("tab-save")?.addEventListener("click", (e) => save({
+    tabClosingTime: (document.getElementById("tab-closing") as HTMLInputElement).value || "",
+    tabAutoGratuityEnabled: (document.getElementById("tab-grat-enabled") as HTMLInputElement).checked,
+    tabAutoGratuityPercent: Math.max(0, Math.min(100, parseInt((document.getElementById("tab-grat-pct") as HTMLInputElement).value) || 0)),
+  }, document.getElementById("tab-status")!, e.currentTarget as HTMLButtonElement));
+
+  // ---- Departments (owner-only, governed) ----
+  const deptPanel = document.querySelector<HTMLElement>(".dept-panel");
+  if (deptPanel) {
+    const deptApi = async (body: any) => {
+      const r = await fetch("/api/pos/departments", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) throw new Error(j.error || "Failed");
+      return j;
+    };
+    const dStatus = document.getElementById("dept-status")!;
+    let locked = deptPanel.dataset.locked === "1";
+
+    function applyLock() {
+      deptPanel!.dataset.locked = locked ? "1" : "0";
+      (document.getElementById("dept-lock-pill") as HTMLElement).hidden = !locked;
+      (document.getElementById("dept-unlock") as HTMLElement).hidden = !locked;
+      (document.getElementById("dept-lock") as HTMLElement).hidden = locked;
+      (document.getElementById("dept-add") as HTMLButtonElement).disabled = locked;
+      deptPanel!.querySelectorAll<HTMLInputElement>(".dept-enabled").forEach((c) => (c.disabled = locked));
+      deptPanel!.querySelectorAll<HTMLButtonElement>(".dept-edit, .dept-del").forEach((btn) => (btn.disabled = locked));
+    }
+    applyLock();
+
+    deptPanel.querySelectorAll<HTMLInputElement>(".dept-enabled").forEach((cb) => {
+      cb.addEventListener("change", async () => {
+        const id = (cb.closest("tr") as HTMLElement).dataset.deptId;
+        dStatus.textContent = "Saving…";
+        try { await deptApi({ action: "set-enabled", id, enabled: cb.checked }); dStatus.textContent = "✓ Saved"; }
+        catch (e: any) { cb.checked = !cb.checked; dStatus.textContent = ""; alert(e.message); }
+      });
+    });
+
+    const dModal = document.getElementById("dept-modal");
+    const dq = (id: string) => document.getElementById(id) as HTMLInputElement;
+    const dsel = (id: string) => document.getElementById(id) as unknown as HTMLSelectElement;
+    function openDept(tr?: HTMLElement) {
+      (document.getElementById("dm-title") as HTMLElement).textContent = tr ? "Edit department" : "New department";
+      dq("dm-id").value = tr?.dataset.deptId || "";
+      dq("dm-name").value = tr?.dataset.name || "";
+      dsel("dm-kind").value = tr?.dataset.kind || "other";
+      dq("dm-icon").value = tr?.dataset.icon || "";
+      dq("dm-enabled").checked = tr ? (tr.querySelector(".dept-enabled") as HTMLInputElement).checked : true;
+      const isSystem = tr?.dataset.system === "1";
+      dsel("dm-kind").disabled = !!isSystem;
+      (document.getElementById("dm-system-note") as HTMLElement).hidden = !isSystem;
+      document.getElementById("dm-status")!.textContent = "";
+      if (dModal) dModal.hidden = false;
+    }
+    document.getElementById("dept-add")?.addEventListener("click", () => openDept());
+    deptPanel.querySelectorAll<HTMLButtonElement>(".dept-edit").forEach((b) => b.addEventListener("click", () => openDept(b.closest("tr") as HTMLElement)));
+    document.getElementById("dm-cancel")?.addEventListener("click", () => { if (dModal) dModal.hidden = true; });
+    dModal?.addEventListener("click", (e) => { if (e.target === dModal) dModal.hidden = true; });
+    document.getElementById("dm-save")?.addEventListener("click", async () => {
+      const name = dq("dm-name").value.trim();
+      if (!name) { alert("Department needs a name."); return; }
+      document.getElementById("dm-status")!.textContent = "Saving…";
+      try {
+        await deptApi({ action: "save", id: dq("dm-id").value || undefined, name,
+          kind: dsel("dm-kind").value, icon: dq("dm-icon").value, isEnabled: dq("dm-enabled").checked });
+        location.reload();
+      } catch (e: any) { document.getElementById("dm-status")!.textContent = ""; alert(e.message); }
+    });
+
+    deptPanel.querySelectorAll<HTMLButtonElement>(".dept-del").forEach((b) => b.addEventListener("click", async () => {
+      const tr = b.closest("tr") as HTMLElement;
+      if (!confirm(`Delete department “${tr.dataset.name}”?`)) return;
+      try { await deptApi({ action: "delete", id: tr.dataset.deptId }); location.reload(); } catch (e: any) { alert(e.message); }
+    }));
+
+    document.getElementById("dept-lock")?.addEventListener("click", async () => {
+      try { await deptApi({ action: "lock" }); locked = true; applyLock(); dStatus.textContent = "🔒 Locked"; } catch (e: any) { alert(e.message); }
+    });
+    document.getElementById("dept-unlock")?.addEventListener("click", async () => {
+      try {
+        await deptApi({ action: "unlock" });
+        locked = false; applyLock(); dStatus.textContent = "🔓 Unlocked — edit, then lock again when done.";
+      } catch {
+        const code = prompt("Enter the TimeLag authorization code to unlock departments:");
+        if (!code) return;
+        try { await deptApi({ action: "unlock", code }); locked = false; applyLock(); dStatus.textContent = "🔓 Unlocked."; }
+        catch (e2: any) { alert(e2.message); }
+      }
+    });
+  }
 </script>

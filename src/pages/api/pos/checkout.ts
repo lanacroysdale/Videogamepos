@@ -25,6 +25,7 @@ export const GET: APIRoute = async ({ locals }) => {
     )
     .eq("type", "sale")
     .eq("status", "open")
+    .eq("is_tab", false) // keep bar tabs out of the retail held-sales tray
     .order("created_at", { ascending: false });
   if (error) return json({ error: error.message }, 500);
   return json({ held: data ?? [] });
@@ -36,11 +37,12 @@ export const DELETE: APIRoute = async ({ locals, request }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
   const { id } = await request.json().catch(() => ({}));
   if (!id) return json({ error: "id required" }, 400);
-  const { data: txn } = await locals.supabase.from("transactions").select("status").eq("id", id).maybeSingle();
+  const { data: txn } = await locals.supabase.from("transactions").select("status, is_tab").eq("id", id).maybeSingle();
   if (!txn) return json({ error: "Sale not found." }, 404);
+  if (txn.is_tab) return json({ error: "That's a bar tab — void it from the Tabs screen." }, 409);
   if (txn.status !== "open") return json({ error: "Only held (open) sales can be deleted." }, 409);
   await locals.supabase.from("transaction_items").delete().eq("transaction_id", id);
-  const { error } = await locals.supabase.from("transactions").delete().eq("id", id).eq("status", "open");
+  const { error } = await locals.supabase.from("transactions").delete().eq("id", id).eq("status", "open").eq("is_tab", false);
   if (error) return json({ error: error.message }, 500);
   return json({ ok: true });
 };
@@ -97,6 +99,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
       .update(fields)
       .eq("id", resumeId)
       .eq("status", "open") // only an open (held) sale can be resumed
+      .eq("is_tab", false) // never let held-sale resume touch a bar tab
       .select()
       .single();
     if (error || !data) return json({ error: error?.message || "That held sale is no longer available." }, 409);
