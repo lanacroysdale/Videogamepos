@@ -9,5 +9,12 @@
       "path": "/api/cron/close-tabs",
       "schedule": "0 * * * *"
     }
+  ],
+  "redirects": [
+    { "source": "/", "has": [{ "type": "host", "value": "pos.timelag.co" }], "destination": "/app", "permanent": false },
+    { "source": "/app", "has": [{ "type": "host", "value": "timelag.co" }], "destination": "https://pos.timelag.co/app", "permanent": false },
+    { "source": "/app/:path*", "has": [{ "type": "host", "value": "timelag.co" }], "destination": "https://pos.timelag.co/app/:path*", "permanent": false },
+    { "source": "/app", "has": [{ "type": "host", "value": "www.timelag.co" }], "destination": "https://pos.timelag.co/app", "permanent": false },
+    { "source": "/app/:path*", "has": [{ "type": "host", "value": "www.timelag.co" }], "destination": "https://pos.timelag.co/app/:path*", "permanent": false }
   ]
 }
