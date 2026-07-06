@@ -92,12 +92,16 @@ export const POST: APIRoute = async ({ request, redirect }) => {
     attachLine = `${uploads.length} file(s) too large to attach (${(totalBytes / 1048576).toFixed(1)}MB) — ask the customer to email them`;
   }
 
-  // Capture the lead into the POS database — the primary record, shown in the
-  // staff-only Leads inbox. Best-effort: a DB hiccup shouldn't lose the lead,
-  // so we still email below. Uses the service-role client (server-only).
+  // Capture the lead into the POS database — the PRIMARY record, shown in the
+  // staff-only Leads inbox (+ the in-app new-lead notification). While we have
+  // the admin client, also read the notification prefs (where to email, on/off).
+  // Uses the service-role client (server-only).
   const first = String(form.get("first") || "").trim();
   const last = String(form.get("last") || "").trim();
   const [splitFirst, ...splitRest] = name.split(/\s+/);
+  let leadOk = false;
+  let notifyEnabled = true;
+  let notifyEmail = "";
   try {
     const admin = createSupabaseAdminClient();
     const { error: leadErr } = await admin.from("leads").insert({
@@ -113,9 +117,15 @@ export const POST: APIRoute = async ({ request, redirect }) => {
       payload: { attachments: attachLine },
     });
     if (leadErr) console.error("[contact] lead insert failed:", leadErr.message);
+    else leadOk = true;
+    const { data: srow } = await admin.from("store_settings").select("settings").eq("id", 1).maybeSingle();
+    const s = (srow?.settings as any) ?? {};
+    notifyEnabled = s.leadNotifyEnabled !== false; // default on
+    notifyEmail = typeof s.leadNotifyEmail === "string" ? s.leadNotifyEmail.trim() : "";
   } catch (err) {
     console.error("[contact] lead insert threw:", err);
   }
+  const to = notifyEmail || TO;
 
   const rows: Array<[string, string]> = [
     ["Name", name],
@@ -141,44 +151,41 @@ export const POST: APIRoute = async ({ request, redirect }) => {
         .join("")}
     </table>`;
 
-  // No email provider configured yet: log the lead so it isn't lost, then
-  // report success. Set RESEND_API_KEY (see .env.example) to enable delivery.
-  if (!API_KEY) {
-    console.warn(
-      "[contact] RESEND_API_KEY not set — logging submission instead of emailing:\n" + textBody,
-    );
-    return ok();
-  }
-
-  try {
-    const res = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: FROM,
-        to: [TO],
-        reply_to: email,
-        subject: `🎮 New sell/trade request from ${name}`,
-        text: textBody,
-        html: htmlBody,
-        ...(attachments.length ? { attachments } : {}),
-      }),
-    });
-
-    if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      console.error("[contact] Resend error", res.status, detail);
-      return fail("We couldn't send your message right now. Please try again later.", 502);
+  // The email is a best-effort NOTIFICATION — it must NEVER fail the customer's
+  // submission once the lead is safely recorded. Send only when enabled + a
+  // provider is configured; swallow provider errors (logged for the shop).
+  let emailOk = false;
+  if (notifyEnabled && API_KEY) {
+    try {
+      const res = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          from: FROM,
+          to: [to],
+          reply_to: email,
+          subject: `🎮 New sell/trade request from ${name}`,
+          text: textBody,
+          html: htmlBody,
+          ...(attachments.length ? { attachments } : {}),
+        }),
+      });
+      if (res.ok) emailOk = true;
+      else console.error("[contact] Resend error", res.status, await res.text().catch(() => ""));
+    } catch (err) {
+      console.error("[contact] Resend threw:", err);
     }
-  } catch (err) {
-    console.error("[contact] Unexpected error", err);
-    return fail("Something went wrong on our end. Please try again.", 500);
+  } else if (!API_KEY) {
+    console.warn("[contact] RESEND_API_KEY not set — lead captured, no email sent:\n" + textBody);
   }
 
-  return ok();
+  // Success as long as the request was recorded (lead) OR delivered (email).
+  // Only a total loss (neither) is an error the customer should ever see.
+  if (leadOk || emailOk) return ok();
+  return fail("We couldn't record your request just now — please email us directly.", 500);
 };
 
 // Friendly response if the endpoint is hit directly (e.g. in a browser).

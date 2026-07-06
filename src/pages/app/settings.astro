@@ -36,6 +36,8 @@ const th = themeSettings(row?.settings);
 const ai = aiSettings(row?.settings);
 const notifyTasks = !!(row?.settings as any)?.notifyTaskComplete;
 const menuEnabled = (row?.settings as any)?.menuEnabled === true;
+const leadNotifyEnabled = (row?.settings as any)?.leadNotifyEnabled !== false;
+const leadNotifyEmail = String((row?.settings as any)?.leadNotifyEmail ?? "");
 const bar = barSettings(row?.settings);
 const deptLocked = (row?.settings as any)?.departmentsLocked === true;
 const KIND_LABEL: Record<string, string> = { retail: "Retail", food_bev: "Food & Beverage", arcade: "Arcade", service: "Service", other: "Other" };
@@ -318,6 +320,25 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   </div>
 
   <div class="pos-panel set-panel" style="margin-top:1.25rem;">
+    <h2>Lead notifications</h2>
+    <p class="muted set-desc">When someone submits the “Sell your games” form on the website, it always lands in the <strong>Leads</strong> tab (and pings staff in-app). This also emails you a copy.</p>
+    <label class="set-row set-toggle">
+      <input type="checkbox" id="lead-notify" checked={leadNotifyEnabled} />
+      <span><strong>Email me new sell / trade leads</strong><br />
+        <span class="muted">Needs email delivery configured (Resend). Off = leads still show in the Leads tab, just no email.</span></span>
+    </label>
+    <label class="set-row">
+      <span><strong>Send lead emails to</strong><br />
+        <span class="muted">Leave blank to use the shop inbox.</span></span>
+      <input type="email" id="lead-email" placeholder="you@timelag.co" value={leadNotifyEmail} style="width:16rem;text-align:left;" />
+    </label>
+    <div class="set-actions">
+      <button id="lead-save" class="btn btn-primary">Save</button>
+      <span id="lead-status" class="muted"></span>
+    </div>
+  </div>
+
+  <div class="pos-panel set-panel" style="margin-top:1.25rem;">
     <h2>AI assistant</h2>
     <p class="muted set-desc">
       Powers the “✨ Write with AI” description button (more skills coming).
@@ -475,6 +496,11 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   document.getElementById("notify-save")!.addEventListener("click", (e) => save({
     notifyTaskComplete: ($("notify-tasks") as HTMLInputElement).checked,
   }, document.getElementById("notify-status")!, e.currentTarget as HTMLButtonElement));
+
+  document.getElementById("lead-save")!.addEventListener("click", (e) => save({
+    leadNotifyEnabled: ($("lead-notify") as HTMLInputElement).checked,
+    leadNotifyEmail: ($("lead-email") as HTMLInputElement).value.trim(),
+  }, document.getElementById("lead-status")!, e.currentTarget as HTMLButtonElement));
 
   document.getElementById("menu-save")!.addEventListener("click", (e) => save({
     menuEnabled: ($("menu-enabled") as HTMLInputElement).checked,
