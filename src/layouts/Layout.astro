@@ -54,6 +54,13 @@ const jsonLd = {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script is:inline>
+      // POS entrance: the bare pos.timelag.co subdomain jumps straight to the app.
+      // This runs on the static marketing pages — a vercel.json redirect for "/"
+      // can't do it (the prerendered index file takes filesystem precedence over
+      // the redirect). timelag.co is unaffected.
+      if (location.hostname === "pos.timelag.co") location.replace("/app" + location.search);
+    </script>
     <meta name="generator" content={Astro.generator} />
     <ThemeInit scope="site" />
 
