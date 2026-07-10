@@ -487,7 +487,7 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       if (!res.ok || !j.ok) throw new Error(j.error || "Failed");
       const out = document.getElementById("inv-result")!;
       out.hidden = false;
-      out.innerHTML = `✓ Invited <strong>${email}</strong>. Temporary password: <code>${j.tempPassword}</code> — copy it and give it to them. They sign in at <code>/app/login</code> (refresh this page to see them in the list).`;
+      out.innerHTML = `✓ Invited <strong>${email}</strong>. Temporary password: <code>${j.tempPassword}</code> — copy it and give it to them. They sign in at <code>/login</code> (refresh this page to see them in the list).`;
       ($("inv-name") as HTMLInputElement).value = ""; ($("inv-email") as HTMLInputElement).value = "";
     } catch (e: any) { alert(e.message); }
     finally { btn.disabled = false; }

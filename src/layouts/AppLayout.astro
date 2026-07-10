@@ -37,22 +37,22 @@ let menuSections: { id: string; name: string }[] = [];
 }
 
 const nav = [
-  { key: "dashboard", label: "Dashboard", href: "/app", icon: "🏠" },
-  { key: "leads", label: "Leads", href: "/app/leads", icon: "📥" },
-  { key: "checkout", label: "Checkout", href: "/app/checkout", icon: "🧾" },
-  ...(fnbEnabled ? [{ key: "tabs", label: "Tabs", href: "/app/tabs", icon: "🍻" }] : []),
-  { key: "tradein", label: "Trade-In", href: "/app/trade-in", icon: "🔁" },
-  { key: "returns", label: "Returns", href: "/app/returns", icon: "↩️" },
-  { key: "inventory", label: "Inventory", href: "/app/inventory", icon: "📦" },
-  { key: "repairs", label: "Repairs", href: "/app/repairs", icon: "🛠️" },
-  { key: "customers", label: "Customers", href: "/app/customers", icon: "🧑" },
-  { key: "schedule", label: "Schedule", href: "/app/schedule", icon: "📅" },
-  { key: "todos", label: "To-dos", href: "/app/todos", icon: "✅" },
-  { key: "sops", label: "SOPs", href: "/app/sops", icon: "📋" },
+  { key: "dashboard", label: "Dashboard", href: "/dashboard", icon: "🏠" },
+  { key: "leads", label: "Leads", href: "/leads", icon: "📥" },
+  { key: "checkout", label: "Checkout", href: "/checkout", icon: "🧾" },
+  ...(fnbEnabled ? [{ key: "tabs", label: "Tabs", href: "/tabs", icon: "🍻" }] : []),
+  { key: "tradein", label: "Trade-In", href: "/trade-in", icon: "🔁" },
+  { key: "returns", label: "Returns", href: "/returns", icon: "↩️" },
+  { key: "inventory", label: "Inventory", href: "/inventory", icon: "📦" },
+  { key: "repairs", label: "Repairs", href: "/repairs", icon: "🛠️" },
+  { key: "customers", label: "Customers", href: "/customers", icon: "🧑" },
+  { key: "schedule", label: "Schedule", href: "/schedule", icon: "📅" },
+  { key: "todos", label: "To-dos", href: "/todos", icon: "✅" },
+  { key: "sops", label: "SOPs", href: "/sops", icon: "📋" },
   ...(isManager
     ? [
-        { key: "reports", label: "Reports", href: "/app/reports", icon: "📊" },
-        { key: "pricing", label: "Pricing", href: "/app/pricing", icon: "🏷️" },
+        { key: "reports", label: "Reports", href: "/reports", icon: "📊" },
+        { key: "pricing", label: "Pricing", href: "/pricing", icon: "🏷️" },
       ]
     : []),
 ];
@@ -71,12 +71,12 @@ const nav = [
   <body class="app-body">
     <div class="app-shell">
       <aside class="app-side">
-        <a href="/app" class="app-brand"><span class="app-brand-ico">🎮</span> Time&nbsp;Lag <span>POS</span></a>
+        <a href="/dashboard" class="app-brand"><span class="app-brand-ico">🎮</span> Time&nbsp;Lag <span>POS</span></a>
         <nav class="app-nav">
           {isManager && fnbEnabled && (
             <div class="nav-menu" id="nav-menu">
               <div class="nav-menu-head">
-                <a href="/app/menu" class:list={["nav-menu-link", { active: active === "menu" }]}>
+                <a href="/menu" class:list={["nav-menu-link", { active: active === "menu" }]}>
                   <span class="ico" aria-hidden="true">🍔</span><span class="label">Menu</span>
                 </a>
                 {menuSections.length > 0 && (
@@ -86,7 +86,7 @@ const nav = [
               {menuSections.length > 0 && (
                 <ul class="nav-subnav" id="nav-subnav">
                   {menuSections.map((s) => (
-                    <li><a href={`/app/menu?s=${s.id}`}><span class="label">{s.name}</span></a></li>
+                    <li><a href={`/menu?s=${s.id}`}><span class="label">{s.name}</span></a></li>
                   ))}
                 </ul>
               )}
@@ -126,11 +126,11 @@ const nav = [
           <div class="role">{profile?.role ?? ""}</div>
           <button id="alerts-btn" class="btn btn-ghost btn-sm" type="button" style="display:none">🔔 Enable alerts</button>
           <div class="app-user-actions">
-            <form method="POST" action="/app/logout" class="logout-form">
+            <form method="POST" action="/logout" class="logout-form">
               <button class="btn btn-ghost btn-sm" type="submit">Log out</button>
             </form>
             {isManager && (
-              <a href="/app/settings" class:list={["btn", "btn-ghost", "btn-sm", "settings-icon", { active: active === "settings" }]} title="Settings" aria-label="Settings">⚙️</a>
+              <a href="/settings" class:list={["btn", "btn-ghost", "btn-sm", "settings-icon", { active: active === "settings" }]} title="Settings" aria-label="Settings">⚙️</a>
             )}
           </div>
         </div>
@@ -214,7 +214,7 @@ const nav = [
           var who = ((lead.first_name || "") + " " + (lead.last_name || "")).trim() || "Someone";
           var kind = lead.type === "sell_request" ? "Sell request" : "Free Club signup";
           var n = new Notification("🎮 New " + kind, { body: who, tag: "tl-lead-" + lead.human_id });
-          n.onclick = function () { window.focus(); window.location.href = "/app/leads"; n.close(); };
+          n.onclick = function () { window.focus(); window.location.href = "/leads"; n.close(); };
         }
 
         function paint(count) {
@@ -244,7 +244,7 @@ const nav = [
         function notifyTask(t) {
           if (!("Notification" in window) || Notification.permission !== "granted") return;
           var n = new Notification("✅ Task completed", { body: t.title, tag: "tl-task-" + t.id });
-          n.onclick = function () { window.focus(); window.location.href = "/app/todos"; n.close(); };
+          n.onclick = function () { window.focus(); window.location.href = "/todos"; n.close(); };
         }
         function pollTasks() {
           var since = localStorage.getItem(TKEY) || "";

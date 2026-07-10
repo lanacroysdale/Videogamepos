@@ -59,6 +59,7 @@
 </style>
 
 <script>
+  import { MARKETING_HOSTS, POS_HOST, SITE } from "../consts";
   type Item = { ico: string; label: string; href?: string; act?: "theme" | "logout" };
 
   async function init() {
@@ -73,22 +74,22 @@
     const fab = document.getElementById("owner-fab")!;
     const menu = document.getElementById("owner-menu")!;
     const isManager = role === "owner" || role === "manager";
-    const inPos = location.pathname.startsWith("/app");
+    // The POS runs on its own host now; the marketing site on another. Detect by
+    // host, and cross-link with absolute URLs so "Open POS" / "Main site" jump hosts.
+    const inPos = !MARKETING_HOSTS.includes(location.hostname);
 
     const items: Item[] = inPos
       ? [
-          { ico: "🏠", label: "Main site", href: "/" },
+          { ico: "🏠", label: "Main site", href: SITE.url },
           { ico: "🛒", label: "Shop", href: "/shop" },
           { ico: "🎨", label: "Theme", act: "theme" },
-          ...(isManager ? [{ ico: "⚙️", label: "Settings", href: "/app/settings" } as Item] : []),
+          ...(isManager ? [{ ico: "⚙️", label: "Settings", href: "/settings" } as Item] : []),
           { ico: "🚪", label: "Log out", act: "logout" },
         ]
       : [
-          { ico: "🧾", label: "Open POS", href: "/app" },
+          { ico: "🧾", label: "Open POS", href: `https://${POS_HOST}/` },
           { ico: "🛒", label: "Shop", href: "/shop" },
           { ico: "🎨", label: "Theme", act: "theme" },
-          ...(isManager ? [{ ico: "⚙️", label: "Settings", href: "/app/settings" } as Item] : []),
-          { ico: "🚪", label: "Log out", act: "logout" },
         ];
 
     const THEMES = ["default", "bright", "light", "midnight", "glass", "dmg", "gba", "wii"];
@@ -100,7 +101,7 @@
     function logout() {
       const f = document.createElement("form");
       f.method = "POST";
-      f.action = "/app/logout";
+      f.action = "/logout";
       document.body.appendChild(f);
       f.submit();
     }

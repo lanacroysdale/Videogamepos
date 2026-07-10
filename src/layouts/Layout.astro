@@ -5,7 +5,7 @@ import Footer from "../components/Footer.astro";
 import ThemeInit from "../components/ThemeInit.astro";
 import OwnerToggle from "../components/OwnerToggle.astro";
 import GbFilter from "../components/GbFilter.astro";
-import { SITE, GA_MEASUREMENT_ID } from "../consts";
+import { SITE, GA_MEASUREMENT_ID, MARKETING_HOSTS } from "../consts";
 
 interface Props {
   title?: string;
@@ -54,13 +54,13 @@ const jsonLd = {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <script is:inline>
-      // POS entrance: the bare pos.timelag.co subdomain jumps straight to the app.
-      // This runs on the static marketing pages — a vercel.json redirect for "/"
-      // can't do it (the prerendered index file takes filesystem precedence over
-      // the redirect). timelag.co is unaffected.
-      if (location.hostname === "pos.timelag.co") location.replace("/app" + location.search);
-    </script>
+    <script is:inline set:html={`
+      // POS entrance: a bare POS-host URL (pos.timelag.co, or any non-marketing
+      // host) jumps straight to the dashboard. This runs on the STATIC marketing
+      // pages — a vercel.json/middleware redirect for "/" can't (the prerendered
+      // index file takes filesystem precedence). Marketing hosts are unaffected.
+      if (!${JSON.stringify(MARKETING_HOSTS)}.includes(location.hostname)) location.replace("/dashboard" + location.search);
+    `} />
     <meta name="generator" content={Astro.generator} />
     <ThemeInit scope="site" />
 

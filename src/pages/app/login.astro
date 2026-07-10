@@ -13,7 +13,7 @@ if (Astro.request.method === "POST") {
   if (err) {
     error = err.message;
   } else {
-    return Astro.redirect("/app");
+    return Astro.redirect("/dashboard");
   }
 }
 ---
@@ -79,7 +79,7 @@ if (Astro.request.method === "POST") {
         msg.hidden = true;
         const r = await fetch("/api/pos/card-login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ card_code: code }) });
         const j = await r.json();
-        if (r.ok && j.ok) { window.location.href = "/app"; return; }
+        if (r.ok && j.ok) { window.location.href = "/dashboard"; return; }
         msg.textContent = j.error || "Card login failed"; msg.hidden = false;
       }
       document.getElementById("card-signin")!.addEventListener("click", () => cardLogin(codeInput.value.trim()));

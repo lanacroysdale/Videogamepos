@@ -31,6 +31,15 @@ export const SITE = {
   location: 'Portland, OR',
 };
 
+// ---- Host routing: POS vs marketing ---------------------------------------
+// The POS is served on its OWN host at CLEAN root URLs (no /app in the address);
+// the marketing site is served ONLY on the hosts below. Any other host —
+// pos.timelag.co, a licensee's own subdomain/domain, or a Vercel preview URL —
+// is treated as a POS host. Keeping this as config (not hardcoded in logic) is
+// what keeps the multi-tenant door open: a POS-only licensee deploy just works.
+export const MARKETING_HOSTS = ['timelag.co', 'www.timelag.co'];
+export const POS_HOST = 'pos.timelag.co';
+
 export const EBAY = {
   // TODO: replace with your real eBay Store URL,
   // e.g. https://www.ebay.com/str/yourstorename

@@ -10,7 +10,7 @@ import {
 
 // Manager-gated (middleware already enforces it; explicit guard for defense-in-depth).
 const profile = Astro.locals.profile;
-if (!profile || !["owner", "manager"].includes(profile.role)) return Astro.redirect("/app");
+if (!profile || !["owner", "manager"].includes(profile.role)) return Astro.redirect("/dashboard");
 const admin = createSupabaseAdminClient();
 
 const RANGES = [
@@ -236,7 +236,7 @@ const gaTraffic = false; // GA Data API not wired yet — see panel below.
 <AppLayout title="Reports" active="reports">
   <div slot="actions" class="rep-actions">
     {RANGES.map((r) => (
-      <a href={`/app/reports?range=${r.key}`} class:list={["chip", { on: r.key === sel.key }]}>{r.label}</a>
+      <a href={`/reports?range=${r.key}`} class:list={["chip", { on: r.key === sel.key }]}>{r.label}</a>
     ))}
     <button id="rep-csv" class="btn btn-ghost btn-sm" type="button">⬇ CSV</button>
     <button id="rep-print" class="btn btn-ghost btn-sm" type="button">🖨 Print</button>

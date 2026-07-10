@@ -50,7 +50,7 @@ const firstName = (profile?.full_name ?? "there").split(" ")[0];
 
 <AppLayout title="Dashboard" active="dashboard">
   <div slot="actions">
-    <a href="/app/checkout" class="btn btn-primary btn-sm">＋ Quick sale</a>
+    <a href="/checkout" class="btn btn-primary btn-sm">＋ Quick sale</a>
   </div>
 
   {denied && (
@@ -78,7 +78,7 @@ const firstName = (profile?.full_name ?? "there").split(" ")[0];
       <div class="results" id="cust-results">
         <p class="sub" style="margin-top:0.6rem;">Recent customers</p>
         {recent?.map((c) => (
-          <a class="result-row" href={`/app/checkout?customer=${c.id}`}>
+          <a class="result-row" href={`/checkout?customer=${c.id}`}>
             <span>
               <strong>{fullName(c)}</strong>
               <span class="meta" style="display:block;color:var(--muted-2);font-size:0.82rem;">
@@ -110,7 +110,7 @@ const firstName = (profile?.full_name ?? "there").split(" ")[0];
                     {t.type === "trade_in" && <span class="pill cyan">trade-in</span>}</td>
                   <td>{t.transaction_items?.length ?? 0}</td>
                   <td class="num">{fmt(t.total_cents)}</td>
-                  <td class="num"><a href={`/app/checkout?resume=${t.id}`} class="link">Resume →</a></td>
+                  <td class="num"><a href={`/checkout?resume=${t.id}`} class="link">Resume →</a></td>
                 </tr>
               ))}
             </tbody>
@@ -129,10 +129,10 @@ const firstName = (profile?.full_name ?? "there").split(" ")[0];
           </button>
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:0.6rem;">
-          <a href="/app/checkout" class="btn btn-primary btn-sm">🧾 New sale</a>
-          <a href="/app/trade-in" class="btn btn-ghost btn-sm">🔁 Trade-in / buy</a>
-          <a href="/app/returns" class="btn btn-ghost btn-sm">↩️ Return</a>
-          {!isCashier && <a href="/app/reports" class="btn btn-ghost btn-sm">📊 Reports</a>}
+          <a href="/checkout" class="btn btn-primary btn-sm">🧾 New sale</a>
+          <a href="/trade-in" class="btn btn-ghost btn-sm">🔁 Trade-in / buy</a>
+          <a href="/returns" class="btn btn-ghost btn-sm">↩️ Return</a>
+          {!isCashier && <a href="/reports" class="btn btn-ghost btn-sm">📊 Reports</a>}
         </div>
       </div>
     </div>
@@ -157,7 +157,7 @@ const firstName = (profile?.full_name ?? "there").split(" ")[0];
       const { results: rows = [] } = await res.json();
       if (!rows.length) { results.innerHTML = `<p class="empty">No customers match “${esc(q)}”.</p>`; return; }
       results.innerHTML = rows.map((c: any) => `
-        <a class="result-row" href="/app/checkout?customer=${c.id}">
+        <a class="result-row" href="/checkout?customer=${c.id}">
           <span><strong>${esc(c.first_name)} ${esc(c.last_name)}</strong>
             <span class="meta" style="display:block;color:var(--muted-2);font-size:.82rem;">${esc(c.email || c.phone || "—")}</span></span>
           <span class="meta" style="color:var(--muted-2);font-size:.8rem;">${money(c.store_credit_cents)} credit</span>

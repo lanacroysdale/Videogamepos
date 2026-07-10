@@ -7,7 +7,7 @@ import { renderMarkdown } from "../../lib/markdown";
 // Staff-only. A staff profile only exists for employees; customers (auth user
 // without a profile) get bounced so they can never read internal SOPs.
 const profile = Astro.locals.profile;
-if (!profile) return Astro.redirect("/app/login");
+if (!profile) return Astro.redirect("/login");
 const isManager = ["owner", "manager"].includes(profile.role);
 const isOwner = profile.role === "owner";
 
@@ -138,7 +138,7 @@ const fileIcon = (mime: string | null) => {
                 <div class="sop-cat">{cat}</div>
                 {byCat.get(cat)!.map((s) => (
                   <a
-                    href={`/app/sops?id=${s.id}`}
+                    href={`/sops?id=${s.id}`}
                     class:list={["sop-link", { active: s.id === pickId }]}
                     data-title={s.title.toLowerCase()}
                   >
@@ -562,7 +562,7 @@ const fileIcon = (mime: string | null) => {
     if (view) view.hidden = false;
     const id = elId?.value;
     // If we were creating (no id) and there's nothing to show, go to the list root.
-    if (!id && !view) location.href = "/app/sops";
+    if (!id && !view) location.href = "/sops";
   }
 
   $("sop-new")?.addEventListener("click", () => openEditor("new"));
@@ -618,11 +618,11 @@ const fileIcon = (mime: string | null) => {
       const existingId = elId?.value;
       if (existingId) {
         await api({ action: "update", id: existingId, ...payload });
-        location.href = `/app/sops?id=${existingId}`;
+        location.href = `/sops?id=${existingId}`;
       } else {
         const res = await api({ action: "create", ...payload });
         // Reopen in edit mode so files can be attached to the new SOP.
-        location.href = `/app/sops?id=${res.id}&edit=1`;
+        location.href = `/sops?id=${res.id}&edit=1`;
       }
     } catch (err: any) {
       if (status) status.textContent = "";
@@ -645,7 +645,7 @@ const fileIcon = (mime: string | null) => {
     if (!confirm(`Delete "${view.dataset.title}"? This also removes its attachments.`)) return;
     try {
       await api({ action: "delete", id: view.dataset.id });
-      location.href = "/app/sops";
+      location.href = "/sops";
     } catch (err: any) { alert(err.message); }
   });
 
