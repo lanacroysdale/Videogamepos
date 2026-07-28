@@ -1,17 +1,17 @@
 import type { APIRoute } from "astro";
 import { createSupabaseAdminClient } from "../../../lib/supabase";
-import { barSettings, withinClosingWindow } from "../../../lib/barSettings";
+import { barSettings } from "../../../lib/barSettings";
 import { autoCloseOpenTabs } from "../../../lib/tabs";
 
 export const prerender = false;
 const json = (d: unknown, s = 200) =>
   new Response(JSON.stringify(d), { status: s, headers: { "content-type": "application/json" } });
 
-// Nightly auto-close of bar tabs left open at closing time. Vercel Cron hits this
-// hourly (vercel.json) with `Authorization: Bearer ${CRON_SECRET}`; the handler
-// only sweeps when Portland-local time is within the post-closing window, so an
-// hourly schedule fires a few runs right after close and never during the day.
-// This is the backstop — the manager "Close out all" button is the precise control.
+// Daily auto-close of bar tabs left open overnight. Vercel Cron hits this ONCE a
+// day in the early morning (vercel.json — the free/Hobby plan allows only one cron
+// run per day) with `Authorization: Bearer ${CRON_SECRET}`, sweeping any tab still
+// open from the night before. The manager "Close out all" button is the precise,
+// in-shift control; this is just the safety net.
 export const GET: APIRoute = async ({ request }) => {
   const secret = import.meta.env.CRON_SECRET;
   if (!secret) return json({ error: "CRON_SECRET not configured" }, 503);
@@ -21,12 +21,12 @@ export const GET: APIRoute = async ({ request }) => {
   const { data: row } = await admin.from("store_settings").select("settings").eq("id", 1).maybeSingle();
   const bs = barSettings(row?.settings);
 
-  if (!bs.tabClosingTime) return json({ ok: true, skipped: "no closing time set" });
-  if (!withinClosingWindow(bs.tabClosingTime, new Date())) return json({ ok: true, skipped: "outside closing window" });
+  // Opt-in: a store turns on overnight auto-close by setting a closing time.
+  if (!bs.tabClosingTime) return json({ ok: true, skipped: "auto-close disabled (no closing time set)" });
 
   const res = await autoCloseOpenTabs(admin, {
     gratuityPercent: bs.tabAutoGratuityEnabled ? bs.tabAutoGratuityPercent : 0,
-    note: "Auto-closed at closing",
+    note: "Auto-closed overnight",
   });
   return json({ ok: true, ...res });
 };
