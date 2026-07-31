@@ -273,6 +273,9 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
           </div>
           <div class="dm-grid">
             <label class="dm-field">Price size<input id="lt-pscale" type="number" min="0.8" max="2" step="0.05" /></label>
+            <label class="dm-field">Title cut-off (chars)<input id="lt-tmax" type="number" min="10" max="60" step="1" /></label>
+          </div>
+          <div class="dm-grid">
             <div class="dm-field">Logo
               <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
                 <label class="btn btn-ghost btn-sm">🖼 Upload<input type="file" id="lt-logofile" accept="image/*" hidden /></label>
@@ -280,6 +283,8 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
                 <span id="lt-logostatus" class="muted-2"></span>
               </div>
             </div>
+            <label class="dm-field">Logo size (mm)<input id="lt-logoh" type="number" min="3" max="15" step="0.5" /></label>
+            <label class="dm-field">Logo orientation<select id="lt-logorot"><option value="upright">Upright</option><option value="sideways">Sideways (with price)</option></select></label>
           </div>
           <div class="lt-toggles" id="lt-shows">
             {["logo","title","category","condition","price","invType","location","sku","barcode"].map((k) => (
@@ -987,6 +992,9 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       ($("lt-spine") as unknown as HTMLSelectElement).value = t.spine; $("lt-spinew").value = String(t.spineWidthMm);
       $("lt-bch").value = String(t.barcodeHeightMm); $("lt-fscale").value = String(t.fontScale);
       $("lt-pscale").value = String(t.priceScale ?? 1.25);
+      $("lt-tmax").value = String(t.titleMaxChars ?? 28);
+      $("lt-logoh").value = String(t.logoHeightMm ?? 8);
+      ($("lt-logorot") as unknown as HTMLSelectElement).value = t.logoRotate === "sideways" ? "sideways" : "upright";
       (document.getElementById("lt-logoclear") as HTMLElement).hidden = !t.logoUrl;
       document.getElementById("lt-logostatus")!.textContent = t.logoUrl ? "logo set ✓" : "";
       shows.forEach((cb) => (cb.checked = !!t.show[cb.dataset.ltshow!]));
@@ -1005,6 +1013,9 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       t.barcodeHeightMm = Number($("lt-bch").value) || t.barcodeHeightMm;
       t.fontScale = Number($("lt-fscale").value) || t.fontScale;
       t.priceScale = Number($("lt-pscale").value) || t.priceScale || 1.25;
+      t.titleMaxChars = Number($("lt-tmax").value) || t.titleMaxChars || 28;
+      t.logoHeightMm = Number($("lt-logoh").value) || t.logoHeightMm || 8;
+      t.logoRotate = ($("lt-logorot") as unknown as HTMLSelectElement).value === "sideways" ? "sideways" : "upright";
       shows.forEach((cb) => (t.show[cb.dataset.ltshow!] = cb.checked));
       t.barcodeShowText = $("lt-bctext").checked;
       t.titleMaxLines = $("lt-2lines").checked ? 2 : 1;
@@ -1014,7 +1025,7 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     }
     function ltPreview() {
       const t = lts[sel];
-      try { document.getElementById("lt-preview")!.innerHTML = renderLabelSvg(t, SAMPLE); } catch { /* mid-edit invalid numbers */ }
+      try { document.getElementById("lt-preview")!.innerHTML = renderLabelSvg(t, SAMPLE, { preview: true }); } catch { /* mid-edit invalid numbers */ }
       // The renderer falls back to a full-width barcode strip when the face is
       // too narrow — so only warn when even the FULL label can't fit the code.
       (document.getElementById("lt-warn") as HTMLElement).hidden = t.show.barcode ? barcodeFits(SAMPLE.internalCode, t.widthMm - 4) : true;
