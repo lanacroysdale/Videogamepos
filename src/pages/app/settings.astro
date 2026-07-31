@@ -587,6 +587,8 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   .inv-grid { display: grid; grid-template-columns: 1fr 1fr auto auto; gap: 0.5rem; margin-top: 0.5rem; }
   @media (max-width: 640px) { .inv-grid { grid-template-columns: 1fr; } }
   #inv-result code { color: var(--cyan); font-weight: 700; }
+  /* The label designer needs room (form + preview side by side). */
+  #labels-panel { max-width: 920px; }
 
   /* Departments */
   .dept-tbl { margin: 0.4rem 0 0.2rem; }
@@ -614,11 +616,24 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   .lt-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; align-items: start; }
   @media (max-width: 700px) { .lt-layout { grid-template-columns: 1fr; } }
   .lt-list { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.6rem; }
-  .lt-chip { font: inherit; font-size: 0.82rem; padding: 0.3rem 0.7rem; border: 1px solid var(--border-strong); background: transparent; color: var(--muted); cursor: pointer; }
-  .lt-chip.on { border-color: var(--cyan); color: var(--cyan); }
-  .lt-toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 0.25rem 0.8rem; margin-top: 0.6rem; }
-  .lt-preview { margin-top: 0.4rem; padding: 0.8rem; background: #666; overflow: auto; display: grid; place-items: center; }
-  .lt-preview svg { transform: scale(2); transform-origin: center; box-shadow: 0 4px 14px rgba(0,0,0,.5); margin: 2.2rem 0; }
+  .lt-chip { font: inherit; font-size: 0.82rem; padding: 0.35rem 0.75rem; border: 1px solid var(--border-strong); background: rgba(127,127,127,.14); color: var(--text); cursor: pointer; }
+  .lt-chip:hover { border-color: var(--cyan); }
+  .lt-chip.on { background: var(--cyan); border-color: var(--cyan); color: #04222a; font-weight: 700; }
+  .lt-toggles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.3rem 0.9rem; margin-top: 0.6rem; }
+  .lt-toggles .dm-toggle { font-size: 0.84rem; white-space: nowrap; align-items: center; }
+  .lt-toggles .dm-toggle input { width: 1.05rem; height: 1.05rem; accent-color: var(--cyan); flex: none; }
+  @media (max-width: 900px) { .lt-toggles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .lt-preview { margin-top: 0.4rem; padding: 0.7rem; background: #666; }
+  .lt-preview svg { display: block; width: 100%; height: auto; box-shadow: 0 3px 10px rgba(0,0,0,.45); }
+
+  /* ---- Collapsible settings sections (accordionized at runtime) ---- */
+  .set-acc > h2 { cursor: pointer; user-select: none; display: flex; align-items: center; gap: 0.6rem; margin: 0; font-size: 1.3rem; }
+  .set-acc > h2 .acc-ico { font-size: 1.35rem; flex: none; }
+  .set-acc > h2::after { content: "▾"; margin-left: auto; font-size: 0.95rem; color: var(--muted-2); transition: transform .15s ease; transform: rotate(-90deg); }
+  .set-acc.acc-open > h2::after { transform: none; }
+  .set-acc .acc-body { margin-top: 1rem; }
+  .set-acc:not(.acc-open) .acc-body { display: none; }
+  .set-acc:not(.acc-open) { padding-top: 0.9rem; padding-bottom: 0.9rem; }
 </style>
 
 <script>
@@ -1066,4 +1081,36 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       save({ labelTemplates: lts }, document.getElementById("lt-status")!, e.currentTarget as HTMLButtonElement));
     ltForm();
   }
+
+  // ---- Accordionize the settings sections ----
+  // Runs LAST: every listener above is already attached, and moving nodes into
+  // the .acc-body wrapper preserves them. Each section collapses to a big
+  // emoji heading; open state is remembered per device.
+  const ACC_ICONS: [RegExp, string][] = [
+    [/^Team/, "👥"], [/^Departments/, "🏢"], [/^Inventory types/, "📦"],
+    [/^Label templates/, "🏷️"], [/^Appearance/, "🎨"], [/^Low-stock/, "📉"],
+    [/^Free shipping/, "🚚"], [/^Food/, "🍺"], [/^Tasks/, "✅"],
+    [/^Lead/, "📥"], [/^AI/, "✨"],
+  ];
+  document.querySelectorAll<HTMLElement>(".set-panel").forEach((p) => {
+    const h = p.querySelector(":scope > h2") as HTMLElement | null;
+    if (!h) return;
+    const txt = (h.textContent || "").trim();
+    const key = "tl-acc-" + txt.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 24);
+    const ico = ACC_ICONS.find(([re]) => re.test(txt))?.[1];
+    if (ico && !/^\p{Extended_Pictographic}/u.test(txt)) h.insertAdjacentHTML("afterbegin", `<span class="acc-ico">${ico}</span>`);
+    const body = document.createElement("div");
+    body.className = "acc-body";
+    [...p.children].forEach((c) => { if (c !== h) body.appendChild(c); });
+    p.appendChild(body);
+    p.classList.add("set-acc");
+    let open = false;
+    try { open = localStorage.getItem(key) === "1"; } catch {}
+    p.classList.toggle("acc-open", open);
+    h.addEventListener("click", () => {
+      const now = !p.classList.contains("acc-open");
+      p.classList.toggle("acc-open", now);
+      try { localStorage.setItem(key, now ? "1" : "0"); } catch {}
+    });
+  });
 </script>
