@@ -271,6 +271,16 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
             <label class="dm-field">Barcode height (mm)<input id="lt-bch" type="number" min="5" max="20" step="1" /></label>
             <label class="dm-field">Font scale<input id="lt-fscale" type="number" min="0.7" max="1.5" step="0.05" /></label>
           </div>
+          <div class="dm-grid">
+            <label class="dm-field">Price size<input id="lt-pscale" type="number" min="0.8" max="2" step="0.05" /></label>
+            <div class="dm-field">Logo
+              <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+                <label class="btn btn-ghost btn-sm">🖼 Upload<input type="file" id="lt-logofile" accept="image/*" hidden /></label>
+                <button id="lt-logoclear" class="link-btn" type="button" hidden>Remove</button>
+                <span id="lt-logostatus" class="muted-2"></span>
+              </div>
+            </div>
+          </div>
           <div class="lt-toggles" id="lt-shows">
             {["logo","title","category","condition","price","invType","location","sku","barcode"].map((k) => (
               <label class="dm-toggle"><input type="checkbox" data-ltshow={k} /> {k === "invType" ? "Inventory type" : k === "sku" ? "SKU" : k[0].toUpperCase() + k.slice(1)}</label>
@@ -959,9 +969,9 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     const SAMPLE = {
       title: "Mega Man X3", categoryName: "Super Nintendo", condShort: "CIB · ★★★",
       priceCents: 26000, invTypeName: "Retail", locationKey: "PDX",
-      // 12 chars = the REAL internal-code length ("TL" + 10 hex) so the preview
-      // shows true barcode width, not a flattering short one.
-      internalCode: "TL2C3F5A7B9D", sku: "SNES-MMX3", storeName: blob.storeName || "TimeLag",
+      // Real code lengths: 10-digit numeric label code (compact Code 128C —
+      // what actually prints) + the 12-char internal fallback.
+      internalCode: "TL2C3F5A7B9D", labelCode: "1000000042", sku: "SNES-MMX3", storeName: blob.storeName || "TimeLag",
     };
     const shows = [...ltPanel.querySelectorAll<HTMLInputElement>("[data-ltshow]")];
 
@@ -976,6 +986,9 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       $("lt-name").value = t.name; $("lt-w").value = String(t.widthMm); $("lt-h").value = String(t.heightMm);
       ($("lt-spine") as unknown as HTMLSelectElement).value = t.spine; $("lt-spinew").value = String(t.spineWidthMm);
       $("lt-bch").value = String(t.barcodeHeightMm); $("lt-fscale").value = String(t.fontScale);
+      $("lt-pscale").value = String(t.priceScale ?? 1.25);
+      (document.getElementById("lt-logoclear") as HTMLElement).hidden = !t.logoUrl;
+      document.getElementById("lt-logostatus")!.textContent = t.logoUrl ? "logo set ✓" : "";
       shows.forEach((cb) => (cb.checked = !!t.show[cb.dataset.ltshow!]));
       $("lt-bctext").checked = !!t.barcodeShowText;
       $("lt-2lines").checked = t.titleMaxLines === 2;
@@ -991,6 +1004,7 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       t.spineWidthMm = Number($("lt-spinew").value) || t.spineWidthMm;
       t.barcodeHeightMm = Number($("lt-bch").value) || t.barcodeHeightMm;
       t.fontScale = Number($("lt-fscale").value) || t.fontScale;
+      t.priceScale = Number($("lt-pscale").value) || t.priceScale || 1.25;
       shows.forEach((cb) => (t.show[cb.dataset.ltshow!] = cb.checked));
       t.barcodeShowText = $("lt-bctext").checked;
       t.titleMaxLines = $("lt-2lines").checked ? 2 : 1;
@@ -1017,6 +1031,26 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       if (!lts.some((t: any) => t.isDefault)) lts[0].isDefault = true;
       sel = 0; ltForm();
     });
+    // Logo upload → product-images bucket (same endpoint the inventory modal uses).
+    (document.getElementById("lt-logofile") as HTMLInputElement | null)?.addEventListener("change", async (e) => {
+      const input = e.target as HTMLInputElement;
+      const f = input.files?.[0];
+      if (!f) return;
+      const st = document.getElementById("lt-logostatus")!;
+      st.textContent = "Uploading…";
+      try {
+        const fd = new FormData(); fd.append("file", f);
+        const r = await fetch("/api/pos/upload-image", { method: "POST", body: fd });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j.ok) throw new Error(j.error || "Upload failed");
+        lts[sel].logoUrl = j.url;
+        st.textContent = "logo set ✓ — Save templates to keep it";
+        ltForm();
+      } catch (err: any) { st.textContent = ""; alert(err.message); }
+      finally { input.value = ""; }
+    });
+    document.getElementById("lt-logoclear")?.addEventListener("click", () => { lts[sel].logoUrl = ""; ltForm(); });
+
     document.getElementById("lt-save")?.addEventListener("click", (e) =>
       save({ labelTemplates: lts }, document.getElementById("lt-status")!, e.currentTarget as HTMLButtonElement));
     ltForm();

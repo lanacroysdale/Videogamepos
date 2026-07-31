@@ -17,7 +17,8 @@ const [{ data: invTypesSrv }, { data: locationsSrv }] = await Promise.all([
   supabase.from("store_locations").select("id, key, name, is_default").order("sort_order").order("name"),
 ]);
 const hasTypes = !!invTypesSrv;
-const variantExtraCols = hasTypes ? ", inventory_type_id, location_id" : "";
+const { error: lcProbeErr } = await supabase.from("product_variants").select("label_code").limit(1);
+const variantExtraCols = `${hasTypes ? ", inventory_type_id, location_id" : ""}${lcProbeErr ? "" : ", label_code"}`;
 const { data: products } = await supabase
   .from("products")
   .select(
@@ -47,6 +48,7 @@ const items = (products ?? []).map((p: any) => ({
     gradeCode: v.grade_code ?? "",
     sku: v.sku,
     internalCode: v.internal_code ?? "",
+    labelCode: v.label_code ?? "",
     priceCents: v.price_cents,
     onlinePriceCents: v.online_price_cents,
     costCents: v.cost_cents,
@@ -435,6 +437,7 @@ const posData = {
       invTypeName: typeById.get(v.inventoryTypeId)?.name ?? "",
       locationKey: loc?.key ?? "",
       internalCode: v.internalCode || "",
+      labelCode: v.labelCode || "",
       sku: v.sku || "",
       storeName,
     };
@@ -1030,6 +1033,7 @@ const posData = {
             invTypeName: typeById.get(v.inventory_type_id)?.name ?? "",
             locationKey: loc?.key ?? "",
             internalCode: v.internal_code,
+            labelCode: v.label_code ?? "",
             sku: v.sku || "",
             storeName,
           },

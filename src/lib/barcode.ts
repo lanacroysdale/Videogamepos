@@ -33,23 +33,33 @@ for (let i = 0; i < PATTERNS.length; i++) {
 }
 
 const START_B = 104;
+const START_C = 105;
 const STOP = 106;
 export const QUIET_MODULES = 10; // quiet zone on each side (spec minimum)
 
 // Bar/space module widths for the full symbol run (quiet zones NOT included).
 // Odd positions in the flat array are bars, even are spaces (starting with a bar).
+// Subset auto-select: even-length pure-digit payloads use subset C (2 digits per
+// symbol → HALF the printed width — this is why numeric label codes beat the
+// 12-char alphanumeric internal codes on a 57mm tag); everything else uses B.
 export function code128Widths(text: string): number[] {
   if (!text) throw new Error("Empty barcode text");
+  const useC = /^\d+$/.test(text) && text.length % 2 === 0;
   const values: number[] = [];
-  for (const ch of text) {
-    const code = ch.charCodeAt(0);
-    if (code < 32 || code > 126) throw new Error(`Code128B can't encode character "${ch}"`);
-    values.push(code - 32);
+  if (useC) {
+    for (let i = 0; i < text.length; i += 2) values.push(Number(text.slice(i, i + 2)));
+  } else {
+    for (const ch of text) {
+      const code = ch.charCodeAt(0);
+      if (code < 32 || code > 126) throw new Error(`Code128B can't encode character "${ch}"`);
+      values.push(code - 32);
+    }
   }
-  let checksum = START_B;
+  const start = useC ? START_C : START_B;
+  let checksum = start;
   values.forEach((v, i) => { checksum += v * (i + 1); });
   checksum %= 103;
-  const symbols = [START_B, ...values, checksum, STOP];
+  const symbols = [start, ...values, checksum, STOP];
   const widths: number[] = [];
   for (const s of symbols) for (const d of PATTERNS[s]) widths.push(Number(d));
   return widths;

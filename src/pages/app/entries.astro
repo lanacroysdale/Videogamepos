@@ -160,7 +160,7 @@ const pageData = {
               priceCents: v.price_cents ?? 0,
               invTypeName: (typeById.get(v.inventory_type_id) as any)?.name ?? "",
               locationKey: (loc as any)?.key ?? defaultLocKey,
-              internalCode: v.internal_code, sku: v.sku || "", storeName: data.storeName,
+              internalCode: v.internal_code, labelCode: v.label_code ?? "", sku: v.sku || "", storeName: data.storeName,
             },
             defaultCopies: it.qty_added,
             allCopies: v.quantity,

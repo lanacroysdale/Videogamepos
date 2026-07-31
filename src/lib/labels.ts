@@ -21,6 +21,8 @@ export type LabelTemplate = {
   barcodeShowText: boolean;              // human-readable code under the bars
   titleMaxLines: 1 | 2;
   fontScale: number;                     // 0.7–1.5
+  priceScale: number;                    // 0.8–2 — sizes the price (face + spine)
+  logoUrl: string;                       // uploaded logo image ("" = store name text)
   isDefault?: boolean;
 };
 
@@ -32,9 +34,10 @@ export type LabelItem = {
   priceCents: number;
   invTypeName: string;    // e.g. "Personal Collection" ("" hides)
   locationKey: string;    // e.g. "PDX"
-  internalCode: string;   // barcode payload (TL…)
+  internalCode: string;   // fallback barcode payload (TL…, wide)
+  labelCode?: string;     // preferred payload: 10-digit numeric → compact Code 128C
   sku: string;
-  storeName: string;      // spine logo text
+  storeName: string;      // spine logo text (used when no logoUrl)
 };
 
 export const DEFAULT_TEMPLATE: LabelTemplate = {
@@ -49,6 +52,8 @@ export const DEFAULT_TEMPLATE: LabelTemplate = {
   barcodeShowText: true,
   titleMaxLines: 1,
   fontScale: 1,
+  priceScale: 1.25,
+  logoUrl: "",
   isDefault: true,
 };
 
@@ -87,6 +92,8 @@ export function sanitizeLabelTemplates(raw: any): LabelTemplate[] {
       barcodeShowText: t.barcodeShowText !== false,
       titleMaxLines: t.titleMaxLines === 2 ? 2 : 1,
       fontScale: clamp(t.fontScale, 0.7, 1.5, 1),
+      priceScale: clamp(t.priceScale, 0.8, 2, d.priceScale),
+      logoUrl: typeof t.logoUrl === "string" && /^https?:\/\//.test(t.logoUrl) ? t.logoUrl.slice(0, 500) : "",
       isDefault: t.isDefault === true,
     });
     // Cross-clamps: independent ranges can still combine into impossible
@@ -154,35 +161,45 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem): string {
 
   parts.push(`<rect x="0" y="0" width="${W}" height="${H}" fill="#fff"/>`);
 
-  // ---- Barcode geometry first: a real 12-char code at scanner-safe density
-  // (≥0.25mm modules) needs ~47mm — wider than the face once a spine is on. In
-  // that case the barcode strip spans the FULL label width, the spine divider
-  // stops above it, and the spine text re-centers on the remaining height.
-  // Bars crossing the divider would read as a phantom bar → unscannable.
-  const wantBarcode = tpl.show.barcode && !!item.internalCode;
+  // ---- Barcode geometry first. Preferred payload = the 10-digit numeric
+  // label_code (Code 128C, ~27mm — the compact wrap-tag look); the 12-char
+  // internal_code fallback is wide (~47mm) and may need the FULL label width,
+  // in which case the spine divider stops above the strip (bars crossing the
+  // divider would read as a phantom bar → unscannable).
+  const bcPayload = item.labelCode || item.internalCode;
+  const wantBarcode = tpl.show.barcode && !!bcPayload;
   const bcTextMm = wantBarcode && tpl.barcodeShowText ? 2.4 * fs : 0;
   const bcY = H - INSET - tpl.barcodeHeightMm - bcTextMm;
   let bcModules = 0;
   let bcFullWidth = false;
   if (wantBarcode) {
     try {
-      bcModules = code128Modules(item.internalCode);
+      bcModules = code128Modules(bcPayload);
       bcFullWidth = spineW > 0 && bcModules * MIN_MODULE_MM > fw;
     } catch { /* unencodable — no barcode drawn below */ }
   }
   const spineBottom = wantBarcode && bcFullWidth ? Math.max(6, bcY - 1) : H;
 
-  // ---- Spine: vertical price + logo (reads bottom-up, VGW style) ----
+  // ---- Spine: logo stamp at the top (uploaded image, else store name), then
+  // the price reading bottom-up — deterministic positions, no baseline stacking.
   if (spineW > 0) {
     const sx = tpl.spine === "left" ? 0 : W - spineW;
-    const cx = sx + spineW / 2;
-    const cy = spineBottom / 2;
     parts.push(`<line x1="${tpl.spine === "left" ? spineW : sx}" y1="0" x2="${tpl.spine === "left" ? spineW : sx}" y2="${spineBottom.toFixed(2)}" stroke="#000" stroke-width="0.3"/>`);
-    if (tpl.show.price) {
-      parts.push(`<text x="${cx}" y="${cy.toFixed(2)}" transform="rotate(-90 ${cx} ${cy.toFixed(2)})" text-anchor="middle" dominant-baseline="${tpl.show.logo ? "auto" : "middle"}" font-family="Arial,Helvetica,sans-serif" font-weight="800" font-size="${(5.2 * fs).toFixed(2)}" fill="#000">${esc(money(item.priceCents))}</text>`);
+    let logoBottom = 0;
+    if (tpl.show.logo) {
+      if (tpl.logoUrl) {
+        const lh = Math.max(3, Math.min(spineW - 2, 9, spineBottom * 0.35));
+        parts.push(`<image href="${esc(tpl.logoUrl)}" x="${(sx + 1).toFixed(2)}" y="1.2" width="${(spineW - 2).toFixed(2)}" height="${lh.toFixed(2)}" preserveAspectRatio="xMidYMid meet"/>`);
+        logoBottom = 1.2 + lh + 0.8;
+      } else if (item.storeName) {
+        parts.push(`<text x="${(sx + spineW / 2).toFixed(2)}" y="3" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-weight="700" font-size="${(1.9 * fs).toFixed(2)}" letter-spacing="0.2" fill="#000">${esc(item.storeName.toUpperCase().slice(0, 12))}</text>`);
+        logoBottom = 4.4;
+      }
     }
-    if (tpl.show.logo && item.storeName) {
-      parts.push(`<text x="${cx}" y="${cy.toFixed(2)}" transform="rotate(-90 ${cx} ${cy.toFixed(2)})" dy="${(3.4 * fs).toFixed(2)}" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-weight="700" font-size="${(2.1 * fs).toFixed(2)}" letter-spacing="0.3" fill="#000">${esc(item.storeName.toUpperCase())}</text>`);
+    if (tpl.show.price) {
+      const cx = sx + spineW / 2;
+      const cy = logoBottom + (spineBottom - logoBottom) / 2;
+      parts.push(`<text x="${cx.toFixed(2)}" y="${cy.toFixed(2)}" transform="rotate(-90 ${cx.toFixed(2)} ${cy.toFixed(2)})" text-anchor="middle" dominant-baseline="central" font-family="Arial,Helvetica,sans-serif" font-weight="800" font-size="${(4.8 * fs * tpl.priceScale).toFixed(2)}" fill="#000">${esc(money(item.priceCents))}</text>`);
     }
   }
 
@@ -207,9 +224,9 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem): string {
   // Price (face) + inventory type / location tag line.
   const tagBits = [tpl.show.invType ? item.invTypeName : "", tpl.show.location ? item.locationKey : ""].filter(Boolean);
   if (tpl.show.price || tagBits.length) {
-    const py = y + 1.4 * fs;
+    const py = y + 1.4 * fs * tpl.priceScale;
     if (tpl.show.price) {
-      parts.push(`<text x="${fx}" y="${py.toFixed(2)}" font-family="Arial,Helvetica,sans-serif" font-weight="800" font-size="${(4.4 * fs).toFixed(2)}" fill="#000">${esc(money(item.priceCents))}</text>`);
+      parts.push(`<text x="${fx}" y="${py.toFixed(2)}" font-family="Arial,Helvetica,sans-serif" font-weight="800" font-size="${(5.2 * fs * tpl.priceScale).toFixed(2)}" fill="#000">${esc(money(item.priceCents))}</text>`);
     }
     if (tagBits.length) {
       parts.push(`<text x="${(fx + fw).toFixed(2)}" y="${py.toFixed(2)}" text-anchor="end" font-family="Arial,Helvetica,sans-serif" font-size="${(2.1 * fs).toFixed(2)}" fill="#000">${esc(tagBits.join(" · "))}</text>`);
@@ -217,11 +234,13 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem): string {
     y = py;
   }
   // Barcode pinned to the bottom (face-width, or full label width — see above).
+  // Never stretch to fill: modules cap at 0.30mm so a compact numeric code
+  // STAYS compact and centered instead of smearing across the label.
   if (wantBarcode && bcModules > 0) {
     const areaX = bcFullWidth ? INSET : fx;
     const areaW = bcFullWidth ? W - INSET * 2 : fw;
-    const modMm = Math.max(MIN_MODULE_MM, Math.min(0.5, areaW / bcModules));
-    const { svg } = code128SvgGroup(item.internalCode, areaX + Math.max(0, (areaW - bcModules * modMm) / 2), bcY, {
+    const modMm = Math.max(MIN_MODULE_MM, Math.min(0.3, areaW / bcModules));
+    const { svg } = code128SvgGroup(bcPayload, areaX + Math.max(0, (areaW - bcModules * modMm) / 2), bcY, {
       moduleMm: modMm, heightMm: tpl.barcodeHeightMm, showText: tpl.barcodeShowText, textMm: 2.2 * fs,
     });
     parts.push(svg);

@@ -17,7 +17,8 @@ const [{ data: settingsRow }, { data: invTypes }, { data: locations }, { data: c
 // inventory_type_id/location_id only exist post-migration — selecting them
 // early would 400 both queries and mask real pending changes behind an empty state.
 const typesReady = !!invTypes;
-const VARIANT_COLS = `id, condition, sku, internal_code, price_cents, quantity, completeness_code, grade_code${typesReady ? ", inventory_type_id, location_id" : ""}, product:products(title, platform, category:categories(name))`;
+const { error: lcProbeErr } = await supabase.from("product_variants").select("label_code").limit(1);
+const VARIANT_COLS = `id, condition, sku, internal_code${lcProbeErr ? "" : ", label_code"}, price_cents, quantity, completeness_code, grade_code${typesReady ? ", inventory_type_id, location_id" : ""}, product:products(title, platform, category:categories(name))`;
 const { data: pending } = await supabase
   .from("price_changes")
   .select(`id, old_cents, suggested_cents, source, created_at, variant:product_variants(${VARIANT_COLS})`)
@@ -50,6 +51,7 @@ const rowInfo = (p: any) => ({
   suggestedCents: p.suggested_cents,
   quantity: p.variant?.quantity ?? 0,
   internalCode: p.variant?.internal_code ?? "",
+  labelCode: p.variant?.label_code ?? "",
   sku: p.variant?.sku ?? "",
   invTypeName: typeName.get(p.variant?.inventory_type_id) ?? "",
   locationKey: locKey.get(p.variant?.location_id) ?? defaultLocKey,
@@ -160,9 +162,9 @@ const clientBlob = { rows: lblRows, templates: labelTemplates((settingsRow as an
   // CURRENT effective price (updated locally when a change is approved).
   function lineFor(id: string) {
     const r = rows[id];
-    if (!r || !r.internalCode) return null;
+    if (!r || !(r.labelCode || r.internalCode)) return null;
     return {
-      item: { title: r.title, categoryName: r.categoryName, condShort: r.condShort, priceCents: r.priceCents, invTypeName: r.invTypeName, locationKey: r.locationKey, internalCode: r.internalCode, sku: r.sku, storeName: blob.storeName },
+      item: { title: r.title, categoryName: r.categoryName, condShort: r.condShort, priceCents: r.priceCents, invTypeName: r.invTypeName, locationKey: r.locationKey, internalCode: r.internalCode, labelCode: r.labelCode || "", sku: r.sku, storeName: blob.storeName },
       defaultCopies: Math.max(1, r.quantity), // a price change re-tags every shelf copy
     };
   }

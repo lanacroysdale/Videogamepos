@@ -85,10 +85,13 @@ export const POST: APIRoute = async ({ locals, request }) => {
     }
     case "getEntry": {
       if (!b.entryId) return json({ error: "entryId required" }, 400);
+      // label_code ships in a later migration — probe so this select can't 400.
+      const { error: lcErr } = await sb.from("product_variants").select("label_code").limit(1);
+      const lcCol = lcErr ? "" : ", label_code";
       const [{ data: entry }, { data: items, error }] = await Promise.all([
         sb.from("inventory_entries").select("id, human_id, source, status, note, created_at, committed_at, employee:profiles(full_name)").eq("id", b.entryId).maybeSingle(),
         sb.from("inventory_entry_items")
-          .select("id, qty_added, unit_cost_cents, price_cents_at_entry, was_new_variant, created_at, variant:product_variants(id, sku, internal_code, price_cents, quantity, completeness_code, grade_code, condition, inventory_type_id, location_id, product:products(title, platform, category:categories(name)))")
+          .select(`id, qty_added, unit_cost_cents, price_cents_at_entry, was_new_variant, created_at, variant:product_variants(id, sku, internal_code${lcCol}, price_cents, quantity, completeness_code, grade_code, condition, inventory_type_id, location_id, product:products(title, platform, category:categories(name)))`)
           .eq("entry_id", b.entryId).order("created_at"),
       ]);
       if (!entry) return json({ error: "Entry not found." }, 404);

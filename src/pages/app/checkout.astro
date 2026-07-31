@@ -17,10 +17,13 @@ const { data: categories } = await supabase.from("categories").select("*").order
 const { data: invTypeRows } = await supabase.from("store_inventory_types").select("id, key, name, icon, block_at_checkout");
 const hasTypes = !!invTypeRows;
 const typeInfoById = new Map((invTypeRows ?? []).map((t: any) => [t.id, t]));
+// Numeric label codes ship in migration 20260801000001 — probe before selecting.
+const { error: lcProbeErr } = await supabase.from("product_variants").select("label_code").limit(1);
+const hasLabelCodes = !lcProbeErr;
 
 const { data: variantRows } = await supabase
   .from("product_variants")
-  .select(`id, condition, completeness, price_cents, quantity, sku, barcode, internal_code${hasTypes ? ", inventory_type_id" : ""}, product_barcodes(barcode), product:products(title, platform, category:categories(id,name,color,is_trackable))`)
+  .select(`id, condition, completeness, price_cents, quantity, sku, barcode, internal_code${hasLabelCodes ? ", label_code" : ""}${hasTypes ? ", inventory_type_id" : ""}, product_barcodes(barcode), product:products(title, platform, category:categories(id,name,color,is_trackable))`)
   .order("price_cents", { ascending: false });
 
 const catalog = (variantRows ?? []).map((v: any) => ({
@@ -34,6 +37,7 @@ const catalog = (variantRows ?? []).map((v: any) => ({
   sku: v.sku,
   barcode: v.barcode,
   internalCode: v.internal_code ?? "",
+  labelCode: v.label_code ?? "",
   altBarcodes: (v.product_barcodes ?? []).map((b: any) => b.barcode),
   blocked: hasTypes ? !!typeInfoById.get(v.inventory_type_id)?.block_at_checkout : false,
   typeName: hasTypes ? (typeInfoById.get(v.inventory_type_id)?.name ?? "") : "",
@@ -435,6 +439,7 @@ const posData = { catalog, categories: categories ?? [], customer };
     const code = search.trim();
     const hit = code && catalog.find((v: any) =>
       (v.barcode && v.barcode === code) ||
+      (v.labelCode && v.labelCode === code) ||
       (v.internalCode && v.internalCode === code.toUpperCase()) ||
       (v.altBarcodes && v.altBarcodes.includes(code)));
     if (hit) { addVariant(hit.variantId); search = ""; (e.target as HTMLInputElement).value = ""; }
