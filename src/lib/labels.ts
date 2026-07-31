@@ -78,6 +78,7 @@ export type LabelTemplate = {
   widthMm: number;                       // 20–110 (2.25in ≈ 57)
   heightMm: number;                      // 10–80  (1.25in ≈ 32)
   spine: "left" | "right" | "none";      // vertical price-flag column
+  spineDir: "down" | "up";               // read direction — 'down' = top-down (game-spine convention)
   spineWidthMm: number;                  // 8–25 (ignored when spine === "none")
   show: {
     logo: boolean; title: boolean; category: boolean; condition: boolean;
@@ -95,6 +96,7 @@ export type LabelTemplate = {
   logoUrl: string;                       // uploaded logo image ("" = store name text)
   logoHeightMm: number;                  // 3–15 — logo size on the spine
   logoRotate: "upright" | "sideways";    // sideways = rotated with the spine price
+  logoSide: "left" | "right";            // logo before/after the price (read order); no-spine: lower corner
   titleMaxChars: number;                 // 10–60 — hard cut-off (… beyond this)
   isDefault?: boolean;
 };
@@ -119,6 +121,7 @@ export const DEFAULT_TEMPLATE: LabelTemplate = {
   widthMm: 57,
   heightMm: 32,
   spine: "left", // front-to-spine: face on the case FRONT, flap wraps the spine
+  spineDir: "down",
   spineWidthMm: 13,
   show: { logo: true, title: true, category: true, condition: true, price: true, invType: true, location: true, sku: false, barcode: true, spineText: true },
   spineText: "",
@@ -132,6 +135,7 @@ export const DEFAULT_TEMPLATE: LabelTemplate = {
   logoUrl: "",
   logoHeightMm: 8,
   logoRotate: "upright",
+  logoSide: "left",
   titleMaxChars: 28,
   isDefault: true,
 };
@@ -161,6 +165,7 @@ export function sanitizeLabelTemplates(raw: any): LabelTemplate[] {
       widthMm: clamp(t.widthMm, 20, 110, d.widthMm),
       heightMm: clamp(t.heightMm, 10, 80, d.heightMm),
       spine: ["left", "right", "none"].includes(t.spine) ? t.spine : d.spine,
+      spineDir: t.spineDir === "up" ? "up" : "down",
       spineWidthMm: clamp(t.spineWidthMm, 8, 25, d.spineWidthMm),
       show: {
         logo: t.show?.logo !== false, title: t.show?.title !== false, category: t.show?.category !== false,
@@ -179,6 +184,7 @@ export function sanitizeLabelTemplates(raw: any): LabelTemplate[] {
       logoUrl: typeof t.logoUrl === "string" && /^https?:\/\//.test(t.logoUrl) ? t.logoUrl.slice(0, 500) : "",
       logoHeightMm: clamp(t.logoHeightMm, 3, 15, d.logoHeightMm),
       logoRotate: t.logoRotate === "sideways" ? "sideways" : "upright",
+      logoSide: t.logoSide === "right" ? "right" : "left",
       titleMaxChars: clamp(t.titleMaxChars, 10, 60, d.titleMaxChars),
       isDefault: t.isDefault === true,
     });
@@ -282,18 +288,23 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
   const spineBottom = wantBarcode && bcFullWidth ? Math.max(6, bcY - 1) : H;
 
   // ---- Spine: logo stamp at the top (uploaded image, else store name), then
-  // the price reading bottom-up — deterministic positions, no baseline stacking.
+  // the price reading in the template's spineDir — deterministic positions.
   if (spineW > 0) {
     const sx = tpl.spine === "left" ? 0 : W - spineW;
-    // Spine reading direction follows the fold: a LEFT flap reads TOP-DOWN
-    // (book-spine convention when the case faces you); a right flap bottom-up.
-    const rot = tpl.spine === "left" ? 90 : -90;
+    // Read direction is a SETTING, not inferred from the flap side: game
+    // spines read top-down, so that's the default on both flaps (owner spec).
+    const rot = tpl.spineDir === "up" ? -90 : 90;
     // The divider is a DESIGNER GUIDE only — printed tags fold on this line and
     // a printed rule reads as clutter (owner feedback).
     if (opts?.preview) {
       parts.push(`<line x1="${tpl.spine === "left" ? spineW : sx}" y1="0" x2="${tpl.spine === "left" ? spineW : sx}" y2="${spineBottom.toFixed(2)}" stroke="#bbb" stroke-width="0.25" stroke-dasharray="1,0.8"/>`);
     }
-    let logoBottom = 0;
+    // Logo sits BEFORE the price in read order ('left', the top end of a
+    // top-down spine) or AFTER it ('right', the bottom end) — logoSide is in
+    // read order, so it follows spineDir when the direction flips.
+    const logoAtTop = (tpl.logoSide !== "right") === (tpl.spineDir !== "up");
+    let regionA = 0; // pair region between the logo and the spine's other end
+    let regionB = spineBottom;
     if (tpl.show.logo) {
       if (tpl.logoUrl) {
         const cx = sx + spineW / 2;
@@ -301,17 +312,19 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
           // Rotated with the price: image length runs down the spine.
           const len = Math.max(4, Math.min(tpl.logoHeightMm * 1.8, spineBottom * 0.4));
           const across = Math.min(tpl.logoHeightMm, spineW - 1.6);
-          const ly = 1.2 + len / 2;
+          const ly = logoAtTop ? 1.2 + len / 2 : spineBottom - 1.2 - len / 2;
           parts.push(`<image href="${esc(tpl.logoUrl)}" x="${(cx - len / 2).toFixed(2)}" y="${(ly - across / 2).toFixed(2)}" width="${len.toFixed(2)}" height="${across.toFixed(2)}" preserveAspectRatio="xMidYMid meet" transform="rotate(${rot} ${cx.toFixed(2)} ${ly.toFixed(2)})"/>`);
-          logoBottom = 1.2 + len + 0.8;
+          if (logoAtTop) regionA = 1.2 + len + 0.8; else regionB = spineBottom - 1.2 - len - 0.8;
         } else {
           const lh = Math.max(3, Math.min(tpl.logoHeightMm, spineBottom * 0.4));
-          parts.push(`<image href="${esc(tpl.logoUrl)}" x="${(sx + 0.8).toFixed(2)}" y="1.2" width="${(spineW - 1.6).toFixed(2)}" height="${lh.toFixed(2)}" preserveAspectRatio="xMidYMid meet"/>`);
-          logoBottom = 1.2 + lh + 0.8;
+          const ly = logoAtTop ? 1.2 : spineBottom - 1.2 - lh;
+          parts.push(`<image href="${esc(tpl.logoUrl)}" x="${(sx + 0.8).toFixed(2)}" y="${ly.toFixed(2)}" width="${(spineW - 1.6).toFixed(2)}" height="${lh.toFixed(2)}" preserveAspectRatio="xMidYMid meet"/>`);
+          if (logoAtTop) regionA = ly + lh + 0.8; else regionB = ly - 0.8;
         }
       } else if (item.storeName) {
-        parts.push(`<text x="${(sx + spineW / 2).toFixed(2)}" y="3" text-anchor="middle" font-family="${fam}" font-weight="${wMid}" font-size="${(1.9 * fs * fsc).toFixed(2)}" letter-spacing="0.2" fill="#000">${esc(item.storeName.toUpperCase().slice(0, 12))}</text>`);
-        logoBottom = 4.4;
+        const ty = logoAtTop ? 3 : spineBottom - 1.4;
+        parts.push(`<text x="${(sx + spineW / 2).toFixed(2)}" y="${ty.toFixed(2)}" text-anchor="middle" font-family="${fam}" font-weight="${wMid}" font-size="${(1.9 * fs * fsc).toFixed(2)}" letter-spacing="0.2" fill="#000">${esc(item.storeName.toUpperCase().slice(0, 12))}</text>`);
+        if (logoAtTop) regionA = 4.4; else regionB = spineBottom - 4.4;
       }
     }
     const tagline = tpl.show.spineText ? tpl.spineText.trim() : "";
@@ -324,9 +337,12 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
       const tagH = tagline ? 2.0 * fs * fsc : 0;
       const gap = priceH && tagH ? 0.9 : 0;
       const total = priceH + gap + tagH;
-      let cy = logoBottom + (spineBottom - logoBottom) / 2;
+      let cy = regionA + (regionB - regionA) / 2;
       // Per-font nudge toward the logo end of the spine (never onto it).
-      if (FP.spineShift) cy = Math.max(logoBottom + total / 2 + 0.6, cy - FP.spineShift);
+      if (FP.spineShift) {
+        cy += logoAtTop ? -FP.spineShift : FP.spineShift;
+        cy = Math.max(regionA + total / 2 + 0.6, Math.min(regionB - total / 2 - 0.6, cy));
+      }
       const rotAttr = `transform="rotate(${rot} ${cx.toFixed(2)} ${cy.toFixed(2)})"`;
       const priceDy = tagH ? -(total / 2 - priceH / 2) : 0;
       const tagDy = priceH ? total / 2 - tagH / 2 : 0;
@@ -349,28 +365,8 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
 
   // Title auto-sizes: short names print BIG, long names shrink to fit, and the
   // configurable titleMaxChars cut-off ellipsizes runaways.
-  let y = INSET;
-  // No spine → the logo still belongs on the tag: centered header at the top
-  // of the face (image if uploaded, else the store name), face flows below.
-  if (spineW === 0 && tpl.show.logo) {
-    if (tpl.logoUrl) {
-      const lh = Math.min(tpl.logoHeightMm, 10);
-      const lw = Math.min(contentW * 0.6, lh * 3.2);
-      parts.push(`<image href="${esc(tpl.logoUrl)}" x="${(cxFace - lw / 2).toFixed(2)}" y="${y.toFixed(2)}" width="${lw.toFixed(2)}" height="${lh.toFixed(2)}" preserveAspectRatio="xMidYMid meet"/>`);
-      y += lh + 1;
-    } else if (item.storeName) {
-      y += 2.1 * fs * fsc;
-      parts.push(`<text x="${cxFace.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="middle" font-family="${fam}" font-weight="${wMid}" font-size="${(2.1 * fs * fsc).toFixed(2)}" letter-spacing="0.25" fill="#000">${esc(item.storeName.toUpperCase().slice(0, 18))}</text>`);
-      y += 0.9;
-    }
-    // Tagline rides under the no-spine header too.
-    const nsTag = tpl.show.spineText ? tpl.spineText.trim() : "";
-    if (nsTag) {
-      y += 2.2 * fs * fsc;
-      parts.push(`<text x="${cxFace.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="middle" font-family="${fam}" font-weight="${wMid}" font-size="${(1.9 * fs * fsc).toFixed(2)}" letter-spacing="0.2" fill="#000">${esc(nsTag)}</text>`);
-      y += 0.7;
-    }
-  }
+  let y = INSET; // no-spine tags: title starts at the top — the logo lives in
+  // a lower corner of the price band now (owner spec), not a top header.
   const metaSize = 2.4 * fs * fsc * (FP.metaScale ?? 1);
   if (tpl.show.title) {
     const raw = item.title.replace(/\s+/g, " ").trim();
@@ -402,8 +398,40 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
   // Face price: big, centered — and ALWAYS clear of the barcode strip: the
   // baseline is clamped ≥1.2mm above the bars, and the font shrinks only if a
   // tall title/meta stack leaves genuinely too little room.
+  const floorY = wantBarcode ? bcY - 1.0 : H - INSET;
+  // No-spine: the logo (image, else store name) + tagline stack into a lower
+  // CORNER of the price band — logoSide picks which corner — and the price
+  // centers itself in the remaining width beside it.
+  let priceCx = cxFace;
+  const nsTagline = spineW === 0 && tpl.show.spineText ? tpl.spineText.trim() : "";
+  if (spineW === 0 && (tpl.show.logo || nsTagline)) {
+    const right = tpl.logoSide === "right";
+    const nameFont = 1.9 * fs * fsc;
+    const tagFont = 1.7 * fs * fsc;
+    const lh = tpl.show.logo && tpl.logoUrl ? Math.min(tpl.logoHeightMm, 8) : 0;
+    const lw = lh ? Math.min(contentW * 0.32, lh * 2.8) : 0;
+    const name = tpl.show.logo && !tpl.logoUrl ? (item.storeName || "").toUpperCase().slice(0, 12) : "";
+    const cornerW = Math.min(contentW * 0.45, Math.max(lw, name.length * nameFont * 0.62, nsTagline.length * tagFont * 0.56));
+    const stackH = lh + (name ? nameFont * 1.1 : 0) + (nsTagline ? tagFont * 1.3 : 0);
+    // Center the stack in the band; clamp so it never rides onto the bars.
+    let sy = Math.max(y, Math.min((y + floorY) / 2 - stackH / 2, floorY - stackH));
+    const ax = right ? fx + contentW : fx;
+    const anchor = right ? "end" : "start";
+    if (lh) {
+      parts.push(`<image href="${esc(tpl.logoUrl)}" x="${(right ? ax - lw : ax).toFixed(2)}" y="${sy.toFixed(2)}" width="${lw.toFixed(2)}" height="${lh.toFixed(2)}" preserveAspectRatio="${right ? "xMaxYMid" : "xMinYMid"} meet"/>`);
+      sy += lh;
+    } else if (name) {
+      sy += nameFont;
+      parts.push(`<text x="${ax.toFixed(2)}" y="${sy.toFixed(2)}" text-anchor="${anchor}" font-family="${fam}" font-weight="${wMid}" font-size="${nameFont.toFixed(2)}" letter-spacing="0.2" fill="#000">${esc(name)}</text>`);
+    }
+    if (nsTagline) {
+      sy += tagFont * 1.3;
+      parts.push(`<text x="${ax.toFixed(2)}" y="${sy.toFixed(2)}" text-anchor="${anchor}" font-family="${fam}" font-weight="${wMid}" font-size="${tagFont.toFixed(2)}" letter-spacing="0.15" fill="#000">${esc(nsTagline)}</text>`);
+    }
+    const free = contentW - cornerW - 1.2;
+    priceCx = right ? fx + free / 2 : fx + cornerW + 1.2 + free / 2;
+  }
   if (tpl.show.price) {
-    const floorY = wantBarcode ? bcY - 1.0 : H - INSET;
     let priceFont = 6.0 * fs * tpl.priceScale * fsc * (FP.priceBoost ?? 1);
     const room = floorY - y;
     // Digits carry no descenders, so 0.74 (cap height + air) is the honest
@@ -415,7 +443,7 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
     const py = Math.min(y + room / 2 + priceFont * 0.37, floorY);
     const strong = FP.priceStrong ? ` stroke="#000" stroke-width="${(priceFont * 0.05).toFixed(2)}" paint-order="stroke"` : "";
     const pItal = FP.priceItalic ? ' font-style="italic"' : "";
-    parts.push(`<text x="${cxFace.toFixed(2)}" y="${py.toFixed(2)}" text-anchor="middle" font-family="${fam}" font-weight="${wHeavy}"${pItal}${strong}${ls(priceFont)} font-size="${priceFont.toFixed(2)}" fill="#000">${esc(money(item.priceCents))}</text>`);
+    parts.push(`<text x="${priceCx.toFixed(2)}" y="${py.toFixed(2)}" text-anchor="middle" font-family="${fam}" font-weight="${wHeavy}"${pItal}${strong}${ls(priceFont)} font-size="${priceFont.toFixed(2)}" fill="#000">${esc(money(item.priceCents))}</text>`);
     y = py;
   }
   // Vertical "Retail · PDX" rail along the right edge, centered on the LABEL's

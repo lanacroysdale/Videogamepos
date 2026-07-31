@@ -271,6 +271,7 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
                 <label class="lt-num">H mm<input id="lt-h" type="number" min="10" max="80" step="1" /></label>
                 <label class="lt-sel">Spine<select id="lt-spine"><option value="left">Left</option><option value="right">Right</option><option value="none">None</option></select></label>
                 <label class="lt-num">Spine w<input id="lt-spinew" type="number" min="8" max="25" step="1" /></label>
+                <label class="lt-sel">Reads<select id="lt-sdir"><option value="down">Top-down</option><option value="up">Bottom-up</option></select></label>
                 <label class="lt-num">Barcode h<input id="lt-bch" type="number" min="5" max="20" step="1" /></label>
               </div>
             </div>
@@ -295,6 +296,7 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
                 <button id="lt-logoclear" class="link-btn" type="button" hidden>Remove</button>
                 <label class="lt-num">Size mm<input id="lt-logoh" type="number" min="3" max="15" step="0.5" /></label>
                 <label class="lt-sel">Direction<select id="lt-logorot"><option value="upright">Upright</option><option value="sideways">Sideways</option></select></label>
+                <label class="lt-sel">Side<select id="lt-logoside"><option value="left">Left of price</option><option value="right">Right of price</option></select></label>
                 <span id="lt-logostatus" class="muted-2"></span>
               </div>
               <label class="lt-wide">Spine text <span class="muted-2">— e.g. Buy | Sell | Chill</span><input id="lt-stext" maxlength="30" placeholder="—" /></label>
@@ -1068,6 +1070,8 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       const t = lts[sel];
       $("lt-name").value = t.name; $("lt-w").value = String(t.widthMm); $("lt-h").value = String(t.heightMm);
       ($("lt-spine") as unknown as HTMLSelectElement).value = t.spine; $("lt-spinew").value = String(t.spineWidthMm);
+      ($("lt-sdir") as unknown as HTMLSelectElement).value = t.spineDir === "up" ? "up" : "down";
+      ($("lt-logoside") as unknown as HTMLSelectElement).value = t.logoSide === "right" ? "right" : "left";
       $("lt-stext").value = t.spineText || "";
       $("lt-bch").value = String(t.barcodeHeightMm); $("lt-fscale").value = String(t.fontScale);
       $("lt-pscale").value = String(t.priceScale ?? 1.25);
@@ -1090,6 +1094,8 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       t.widthMm = Number($("lt-w").value) || t.widthMm;
       t.heightMm = Number($("lt-h").value) || t.heightMm;
       t.spine = ($("lt-spine") as unknown as HTMLSelectElement).value;
+      t.spineDir = ($("lt-sdir") as unknown as HTMLSelectElement).value === "up" ? "up" : "down";
+      t.logoSide = ($("lt-logoside") as unknown as HTMLSelectElement).value === "right" ? "right" : "left";
       t.spineWidthMm = Number($("lt-spinew").value) || t.spineWidthMm;
       t.spineText = $("lt-stext").value.slice(0, 30);
       t.barcodeHeightMm = Number($("lt-bch").value) || t.barcodeHeightMm;
