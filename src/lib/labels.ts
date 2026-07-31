@@ -14,18 +14,26 @@ import { code128SvgGroup, code128Modules } from "./barcode";
 //   spacing— extra letter-spacing in em
 //   noBold — face has one weight; synthetic bold looks smeared → use 400/500
 //   titleItalic — slant the title line (the League Gothic tag look)
+//   titleTop — first-baseline advance factor (<1 lifts the title higher)
+//   titleGap — mm of clear air between title descenders and the meta line
+//   metaScale — shrink the meta line (condensed display type pairs small caps)
+//   priceBoost / priceStrong / priceItalic — face-price size ×, SVG-stroke
+//     faux bold (deterministic, unlike browser synthetic bold), italic slant
+//   spineShift — mm the spine price+tagline pair slides toward the logo
 // Google-hosted faces load on demand (ensureLabelFont) and are awaited before
 // printing so a tag never prints in a fallback font. Futura is the macOS
 // system face (labels print from the shop Macs); elsewhere it falls back.
 export type LabelFontDef = {
   key: string; label: string; family: string; css?: string;
   scale?: number; charW?: number; spacing?: number; noBold?: boolean; titleItalic?: boolean;
+  titleTop?: number; titleGap?: number; metaScale?: number;
+  priceBoost?: number; priceStrong?: boolean; priceItalic?: boolean; spineShift?: number;
 };
 export const LABEL_FONTS: LabelFontDef[] = [
   { key: "system", label: "Clean (Arial)", family: "Arial,Helvetica,sans-serif" },
-  { key: "futura", label: "Futura (system)", family: "Futura,'Century Gothic','Trebuchet MS',Arial,sans-serif", charW: 0.56 },
+  { key: "futura", label: "Futura (system)", family: "Futura,'Century Gothic','Trebuchet MS',Arial,sans-serif", charW: 0.56, titleTop: 0.86, spineShift: 2.5 },
   { key: "roboto", label: "Roboto", family: "'Roboto',Arial,sans-serif", css: "https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" },
-  { key: "league", label: "League Gothic", family: "'League Gothic',Arial,sans-serif", css: "https://fonts.googleapis.com/css2?family=League+Gothic&display=swap", scale: 1.3, charW: 0.4, spacing: 0.05, noBold: true, titleItalic: true },
+  { key: "league", label: "League Gothic", family: "'League Gothic',Arial,sans-serif", css: "https://fonts.googleapis.com/css2?family=League+Gothic:ital@0;1&display=swap", scale: 1.3, charW: 0.4, spacing: 0.05, noBold: true, titleItalic: true, titleTop: 0.78, titleGap: 1.4, metaScale: 0.85, priceBoost: 1.35 },
   { key: "condensed", label: "Condensed (Oswald)", family: "'Oswald',Arial,sans-serif", css: "https://fonts.googleapis.com/css2?family=Oswald:wght@400;700&display=swap", scale: 1.1, charW: 0.46 },
   { key: "pixel", label: "Pixel (Press Start 2P)", family: "'Press Start 2P',monospace", css: "https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap", scale: 0.58, charW: 1.05, noBold: true },
   { key: "mono", label: "Mono", family: "ui-monospace,Menlo,monospace", charW: 0.62 },
@@ -56,7 +64,11 @@ export async function ensureLabelFont(tpl: LabelTemplate): Promise<void> {
       document.head.appendChild(link);
     }
     const fam = f.family.split(",")[0].replace(/'/g, "");
-    await Promise.race([(document as any).fonts.load(`16px '${fam}'`), new Promise((r) => setTimeout(r, 2000))]);
+    // Load italic too — harmless no-op for faces without one.
+    await Promise.race([
+      Promise.all([(document as any).fonts.load(`16px '${fam}'`), (document as any).fonts.load(`italic 16px '${fam}'`)]),
+      new Promise((r) => setTimeout(r, 2000)),
+    ]);
   } catch { /* fallback font is acceptable */ }
 }
 
@@ -305,8 +317,6 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
     const tagline = tpl.show.spineText ? tpl.spineText.trim() : "";
     if (tpl.show.price || tagline) {
       const cx = sx + spineW / 2;
-      const cy = logoBottom + (spineBottom - logoBottom) / 2;
-      const rotAttr = `transform="rotate(${rot} ${cx.toFixed(2)} ${cy.toFixed(2)})"`;
       // Price + tagline sit side-by-side across the spine (a 32mm spine can't
       // fit both end-to-end); the PAIR is optically centered on the spine's
       // width so it lines up under the centered logo.
@@ -314,6 +324,10 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
       const tagH = tagline ? 2.0 * fs * fsc : 0;
       const gap = priceH && tagH ? 0.9 : 0;
       const total = priceH + gap + tagH;
+      let cy = logoBottom + (spineBottom - logoBottom) / 2;
+      // Per-font nudge toward the logo end of the spine (never onto it).
+      if (FP.spineShift) cy = Math.max(logoBottom + total / 2 + 0.6, cy - FP.spineShift);
+      const rotAttr = `transform="rotate(${rot} ${cx.toFixed(2)} ${cy.toFixed(2)})"`;
       const priceDy = tagH ? -(total / 2 - priceH / 2) : 0;
       const tagDy = priceH ? total / 2 - tagH / 2 : 0;
       if (tpl.show.price) {
@@ -357,18 +371,22 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
       y += 0.7;
     }
   }
+  const metaSize = 2.4 * fs * fsc * (FP.metaScale ?? 1);
   if (tpl.show.title) {
     const raw = item.title.replace(/\s+/g, " ").trim();
     const cut = raw.length > tpl.titleMaxChars ? raw.slice(0, Math.max(1, tpl.titleMaxChars - 1)).trimEnd() + "…" : raw;
     const perLine = Math.max(6, Math.ceil(cut.length / tpl.titleMaxLines));
     const size = Math.min(4.8 * fs * fsc, Math.max(2.6 * fs, contentW / (perLine * chW)));
     const maxChars = Math.max(4, Math.floor(contentW / (size * chW)));
-    y += size;
+    y += size * (FP.titleTop ?? 1); // per-font lift: tall display faces start higher
     for (const line of wrapTitle(cut, maxChars, tpl.titleMaxLines)) {
       parts.push(`<text x="${cxFace.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="middle" font-family="${fam}" font-weight="${wHeavy}"${titleStyleAttr}${ls(size)} font-size="${size.toFixed(2)}" fill="#000">${esc(line)}</text>`);
       y += size * 1.15;
     }
-    y -= size * 1.15 - 3.0 * fs; // hand off: next baseline for the meta line
+    // Hand off to the meta baseline GEOMETRICALLY — title descenders + meta cap
+    // height + real air. (A fixed 3mm advance crowded under big display type.)
+    y -= size * 1.15;
+    y += size * 0.19 + metaSize * 0.72 + (FP.titleGap ?? 1.0);
   } else {
     y += 3.2 * fs;
   }
@@ -378,19 +396,26 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
     tpl.show.sku && item.sku ? item.sku : "",
   ].filter(Boolean);
   if (metaBits.length) {
-    parts.push(`<text x="${cxFace.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="middle" font-family="${fam}"${ls(2.4 * fs * fsc)} font-size="${(2.4 * fs * fsc).toFixed(2)}" fill="#000">${esc(metaBits.join("  ·  "))}</text>`);
-    y += 2.6 * fs * fsc;
+    parts.push(`<text x="${cxFace.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="middle" font-family="${fam}"${ls(metaSize)} font-size="${metaSize.toFixed(2)}" fill="#000">${esc(metaBits.join("  ·  "))}</text>`);
+    y += metaSize * 1.08;
   }
   // Face price: big, centered — and ALWAYS clear of the barcode strip: the
   // baseline is clamped ≥1.2mm above the bars, and the font shrinks only if a
   // tall title/meta stack leaves genuinely too little room.
   if (tpl.show.price) {
-    const floorY = wantBarcode ? bcY - 1.2 : H - INSET;
-    let priceFont = 6.0 * fs * tpl.priceScale * fsc;
+    const floorY = wantBarcode ? bcY - 1.0 : H - INSET;
+    let priceFont = 6.0 * fs * tpl.priceScale * fsc * (FP.priceBoost ?? 1);
     const room = floorY - y;
-    if (priceFont * 0.82 > room) priceFont = Math.max(3.2, room / 0.82);
-    const py = Math.min(y + priceFont * 0.82, floorY);
-    parts.push(`<text x="${cxFace.toFixed(2)}" y="${py.toFixed(2)}" text-anchor="middle" font-family="${fam}" font-weight="${wHeavy}"${ls(priceFont)} font-size="${priceFont.toFixed(2)}" fill="#000">${esc(money(item.priceCents))}</text>`);
+    // Digits carry no descenders, so 0.74 (cap height + air) is the honest
+    // block height — the old 0.82 was leaving ~10% of the price on the table.
+    if (priceFont * 0.74 > room) priceFont = Math.max(3.2, room / 0.74);
+    // Center the price in the leftover room: tight stacks degrade to the old
+    // hug-the-top spot; roomy faces (small pixel text) drop it to the visual
+    // middle instead of leaving a dead gap above the barcode.
+    const py = Math.min(y + room / 2 + priceFont * 0.37, floorY);
+    const strong = FP.priceStrong ? ` stroke="#000" stroke-width="${(priceFont * 0.05).toFixed(2)}" paint-order="stroke"` : "";
+    const pItal = FP.priceItalic ? ' font-style="italic"' : "";
+    parts.push(`<text x="${cxFace.toFixed(2)}" y="${py.toFixed(2)}" text-anchor="middle" font-family="${fam}" font-weight="${wHeavy}"${pItal}${strong}${ls(priceFont)} font-size="${priceFont.toFixed(2)}" fill="#000">${esc(money(item.priceCents))}</text>`);
     y = py;
   }
   // Vertical "Retail · PDX" rail along the right edge, centered on the LABEL's
