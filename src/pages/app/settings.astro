@@ -70,7 +70,10 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
 <AppLayout title="Settings" active="settings">
   <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1.25rem;">
     <p class="muted" style="margin:0;flex:1;">Store-wide settings. Changes apply to the website immediately.</p>
-    <button id="acc-all" class="btn btn-ghost btn-sm" type="button">⊞ Expand all</button>
+    <button id="acc-all" class="acc-switch" type="button" aria-pressed="false" title="Expand or collapse every section">
+      <span class="acc-track"><span class="acc-knob"></span></span>
+      <span id="acc-all-label">Expand all</span>
+    </button>
   </div>
 
   {isOwner && (
@@ -634,18 +637,30 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   .lt-preview { margin-top: 0.4rem; padding: 0.7rem; background: #666; }
   .lt-preview svg { display: block; width: 100%; height: auto; box-shadow: 0 3px 10px rgba(0,0,0,.45); }
 
-  /* ---- Collapsible settings sections (accordionized at runtime) ---- */
-  .set-acc > h2 { cursor: pointer; user-select: none; display: flex; align-items: center; gap: 0.6rem; margin: 0; font-size: 1.3rem; }
+  /* Accordion styles live in the is:global block below — the .acc-body wrapper
+     is created at RUNTIME, so Astro's scoped selectors can never match it. */
+</style>
+
+<style is:global>
+  /* ---- Collapsible settings sections (runtime accordion — must be global) ---- */
+  .set-acc > h2 { cursor: pointer; user-select: none; display: flex; align-items: center; gap: 0.65rem; margin: 0; font-size: 1.5rem; letter-spacing: 0.01em; }
   .set-acc > h2:hover { color: var(--cyan); }
-  .set-acc > h2 .acc-ico { font-size: 1.4rem; flex: none; }
-  /* content swap (transform doesn't apply to inline pseudos) + bigger target */
-  .set-acc > h2::after { content: "▸"; margin-left: auto; font-size: 1.4rem; line-height: 1; color: var(--muted-2); flex: none; }
-  .set-acc.acc-open > h2::after { content: "▾"; }
-  .set-acc > h2 .acc-blurb { flex: 1; min-width: 0; margin-left: 0.4rem; font-size: 0.8rem; font-weight: 500; color: var(--muted-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .set-acc > h2 .acc-ico { font-size: 1.55rem; flex: none; }
+  /* content swap (transform doesn't apply to inline pseudos) + big target */
+  .set-acc > h2::after { content: "▸"; margin-left: auto; font-size: 1.5rem; line-height: 1; color: var(--muted-2); flex: none; }
+  .set-acc.acc-open > h2::after { content: "▾"; color: var(--cyan); }
+  .set-acc > h2 .acc-blurb { flex: 1; min-width: 0; margin-left: 0.5rem; font-size: 0.82rem; font-weight: 500; color: var(--muted-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .set-acc.acc-open > h2 .acc-blurb { display: none; }
-  .set-acc .acc-body { margin-top: 1rem; }
-  .set-acc:not(.acc-open) .acc-body { display: none; }
-  .set-acc:not(.acc-open) { padding-top: 0.9rem; padding-bottom: 0.9rem; }
+  .set-acc .acc-body { margin-top: 1.4rem; }
+  .set-acc .acc-body[hidden] { display: none !important; }
+  .set-acc:not(.acc-open) { padding-top: 0.95rem; padding-bottom: 0.95rem; }
+
+  /* Expand/Collapse-all as a slider switch */
+  .acc-switch { display: inline-flex; align-items: center; gap: 0.55rem; font: inherit; font-size: 0.86rem; font-weight: 700; padding: 0.35rem 0.6rem; background: transparent; border: 1px solid var(--border-strong); color: var(--text); cursor: pointer; }
+  .acc-switch .acc-track { position: relative; width: 2.3rem; height: 1.15rem; background: rgba(127,127,127,.25); border: 1px solid var(--border-strong); flex: none; transition: background .15s ease; }
+  .acc-switch .acc-knob { position: absolute; top: 1px; left: 1px; width: 0.95rem; height: 0.95rem; background: var(--muted); transition: left .15s ease, background .15s ease; }
+  .acc-switch.on .acc-track { background: rgba(44,230,224,.25); }
+  .acc-switch.on .acc-knob { left: calc(100% - 1rem - 1px); background: var(--cyan); }
 </style>
 
 <script>
@@ -1122,10 +1137,21 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     if (s && s.d === accToday) accOpenMap = s.open || {}; // daily reset: stale days start collapsed
   } catch {}
   const accSave = () => { try { localStorage.setItem("tl-set-acc", JSON.stringify({ d: accToday, open: accOpenMap })); } catch {} };
-  const accPanels: [HTMLElement, string][] = [];
+  const accPanels: [HTMLElement, string, HTMLElement][] = [];
   const accAllBtn = document.getElementById("acc-all");
+  // The `hidden` attribute does the actual collapsing (no CSS dependency —
+  // Astro-scoped styles can't reach runtime-created nodes).
+  const setAccOpen = (p: HTMLElement, body: HTMLElement, open: boolean) => {
+    p.classList.toggle("acc-open", open);
+    body.hidden = !open;
+  };
   const syncAccAll = () => {
-    if (accAllBtn) accAllBtn.textContent = accPanels.some(([p]) => !p.classList.contains("acc-open")) ? "⊞ Expand all" : "⊟ Collapse all";
+    if (!accAllBtn) return;
+    const allOpen = accPanels.length > 0 && accPanels.every(([p]) => p.classList.contains("acc-open"));
+    accAllBtn.classList.toggle("on", allOpen);
+    accAllBtn.setAttribute("aria-pressed", String(allOpen));
+    const lbl = document.getElementById("acc-all-label");
+    if (lbl) lbl.textContent = allOpen ? "Collapse all" : "Expand all";
   };
   document.querySelectorAll<HTMLElement>(".set-panel").forEach((p) => {
     const h = p.querySelector(":scope > h2") as HTMLElement | null;
@@ -1142,18 +1168,18 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     [...p.children].forEach((c) => { if (c !== h) body.appendChild(c); });
     p.appendChild(body);
     p.classList.add("set-acc");
-    p.classList.toggle("acc-open", accOpenMap[key] === 1);
+    setAccOpen(p, body, accOpenMap[key] === 1);
     h.addEventListener("click", () => {
       const now = !p.classList.contains("acc-open");
-      p.classList.toggle("acc-open", now);
+      setAccOpen(p, body, now);
       accOpenMap[key] = now ? 1 : 0;
       accSave(); syncAccAll();
     });
-    accPanels.push([p, key]);
+    accPanels.push([p, key, body]);
   });
   accAllBtn?.addEventListener("click", () => {
     const openAll = accPanels.some(([p]) => !p.classList.contains("acc-open"));
-    accPanels.forEach(([p, k]) => { p.classList.toggle("acc-open", openAll); accOpenMap[k] = openAll ? 1 : 0; });
+    accPanels.forEach(([p, k, body]) => { setAccOpen(p, body, openAll); accOpenMap[k] = openAll ? 1 : 0; });
     accSave(); syncAccAll();
   });
   syncAccAll();
