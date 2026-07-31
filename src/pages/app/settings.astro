@@ -263,44 +263,50 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
             <button id="lt-add" class="btn btn-ghost btn-sm" type="button">+ Template</button>
             <button id="lt-del" class="btn btn-ghost btn-sm" type="button">Delete</button>
           </div>
-          <div class="dm-grid" style="margin-top:0.6rem;">
-            <label class="dm-field">Name<input id="lt-name" /></label>
-          </div>
-          <div class="dm-grid">
-            <label class="dm-field">Width (mm)<input id="lt-w" type="number" min="20" max="110" step="1" /></label>
-            <label class="dm-field">Height (mm)<input id="lt-h" type="number" min="10" max="80" step="1" /></label>
-          </div>
-          <div class="dm-grid">
-            <label class="dm-field">Spine<select id="lt-spine"><option value="left">Left</option><option value="right">Right</option><option value="none">None</option></select></label>
-            <label class="dm-field">Spine width (mm)<input id="lt-spinew" type="number" min="8" max="25" step="1" /></label>
-            <label class="dm-field">Spine text <span class="muted-2">(e.g. Buy | Sell | Chill)</span><input id="lt-stext" maxlength="30" placeholder="—" /></label>
-          </div>
-          <div class="dm-grid">
-            <label class="dm-field">Barcode height (mm)<input id="lt-bch" type="number" min="5" max="20" step="1" /></label>
-            <label class="dm-field">Font scale<input id="lt-fscale" type="number" min="0.7" max="1.5" step="0.05" /></label>
-          </div>
-          <div class="dm-grid">
-            <label class="dm-field">Price size<input id="lt-pscale" type="number" min="0.8" max="2" step="0.05" /></label>
-            <label class="dm-field">Title cut-off (chars)<input id="lt-tmax" type="number" min="10" max="60" step="1" /></label>
-          </div>
-          <div class="dm-grid">
-            <div class="dm-field">Logo
-              <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
-                <label class="btn btn-ghost btn-sm">🖼 Upload<input type="file" id="lt-logofile" accept="image/*" hidden /></label>
-                <button id="lt-logoclear" class="link-btn" type="button" hidden>Remove</button>
-                <span id="lt-logostatus" class="muted-2"></span>
+          <div class="lt-groups">
+            <div class="lt-group">
+              <div class="lt-group-h">📐 Size &amp; shape</div>
+              <div class="lt-row">
+                <label class="lt-num">W mm<input id="lt-w" type="number" min="20" max="110" step="1" /></label>
+                <label class="lt-num">H mm<input id="lt-h" type="number" min="10" max="80" step="1" /></label>
+                <label class="lt-sel">Spine<select id="lt-spine"><option value="left">Left</option><option value="right">Right</option><option value="none">None</option></select></label>
+                <label class="lt-num">Spine w<input id="lt-spinew" type="number" min="8" max="25" step="1" /></label>
+                <label class="lt-num">Barcode h<input id="lt-bch" type="number" min="5" max="20" step="1" /></label>
               </div>
             </div>
-            <label class="dm-field">Logo size (mm)<input id="lt-logoh" type="number" min="3" max="15" step="0.5" /></label>
-            <label class="dm-field">Logo orientation<select id="lt-logorot"><option value="upright">Upright</option><option value="sideways">Sideways (with price)</option></select></label>
-          </div>
-          <div class="lt-toggles" id="lt-shows">
-            {["logo","title","category","condition","price","invType","location","sku","barcode","spineText"].map((k) => (
-              <label class="dm-toggle"><input type="checkbox" data-ltshow={k} /> {k === "invType" ? "Inventory type" : k === "sku" ? "SKU" : k === "spineText" ? "Spine tagline" : k[0].toUpperCase() + k.slice(1)}</label>
-            ))}
-            <label class="dm-toggle"><input type="checkbox" id="lt-bctext" /> Code text under bars</label>
-            <label class="dm-toggle"><input type="checkbox" id="lt-2lines" /> Two-line titles</label>
-            <label class="dm-toggle"><input type="checkbox" id="lt-default" /> ⭐ Default template</label>
+            <div class="lt-group">
+              <div class="lt-group-h">🔤 Text &amp; sizing</div>
+              <label class="lt-wide">Template name<input id="lt-name" /></label>
+              <div class="lt-row">
+                <label class="lt-num">Font ×<input id="lt-fscale" type="number" min="0.7" max="1.5" step="0.05" /></label>
+                <label class="lt-num">Price ×<input id="lt-pscale" type="number" min="0.8" max="2" step="0.05" /></label>
+                <label class="lt-num">Cut-off<input id="lt-tmax" type="number" min="10" max="60" step="1" /></label>
+              </div>
+            </div>
+            <div class="lt-group">
+              <div class="lt-group-h">🖼 Logo &amp; tagline</div>
+              <div class="lt-row">
+                <label class="btn btn-ghost btn-sm">🖼 Upload<input type="file" id="lt-logofile" accept="image/*" hidden /></label>
+                <button id="lt-logoclear" class="link-btn" type="button" hidden>Remove</button>
+                <label class="lt-num">Size mm<input id="lt-logoh" type="number" min="3" max="15" step="0.5" /></label>
+                <label class="lt-sel">Direction<select id="lt-logorot"><option value="upright">Upright</option><option value="sideways">Sideways</option></select></label>
+                <span id="lt-logostatus" class="muted-2"></span>
+              </div>
+              <label class="lt-wide">Spine text <span class="muted-2">— e.g. Buy | Sell | Chill</span><input id="lt-stext" maxlength="30" placeholder="—" /></label>
+            </div>
+            <div class="lt-group">
+              <div class="lt-group-h">👁 Show on label</div>
+              <div class="lt-toggles" id="lt-shows">
+                {["logo","title","category","condition","price","invType","location","sku","barcode","spineText"].map((k) => (
+                  <label><input type="checkbox" data-ltshow={k} /> {k === "invType" ? "Inv. type" : k === "sku" ? "SKU" : k === "spineText" ? "Tagline" : k[0].toUpperCase() + k.slice(1)}</label>
+                ))}
+              </div>
+              <div class="lt-toggles" style="border-top:1px solid var(--border);padding-top:0.5rem;">
+                <label><input type="checkbox" id="lt-bctext" /> Code digits</label>
+                <label><input type="checkbox" id="lt-2lines" /> 2-line titles</label>
+                <label><input type="checkbox" id="lt-default" /> ⭐ Default</label>
+              </div>
+            </div>
           </div>
         </div>
         <div class="lt-right">
@@ -625,11 +631,7 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   .lt-list-h { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted-2, #8a94a3); font-weight: 700; margin-bottom: 0.35rem; }
   /* .lt-chip + .lt-preview svg rules live in the is:global block — those nodes
      are runtime-inserted, so scoped selectors can never match them. */
-  .lt-toggles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.3rem 0.9rem; margin-top: 0.6rem; }
-  .lt-toggles .dm-toggle { font-size: 0.84rem; white-space: nowrap; align-items: center; }
-  .lt-toggles .dm-toggle input { width: 1.05rem; height: 1.05rem; accent-color: var(--cyan); flex: none; }
-  @media (max-width: 900px) { .lt-toggles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-  /* (preview container/svg styling is in the is:global block) */
+  /* (designer group/field/toggle/preview styling lives in the is:global block) */
 
   /* Accordion styles live in the is:global block below — the .acc-body wrapper
      is created at RUNTIME, so Astro's scoped selectors can never match it. */
@@ -663,6 +665,21 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   /* Backdrop hugs the label — no wide grey band. */
   .lt-preview { margin: 0.4rem auto 0; padding: 0.7rem; background: #666; width: fit-content; max-width: 100%; }
   .lt-preview svg { display: block; width: 340px; max-width: 100%; height: auto; box-shadow: 0 3px 10px rgba(0,0,0,.45); }
+
+  /* Designer field groups — POS style: sharp corners, tight consistent spacing.
+     One scale: groups gap .8rem · inside a group .6rem · label→input .25rem. */
+  .lt-groups { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; }
+  @media (max-width: 760px) { .lt-groups { grid-template-columns: 1fr; } }
+  .lt-group { border: 1px solid var(--border, #333); background: rgba(255,255,255,.02); padding: 0.75rem 0.85rem; display: flex; flex-direction: column; gap: 0.6rem; min-width: 0; }
+  .lt-group-h { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted-2, #8a94a3); font-weight: 700; }
+  .lt-row { display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: flex-end; }
+  .lt-num, .lt-sel, .lt-wide { display: grid; gap: 0.25rem; font-size: 0.74rem; font-weight: 600; color: var(--muted, #9aa3ad); }
+  .lt-num input { width: 3.8rem; text-align: center; font: inherit; font-size: 0.9rem; padding: 0.38rem 0.2rem; background: var(--bg, #0c0f14); color: var(--text, #e8ecf1); border: 1px solid var(--border-strong, #45505f); border-radius: 0; }
+  .lt-sel select { font: inherit; font-size: 0.9rem; padding: 0.38rem 0.4rem; background: var(--bg, #0c0f14); color: var(--text, #e8ecf1); border: 1px solid var(--border-strong, #45505f); border-radius: 0; }
+  .lt-wide input { width: 100%; font: inherit; font-size: 0.9rem; padding: 0.42rem 0.55rem; background: var(--bg, #0c0f14); color: var(--text, #e8ecf1); border: 1px solid var(--border-strong, #45505f); border-radius: 0; }
+  .lt-toggles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.35rem 0.8rem; }
+  .lt-toggles label { display: flex; align-items: center; gap: 0.45rem; font-size: 0.85rem; font-weight: 500; color: var(--text, #e8ecf1); white-space: nowrap; }
+  .lt-toggles input { width: 1.05rem; height: 1.05rem; accent-color: var(--cyan, #2ce6e0); flex: none; margin: 0; }
 </style>
 
 <script>
