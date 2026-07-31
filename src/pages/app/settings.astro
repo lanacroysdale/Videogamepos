@@ -595,8 +595,6 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   .inv-grid { display: grid; grid-template-columns: 1fr 1fr auto auto; gap: 0.5rem; margin-top: 0.5rem; }
   @media (max-width: 640px) { .inv-grid { grid-template-columns: 1fr; } }
   #inv-result code { color: var(--cyan); font-weight: 700; }
-  /* The label designer needs room (form + preview side by side). */
-  #labels-panel { max-width: 920px; }
 
   /* Departments */
   .dept-tbl { margin: 0.4rem 0 0.2rem; }
@@ -620,22 +618,18 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   .dm-toggle { display: flex; align-items: center; gap: 0.4rem; font-size: 0.9rem; }
   .dm-actions { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.3rem; }
 
-  /* Label template designer — preview on top, wide fields below */
+  /* Label template designer — preview on top, fields below */
   .lt-layout { display: flex; flex-direction: column; gap: 1.1rem; }
   .lt-right { order: -1; }
-  .lt-preview svg { max-width: 560px; margin: 0 auto; }
   .lt-list { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.6rem; }
   .lt-list-h { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted-2, #8a94a3); font-weight: 700; margin-bottom: 0.35rem; }
-  /* Hard-contrast chips — never white-on-white regardless of theme/caching. */
-  .lt-chip { font: inherit; font-size: 0.84rem; font-weight: 600; padding: 0.4rem 0.8rem; border: 1px solid #45505f; background: #1a2230; color: #e8ecf1; cursor: pointer; }
-  .lt-chip:hover { border-color: #2ce6e0; }
-  .lt-chip.on { background: #2ce6e0; border-color: #2ce6e0; color: #04222a; font-weight: 800; }
+  /* .lt-chip + .lt-preview svg rules live in the is:global block — those nodes
+     are runtime-inserted, so scoped selectors can never match them. */
   .lt-toggles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.3rem 0.9rem; margin-top: 0.6rem; }
   .lt-toggles .dm-toggle { font-size: 0.84rem; white-space: nowrap; align-items: center; }
   .lt-toggles .dm-toggle input { width: 1.05rem; height: 1.05rem; accent-color: var(--cyan); flex: none; }
   @media (max-width: 900px) { .lt-toggles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-  .lt-preview { margin-top: 0.4rem; padding: 0.7rem; background: #666; }
-  .lt-preview svg { display: block; width: 100%; height: auto; box-shadow: 0 3px 10px rgba(0,0,0,.45); }
+  /* (preview container/svg styling is in the is:global block) */
 
   /* Accordion styles live in the is:global block below — the .acc-body wrapper
      is created at RUNTIME, so Astro's scoped selectors can never match it. */
@@ -661,6 +655,14 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   .acc-switch .acc-knob { position: absolute; top: 1px; left: 1px; width: 0.95rem; height: 0.95rem; background: var(--muted); transition: left .15s ease, background .15s ease; }
   .acc-switch.on .acc-track { background: rgba(44,230,224,.25); }
   .acc-switch.on .acc-knob { left: calc(100% - 1rem - 1px); background: var(--cyan); }
+
+  /* Label designer runtime nodes (chips + preview SVG) — must be global. */
+  .lt-chip { appearance: none; -webkit-appearance: none; border-radius: 0; font: inherit; font-size: 0.84rem; font-weight: 600; padding: 0.4rem 0.8rem; border: 1px solid #45505f; background: #1a2230; color: #e8ecf1; cursor: pointer; }
+  .lt-chip:hover { border-color: #2ce6e0; }
+  .lt-chip.on { background: #2ce6e0; border-color: #2ce6e0; color: #04222a; font-weight: 800; }
+  /* Backdrop hugs the label — no wide grey band. */
+  .lt-preview { margin: 0.4rem auto 0; padding: 0.7rem; background: #666; width: fit-content; max-width: 100%; }
+  .lt-preview svg { display: block; width: 480px; max-width: 100%; height: auto; box-shadow: 0 3px 10px rgba(0,0,0,.45); }
 </style>
 
 <script>
