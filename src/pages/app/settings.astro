@@ -276,8 +276,8 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
             </div>
             <div class="lt-group">
               <div class="lt-group-h">🔤 Text &amp; sizing</div>
-              <label class="lt-wide">Template name<input id="lt-name" /></label>
               <div class="lt-row">
+                <label class="lt-med">Template name<input id="lt-name" /></label>
                 <label class="lt-num">Font ×<input id="lt-fscale" type="number" min="0.7" max="1.5" step="0.05" /></label>
                 <label class="lt-num">Price ×<input id="lt-pscale" type="number" min="0.8" max="2" step="0.05" /></label>
                 <label class="lt-num">Cut-off<input id="lt-tmax" type="number" min="10" max="60" step="1" /></label>
@@ -677,6 +677,8 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   .lt-num input { width: 3.8rem; text-align: center; font: inherit; font-size: 0.9rem; padding: 0.38rem 0.2rem; background: var(--bg, #0c0f14); color: var(--text, #e8ecf1); border: 1px solid var(--border-strong, #45505f); border-radius: 0; }
   .lt-sel select { font: inherit; font-size: 0.9rem; padding: 0.38rem 0.4rem; background: var(--bg, #0c0f14); color: var(--text, #e8ecf1); border: 1px solid var(--border-strong, #45505f); border-radius: 0; }
   .lt-wide input { width: 100%; font: inherit; font-size: 0.9rem; padding: 0.42rem 0.55rem; background: var(--bg, #0c0f14); color: var(--text, #e8ecf1); border: 1px solid var(--border-strong, #45505f); border-radius: 0; }
+  .lt-med { display: grid; gap: 0.25rem; font-size: 0.74rem; font-weight: 600; color: var(--muted, #9aa3ad); flex: 1; min-width: 13rem; max-width: 22rem; }
+  .lt-med input { width: 100%; font: inherit; font-size: 0.9rem; padding: 0.38rem 0.55rem; background: var(--bg, #0c0f14); color: var(--text, #e8ecf1); border: 1px solid var(--border-strong, #45505f); border-radius: 0; }
   .lt-toggles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.35rem 0.8rem; }
   .lt-toggles label { display: flex; align-items: center; gap: 0.45rem; font-size: 0.85rem; font-weight: 500; color: var(--text, #e8ecf1); white-space: nowrap; }
   .lt-toggles input { width: 1.05rem; height: 1.05rem; accent-color: var(--cyan, #2ce6e0); flex: none; margin: 0; }
