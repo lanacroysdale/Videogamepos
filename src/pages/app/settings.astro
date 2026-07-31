@@ -251,6 +251,7 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       </p>
       <div class="lt-layout">
         <div class="lt-left">
+          <div class="lt-list-h">Saved templates — click one to view &amp; edit</div>
           <div id="lt-list" class="lt-list"></div>
           <div class="dept-actions">
             <button id="lt-add" class="btn btn-ghost btn-sm" type="button">+ Template</button>
@@ -616,9 +617,11 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   .lt-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; align-items: start; }
   @media (max-width: 700px) { .lt-layout { grid-template-columns: 1fr; } }
   .lt-list { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.6rem; }
-  .lt-chip { font: inherit; font-size: 0.82rem; padding: 0.35rem 0.75rem; border: 1px solid var(--border-strong); background: rgba(127,127,127,.14); color: var(--text); cursor: pointer; }
-  .lt-chip:hover { border-color: var(--cyan); }
-  .lt-chip.on { background: var(--cyan); border-color: var(--cyan); color: #04222a; font-weight: 700; }
+  .lt-list-h { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted-2, #8a94a3); font-weight: 700; margin-bottom: 0.35rem; }
+  /* Hard-contrast chips — never white-on-white regardless of theme/caching. */
+  .lt-chip { font: inherit; font-size: 0.84rem; font-weight: 600; padding: 0.4rem 0.8rem; border: 1px solid #45505f; background: #1a2230; color: #e8ecf1; cursor: pointer; }
+  .lt-chip:hover { border-color: #2ce6e0; }
+  .lt-chip.on { background: #2ce6e0; border-color: #2ce6e0; color: #04222a; font-weight: 800; }
   .lt-toggles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.3rem 0.9rem; margin-top: 0.6rem; }
   .lt-toggles .dm-toggle { font-size: 0.84rem; white-space: nowrap; align-items: center; }
   .lt-toggles .dm-toggle input { width: 1.05rem; height: 1.05rem; accent-color: var(--cyan); flex: none; }
