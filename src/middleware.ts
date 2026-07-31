@@ -10,7 +10,10 @@ import { MARKETING_HOSTS, POS_HOST } from "./consts";
 // /app redirects out to the POS host. Auth + RBAC then run on the effective path.
 export const onRequest = defineMiddleware(async (context, next) => {
   const url = context.url;
-  const host = url.hostname;
+  // Behind Vercel's proxy, url.hostname can be the internal *.vercel.app
+  // deployment host — the visitor's real domain arrives in x-forwarded-host.
+  // Without this, www.timelag.co fails the marketing check and serves the POS.
+  const host = (context.request.headers.get("x-forwarded-host") ?? url.hostname).split(":")[0].toLowerCase();
   const isMarketing = MARKETING_HOSTS.includes(host);
   const search = url.search;
   let pathname = url.pathname;
