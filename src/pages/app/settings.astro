@@ -575,7 +575,8 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
 </AppLayout>
 
 <style>
-  .set-panel { max-width: 640px; }
+  /* Full-width adaptive panels — match the rest of the POS on any screen. */
+  .set-panel { max-width: none; }
   .set-desc { margin-bottom: 1.2rem; }
   .set-row { display: flex; align-items: center; justify-content: space-between; gap: 1.2rem; padding: 0.9rem 0; border-top: 1px solid var(--border); }
   .set-toggle { justify-content: flex-start; gap: 0.8rem; }
@@ -668,9 +669,8 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
 
   /* Designer field groups — POS style: sharp corners, tight consistent spacing.
      One scale: groups gap .8rem · inside a group .6rem · label→input .25rem. */
-  .lt-groups { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; }
-  @media (max-width: 760px) { .lt-groups { grid-template-columns: 1fr; } }
-  .lt-group { border: 1px solid var(--border, #333); background: rgba(255,255,255,.02); padding: 0.75rem 0.85rem; display: flex; flex-direction: column; gap: 0.6rem; min-width: 0; }
+  .lt-groups { display: grid; grid-template-columns: 1fr; gap: 0.9rem; }
+  .lt-group { border: 1px solid var(--border, #333); background: rgba(255,255,255,.02); padding: 0.85rem 1rem; display: flex; flex-direction: column; gap: 0.65rem; min-width: 0; }
   .lt-group-h { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted-2, #8a94a3); font-weight: 700; }
   .lt-row { display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: flex-end; }
   .lt-num, .lt-sel, .lt-wide { display: grid; gap: 0.25rem; font-size: 0.74rem; font-weight: 600; color: var(--muted, #9aa3ad); }
