@@ -68,7 +68,10 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
 ---
 
 <AppLayout title="Settings" active="settings">
-  <p class="muted" style="margin-bottom:1.25rem;">Store-wide settings. Changes apply to the website immediately.</p>
+  <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1.25rem;">
+    <p class="muted" style="margin:0;flex:1;">Store-wide settings. Changes apply to the website immediately.</p>
+    <button id="acc-all" class="btn btn-ghost btn-sm" type="button">⊞ Expand all</button>
+  </div>
 
   {isOwner && (
     <div class="pos-panel set-panel" style="margin-bottom:1.25rem;">
@@ -265,8 +268,9 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
             <label class="dm-field">Height (mm)<input id="lt-h" type="number" min="10" max="80" step="1" /></label>
           </div>
           <div class="dm-grid">
-            <label class="dm-field">Spine<select id="lt-spine"><option value="right">Right</option><option value="left">Left</option><option value="none">None</option></select></label>
+            <label class="dm-field">Spine<select id="lt-spine"><option value="left">Left</option><option value="right">Right</option><option value="none">None</option></select></label>
             <label class="dm-field">Spine width (mm)<input id="lt-spinew" type="number" min="8" max="25" step="1" /></label>
+            <label class="dm-field">Spine text <span class="muted-2">(e.g. Buy | Sell | Chill)</span><input id="lt-stext" maxlength="30" placeholder="—" /></label>
           </div>
           <div class="dm-grid">
             <label class="dm-field">Barcode height (mm)<input id="lt-bch" type="number" min="5" max="20" step="1" /></label>
@@ -288,8 +292,8 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
             <label class="dm-field">Logo orientation<select id="lt-logorot"><option value="upright">Upright</option><option value="sideways">Sideways (with price)</option></select></label>
           </div>
           <div class="lt-toggles" id="lt-shows">
-            {["logo","title","category","condition","price","invType","location","sku","barcode"].map((k) => (
-              <label class="dm-toggle"><input type="checkbox" data-ltshow={k} /> {k === "invType" ? "Inventory type" : k === "sku" ? "SKU" : k[0].toUpperCase() + k.slice(1)}</label>
+            {["logo","title","category","condition","price","invType","location","sku","barcode","spineText"].map((k) => (
+              <label class="dm-toggle"><input type="checkbox" data-ltshow={k} /> {k === "invType" ? "Inventory type" : k === "sku" ? "SKU" : k === "spineText" ? "Spine tagline" : k[0].toUpperCase() + k.slice(1)}</label>
             ))}
             <label class="dm-toggle"><input type="checkbox" id="lt-bctext" /> Code text under bars</label>
             <label class="dm-toggle"><input type="checkbox" id="lt-2lines" /> Two-line titles</label>
@@ -613,9 +617,10 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   .dm-toggle { display: flex; align-items: center; gap: 0.4rem; font-size: 0.9rem; }
   .dm-actions { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.3rem; }
 
-  /* Label template designer */
-  .lt-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; align-items: start; }
-  @media (max-width: 700px) { .lt-layout { grid-template-columns: 1fr; } }
+  /* Label template designer — preview on top, wide fields below */
+  .lt-layout { display: flex; flex-direction: column; gap: 1.1rem; }
+  .lt-right { order: -1; }
+  .lt-preview svg { max-width: 560px; margin: 0 auto; }
   .lt-list { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.6rem; }
   .lt-list-h { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted-2, #8a94a3); font-weight: 700; margin-bottom: 0.35rem; }
   /* Hard-contrast chips — never white-on-white regardless of theme/caching. */
@@ -631,9 +636,13 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
 
   /* ---- Collapsible settings sections (accordionized at runtime) ---- */
   .set-acc > h2 { cursor: pointer; user-select: none; display: flex; align-items: center; gap: 0.6rem; margin: 0; font-size: 1.3rem; }
-  .set-acc > h2 .acc-ico { font-size: 1.35rem; flex: none; }
-  .set-acc > h2::after { content: "▾"; margin-left: auto; font-size: 0.95rem; color: var(--muted-2); transition: transform .15s ease; transform: rotate(-90deg); }
-  .set-acc.acc-open > h2::after { transform: none; }
+  .set-acc > h2:hover { color: var(--cyan); }
+  .set-acc > h2 .acc-ico { font-size: 1.4rem; flex: none; }
+  /* content swap (transform doesn't apply to inline pseudos) + bigger target */
+  .set-acc > h2::after { content: "▸"; margin-left: auto; font-size: 1.4rem; line-height: 1; color: var(--muted-2); flex: none; }
+  .set-acc.acc-open > h2::after { content: "▾"; }
+  .set-acc > h2 .acc-blurb { flex: 1; min-width: 0; margin-left: 0.4rem; font-size: 0.8rem; font-weight: 500; color: var(--muted-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .set-acc.acc-open > h2 .acc-blurb { display: none; }
   .set-acc .acc-body { margin-top: 1rem; }
   .set-acc:not(.acc-open) .acc-body { display: none; }
   .set-acc:not(.acc-open) { padding-top: 0.9rem; padding-bottom: 0.9rem; }
@@ -1008,6 +1017,7 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       const t = lts[sel];
       $("lt-name").value = t.name; $("lt-w").value = String(t.widthMm); $("lt-h").value = String(t.heightMm);
       ($("lt-spine") as unknown as HTMLSelectElement).value = t.spine; $("lt-spinew").value = String(t.spineWidthMm);
+      $("lt-stext").value = t.spineText || "";
       $("lt-bch").value = String(t.barcodeHeightMm); $("lt-fscale").value = String(t.fontScale);
       $("lt-pscale").value = String(t.priceScale ?? 1.25);
       $("lt-tmax").value = String(t.titleMaxChars ?? 28);
@@ -1028,6 +1038,7 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       t.heightMm = Number($("lt-h").value) || t.heightMm;
       t.spine = ($("lt-spine") as unknown as HTMLSelectElement).value;
       t.spineWidthMm = Number($("lt-spinew").value) || t.spineWidthMm;
+      t.spineText = $("lt-stext").value.slice(0, 30);
       t.barcodeHeightMm = Number($("lt-bch").value) || t.barcodeHeightMm;
       t.fontScale = Number($("lt-fscale").value) || t.fontScale;
       t.priceScale = Number($("lt-pscale").value) || t.priceScale || 1.25;
@@ -1087,33 +1098,63 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
 
   // ---- Accordionize the settings sections ----
   // Runs LAST: every listener above is already attached, and moving nodes into
-  // the .acc-body wrapper preserves them. Each section collapses to a big
-  // emoji heading; open state is remembered per device.
-  const ACC_ICONS: [RegExp, string][] = [
-    [/^Team/, "👥"], [/^Departments/, "🏢"], [/^Inventory types/, "📦"],
-    [/^Label templates/, "🏷️"], [/^Appearance/, "🎨"], [/^Low-stock/, "📉"],
-    [/^Free shipping/, "🚚"], [/^Food/, "🍺"], [/^Tasks/, "✅"],
-    [/^Lead/, "📥"], [/^AI/, "✨"],
+  // the .acc-body wrapper preserves them. All sections collapse by default;
+  // open state is remembered per device but RESETS DAILY (fresh slate each
+  // morning); the collapsed header shows an emoji + one-line summary; the
+  // "Expand all / Collapse all" button at the top flips everything.
+  const ACC_META: [RegExp, string, string][] = [
+    [/^Team/, "👥", "Invite staff · set roles"],
+    [/^Departments/, "🏢", "Retail / F&B / Arcade — governed"],
+    [/^Inventory types/, "📦", "Stock pools · locations · expo block"],
+    [/^Label templates/, "🏷️", "Barcode price-tag designer"],
+    [/^Appearance/, "🎨", "Themes & sidebar accent"],
+    [/^Low-stock/, "📉", "“Only N left” web badge"],
+    [/^Free shipping/, "🚚", "Shop banner threshold"],
+    [/^Food/, "🍺", "Menu · bar tabs · gratuity"],
+    [/^Tasks/, "✅", "Completion notifications"],
+    [/^Lead/, "📥", "Sell-form email alerts"],
+    [/^AI/, "✨", "Provider · quality · brand voice"],
   ];
+  const accToday = new Date().toISOString().slice(0, 10);
+  let accOpenMap: Record<string, number> = {};
+  try {
+    const s = JSON.parse(localStorage.getItem("tl-set-acc") || "null");
+    if (s && s.d === accToday) accOpenMap = s.open || {}; // daily reset: stale days start collapsed
+  } catch {}
+  const accSave = () => { try { localStorage.setItem("tl-set-acc", JSON.stringify({ d: accToday, open: accOpenMap })); } catch {} };
+  const accPanels: [HTMLElement, string][] = [];
+  const accAllBtn = document.getElementById("acc-all");
+  const syncAccAll = () => {
+    if (accAllBtn) accAllBtn.textContent = accPanels.some(([p]) => !p.classList.contains("acc-open")) ? "⊞ Expand all" : "⊟ Collapse all";
+  };
   document.querySelectorAll<HTMLElement>(".set-panel").forEach((p) => {
     const h = p.querySelector(":scope > h2") as HTMLElement | null;
     if (!h) return;
     const txt = (h.textContent || "").trim();
-    const key = "tl-acc-" + txt.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 24);
-    const ico = ACC_ICONS.find(([re]) => re.test(txt))?.[1];
-    if (ico && !/^\p{Extended_Pictographic}/u.test(txt)) h.insertAdjacentHTML("afterbegin", `<span class="acc-ico">${ico}</span>`);
+    const key = txt.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 24);
+    const meta = ACC_META.find(([re]) => re.test(txt));
+    if (meta) {
+      if (!/^\p{Extended_Pictographic}/u.test(txt)) h.insertAdjacentHTML("afterbegin", `<span class="acc-ico">${meta[1]}</span>`);
+      h.insertAdjacentHTML("beforeend", `<span class="acc-blurb">${meta[2]}</span>`);
+    }
     const body = document.createElement("div");
     body.className = "acc-body";
     [...p.children].forEach((c) => { if (c !== h) body.appendChild(c); });
     p.appendChild(body);
     p.classList.add("set-acc");
-    let open = false;
-    try { open = localStorage.getItem(key) === "1"; } catch {}
-    p.classList.toggle("acc-open", open);
+    p.classList.toggle("acc-open", accOpenMap[key] === 1);
     h.addEventListener("click", () => {
       const now = !p.classList.contains("acc-open");
       p.classList.toggle("acc-open", now);
-      try { localStorage.setItem(key, now ? "1" : "0"); } catch {}
+      accOpenMap[key] = now ? 1 : 0;
+      accSave(); syncAccAll();
     });
+    accPanels.push([p, key]);
   });
+  accAllBtn?.addEventListener("click", () => {
+    const openAll = accPanels.some(([p]) => !p.classList.contains("acc-open"));
+    accPanels.forEach(([p, k]) => { p.classList.toggle("acc-open", openAll); accOpenMap[k] = openAll ? 1 : 0; });
+    accSave(); syncAccAll();
+  });
+  syncAccAll();
 </script>

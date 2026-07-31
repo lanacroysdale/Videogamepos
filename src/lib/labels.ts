@@ -16,7 +16,9 @@ export type LabelTemplate = {
   show: {
     logo: boolean; title: boolean; category: boolean; condition: boolean;
     price: boolean; invType: boolean; location: boolean; sku: boolean; barcode: boolean;
+    spineText: boolean;
   };
+  spineText: string;                     // tagline under the spine price, e.g. "Buy | Sell | Chill"
   barcodeHeightMm: number;               // 5–20
   barcodeShowText: boolean;              // human-readable code under the bars
   titleMaxLines: 1 | 2;
@@ -50,7 +52,8 @@ export const DEFAULT_TEMPLATE: LabelTemplate = {
   heightMm: 32,
   spine: "left", // front-to-spine: face on the case FRONT, flap wraps the spine
   spineWidthMm: 13,
-  show: { logo: true, title: true, category: true, condition: true, price: true, invType: true, location: true, sku: false, barcode: true },
+  show: { logo: true, title: true, category: true, condition: true, price: true, invType: true, location: true, sku: false, barcode: true, spineText: true },
+  spineText: "",
   barcodeHeightMm: 8,
   barcodeShowText: true,
   titleMaxLines: 1,
@@ -93,7 +96,9 @@ export function sanitizeLabelTemplates(raw: any): LabelTemplate[] {
         logo: t.show?.logo !== false, title: t.show?.title !== false, category: t.show?.category !== false,
         condition: t.show?.condition !== false, price: t.show?.price !== false, invType: t.show?.invType !== false,
         location: t.show?.location !== false, sku: t.show?.sku === true, barcode: t.show?.barcode !== false,
+        spineText: t.show?.spineText !== false,
       },
+      spineText: String(t.spineText ?? "").slice(0, 30),
       barcodeHeightMm: clamp(t.barcodeHeightMm, 5, 20, d.barcodeHeightMm),
       barcodeShowText: t.barcodeShowText !== false,
       titleMaxLines: t.titleMaxLines === 2 ? 2 : 1,
@@ -228,10 +233,18 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
         logoBottom = 4.4;
       }
     }
-    if (tpl.show.price) {
+    const tagline = tpl.show.spineText ? tpl.spineText.trim() : "";
+    if (tpl.show.price || tagline) {
       const cx = sx + spineW / 2;
       const cy = logoBottom + (spineBottom - logoBottom) / 2;
-      parts.push(`<text x="${cx.toFixed(2)}" y="${cy.toFixed(2)}" transform="rotate(${rot} ${cx.toFixed(2)} ${cy.toFixed(2)})" text-anchor="middle" dominant-baseline="central" font-family="Arial,Helvetica,sans-serif" font-weight="800" font-size="${(4.8 * fs * tpl.priceScale).toFixed(2)}" fill="#000">${esc(money(item.priceCents))}</text>`);
+      const rotAttr = `transform="rotate(${rot} ${cx.toFixed(2)} ${cy.toFixed(2)})"`;
+      if (tpl.show.price) {
+        // With a tagline the price shifts toward the outer edge to make room.
+        parts.push(`<text x="${cx.toFixed(2)}" y="${cy.toFixed(2)}" ${rotAttr} dy="${tagline ? "-1.6" : "0"}" text-anchor="middle" dominant-baseline="central" font-family="Arial,Helvetica,sans-serif" font-weight="800" font-size="${(4.8 * fs * tpl.priceScale).toFixed(2)}" fill="#000">${esc(money(item.priceCents))}</text>`);
+      }
+      if (tagline) {
+        parts.push(`<text x="${cx.toFixed(2)}" y="${cy.toFixed(2)}" ${rotAttr} dy="${tpl.show.price ? "3.3" : "0"}" text-anchor="middle" dominant-baseline="central" font-family="Arial,Helvetica,sans-serif" font-weight="600" font-size="${(2.0 * fs).toFixed(2)}" letter-spacing="0.2" fill="#000">${esc(tagline)}</text>`);
+      }
     }
   }
 
@@ -258,6 +271,13 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
       y += 2.1 * fs;
       parts.push(`<text x="${cxFace.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-weight="700" font-size="${(2.1 * fs).toFixed(2)}" letter-spacing="0.25" fill="#000">${esc(item.storeName.toUpperCase().slice(0, 18))}</text>`);
       y += 0.9;
+    }
+    // Tagline rides under the no-spine header too.
+    const nsTag = tpl.show.spineText ? tpl.spineText.trim() : "";
+    if (nsTag) {
+      y += 2.2 * fs;
+      parts.push(`<text x="${cxFace.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-weight="600" font-size="${(1.9 * fs).toFixed(2)}" letter-spacing="0.2" fill="#000">${esc(nsTag)}</text>`);
+      y += 0.7;
     }
   }
   if (tpl.show.title) {
