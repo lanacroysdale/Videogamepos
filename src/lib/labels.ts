@@ -238,12 +238,20 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
       const cx = sx + spineW / 2;
       const cy = logoBottom + (spineBottom - logoBottom) / 2;
       const rotAttr = `transform="rotate(${rot} ${cx.toFixed(2)} ${cy.toFixed(2)})"`;
+      // Price + tagline sit side-by-side across the spine (a 32mm spine can't
+      // fit both end-to-end); the PAIR is optically centered on the spine's
+      // width so it lines up under the centered logo.
+      const priceH = tpl.show.price ? 4.8 * fs * tpl.priceScale * 0.72 : 0;
+      const tagH = tagline ? 2.0 * fs : 0;
+      const gap = priceH && tagH ? 0.9 : 0;
+      const total = priceH + gap + tagH;
+      const priceDy = tagH ? -(total / 2 - priceH / 2) : 0;
+      const tagDy = priceH ? total / 2 - tagH / 2 : 0;
       if (tpl.show.price) {
-        // With a tagline the price shifts toward the outer edge to make room.
-        parts.push(`<text x="${cx.toFixed(2)}" y="${cy.toFixed(2)}" ${rotAttr} dy="${tagline ? "-1.6" : "0"}" text-anchor="middle" dominant-baseline="central" font-family="Arial,Helvetica,sans-serif" font-weight="800" font-size="${(4.8 * fs * tpl.priceScale).toFixed(2)}" fill="#000">${esc(money(item.priceCents))}</text>`);
+        parts.push(`<text x="${cx.toFixed(2)}" y="${cy.toFixed(2)}" ${rotAttr} dy="${priceDy.toFixed(2)}" text-anchor="middle" dominant-baseline="central" font-family="Arial,Helvetica,sans-serif" font-weight="800" font-size="${(4.8 * fs * tpl.priceScale).toFixed(2)}" fill="#000">${esc(money(item.priceCents))}</text>`);
       }
       if (tagline) {
-        parts.push(`<text x="${cx.toFixed(2)}" y="${cy.toFixed(2)}" ${rotAttr} dy="${tpl.show.price ? "3.3" : "0"}" text-anchor="middle" dominant-baseline="central" font-family="Arial,Helvetica,sans-serif" font-weight="600" font-size="${(2.0 * fs).toFixed(2)}" letter-spacing="0.2" fill="#000">${esc(tagline)}</text>`);
+        parts.push(`<text x="${cx.toFixed(2)}" y="${cy.toFixed(2)}" ${rotAttr} dy="${tagDy.toFixed(2)}" text-anchor="middle" dominant-baseline="central" font-family="Arial,Helvetica,sans-serif" font-weight="600" font-size="${(2.0 * fs).toFixed(2)}" letter-spacing="0.2" fill="#000">${esc(tagline)}</text>`);
       }
     }
   }
