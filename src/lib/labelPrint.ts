@@ -5,13 +5,14 @@
 // openPrintDialog() is the shared chooser: template picker + per-line copies +
 // optional "all copies" toggle + a 1-label test print. Self-contained styling
 // (CSS vars from app.css only), so it drops into any POS page.
-import { renderLabelSvg, DEFAULT_TEMPLATE, type LabelTemplate, type LabelItem } from "./labels";
+import { renderLabelSvg, ensureLabelFont, DEFAULT_TEMPLATE, type LabelTemplate, type LabelItem } from "./labels";
 
 export type PrintJob = { item: LabelItem; copies: number };
 
-export function printLabels(jobs: PrintJob[], tpl: LabelTemplate): void {
+export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate): Promise<void> {
   const real = jobs.filter((j) => j.copies > 0);
   if (!real.length) return;
+  await ensureLabelFont(tpl); // font ready BEFORE print — no fallback-font tags
   document.getElementById("label-print")?.remove();
   document.getElementById("label-print-style")?.remove();
 

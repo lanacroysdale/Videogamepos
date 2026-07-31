@@ -6,6 +6,60 @@
 // price/barcode. Integer cents throughout.
 import { code128SvgGroup, code128Modules } from "./barcode";
 
+// Label font choices with per-font OPTICAL PROFILES — each face renders at a
+// different visual size for the same nominal mm, so the renderer corrects:
+//   scale  — size multiplier (pixel fonts have huge em boxes → shrink; narrow
+//            condensed faces read small → grow)
+//   charW  — average character width in em, drives the title auto-fit
+//   spacing— extra letter-spacing in em
+//   noBold — face has one weight; synthetic bold looks smeared → use 400/500
+//   titleItalic — slant the title line (the League Gothic tag look)
+// Google-hosted faces load on demand (ensureLabelFont) and are awaited before
+// printing so a tag never prints in a fallback font. Futura is the macOS
+// system face (labels print from the shop Macs); elsewhere it falls back.
+export type LabelFontDef = {
+  key: string; label: string; family: string; css?: string;
+  scale?: number; charW?: number; spacing?: number; noBold?: boolean; titleItalic?: boolean;
+};
+export const LABEL_FONTS: LabelFontDef[] = [
+  { key: "system", label: "Clean (Arial)", family: "Arial,Helvetica,sans-serif" },
+  { key: "futura", label: "Futura (system)", family: "Futura,'Century Gothic','Trebuchet MS',Arial,sans-serif", charW: 0.56 },
+  { key: "roboto", label: "Roboto", family: "'Roboto',Arial,sans-serif", css: "https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" },
+  { key: "league", label: "League Gothic", family: "'League Gothic',Arial,sans-serif", css: "https://fonts.googleapis.com/css2?family=League+Gothic&display=swap", scale: 1.3, charW: 0.4, spacing: 0.05, noBold: true, titleItalic: true },
+  { key: "condensed", label: "Condensed (Oswald)", family: "'Oswald',Arial,sans-serif", css: "https://fonts.googleapis.com/css2?family=Oswald:wght@400;700&display=swap", scale: 1.1, charW: 0.46 },
+  { key: "pixel", label: "Pixel (Press Start 2P)", family: "'Press Start 2P',monospace", css: "https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap", scale: 0.58, charW: 1.05, noBold: true },
+  { key: "mono", label: "Mono", family: "ui-monospace,Menlo,monospace", charW: 0.62 },
+  { key: "custom", label: "Custom (uploaded)", family: "'TLLabelCustom',Arial,sans-serif" },
+];
+
+// Inject + await the template's font (browser only; 2s cap so a slow font can
+// never block printing — worst case the tag prints in the fallback).
+export async function ensureLabelFont(tpl: LabelTemplate): Promise<void> {
+  if (typeof document === "undefined") return;
+  try {
+    if (tpl.fontKey === "custom" && tpl.fontUrl) {
+      if (!document.getElementById("lt-font-custom")) {
+        const st = document.createElement("style");
+        st.id = "lt-font-custom";
+        st.textContent = `@font-face{font-family:'TLLabelCustom';src:url('${tpl.fontUrl.replace(/'/g, "%27")}');font-display:swap}`;
+        document.head.appendChild(st);
+      }
+      await Promise.race([(document as any).fonts.load("16px 'TLLabelCustom'"), new Promise((r) => setTimeout(r, 2000))]);
+      return;
+    }
+    const f = LABEL_FONTS.find((x) => x.key === tpl.fontKey);
+    if (!f?.css) return;
+    const id = "lt-font-" + f.key;
+    if (!document.getElementById(id)) {
+      const link = document.createElement("link");
+      link.id = id; link.rel = "stylesheet"; link.href = f.css;
+      document.head.appendChild(link);
+    }
+    const fam = f.family.split(",")[0].replace(/'/g, "");
+    await Promise.race([(document as any).fonts.load(`16px '${fam}'`), new Promise((r) => setTimeout(r, 2000))]);
+  } catch { /* fallback font is acceptable */ }
+}
+
 export type LabelTemplate = {
   id: string;
   name: string;
@@ -24,6 +78,8 @@ export type LabelTemplate = {
   titleMaxLines: 1 | 2;
   fontScale: number;                     // 0.7–1.5
   priceScale: number;                    // 0.8–2 — sizes the price (face + spine)
+  fontKey: string;                       // LABEL_FONTS key ('system' | 'league' | 'pixel' | …)
+  fontUrl: string;                       // uploaded custom font (fontKey 'custom')
   logoUrl: string;                       // uploaded logo image ("" = store name text)
   logoHeightMm: number;                  // 3–15 — logo size on the spine
   logoRotate: "upright" | "sideways";    // sideways = rotated with the spine price
@@ -59,6 +115,8 @@ export const DEFAULT_TEMPLATE: LabelTemplate = {
   titleMaxLines: 1,
   fontScale: 1,
   priceScale: 1.25,
+  fontKey: "system",
+  fontUrl: "",
   logoUrl: "",
   logoHeightMm: 8,
   logoRotate: "upright",
@@ -104,6 +162,8 @@ export function sanitizeLabelTemplates(raw: any): LabelTemplate[] {
       titleMaxLines: t.titleMaxLines === 2 ? 2 : 1,
       fontScale: clamp(t.fontScale, 0.7, 1.5, 1),
       priceScale: clamp(t.priceScale, 0.8, 2, d.priceScale),
+      fontKey: LABEL_FONTS.some((f) => f.key === t.fontKey) ? t.fontKey : "system",
+      fontUrl: typeof t.fontUrl === "string" && /^https?:\/\/.+\.(woff2?|ttf|otf)(\?.*)?$/i.test(t.fontUrl) ? t.fontUrl.slice(0, 500) : "",
       logoUrl: typeof t.logoUrl === "string" && /^https?:\/\//.test(t.logoUrl) ? t.logoUrl.slice(0, 500) : "",
       logoHeightMm: clamp(t.logoHeightMm, 3, 15, d.logoHeightMm),
       logoRotate: t.logoRotate === "sideways" ? "sideways" : "upright",
@@ -113,6 +173,7 @@ export function sanitizeLabelTemplates(raw: any): LabelTemplate[] {
     // Cross-clamps: independent ranges can still combine into impossible
     // geometry (spine wider than the label; bars taller than the label).
     const cur = out[out.length - 1];
+    if (cur.fontKey === "custom" && !cur.fontUrl) cur.fontKey = "system";
     cur.spineWidthMm = Math.min(cur.spineWidthMm, Math.max(8, cur.widthMm - 15));
     cur.barcodeHeightMm = Math.min(cur.barcodeHeightMm, Math.max(5, cur.heightMm - 8));
   }
@@ -171,6 +232,14 @@ function wrapTitle(title: string, maxChars: number, maxLines: 1 | 2): string[] {
 // appear on the printed label.
 export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { preview?: boolean }): string {
   const W = tpl.widthMm, H = tpl.heightMm, fs = tpl.fontScale;
+  const FP = LABEL_FONTS.find((f) => f.key === tpl.fontKey) ?? LABEL_FONTS[0];
+  const fam = FP.family.replace(/"/g, "'");
+  const fsc = FP.scale ?? 1;
+  const chW = FP.charW ?? 0.54;
+  const wHeavy = FP.noBold ? "500" : "800";
+  const wMid = FP.noBold ? "400" : "700";
+  const ls = (sz: number) => (FP.spacing ? ` letter-spacing="${(FP.spacing * sz).toFixed(2)}"` : "");
+  const titleStyleAttr = FP.titleItalic ? ' font-style="italic"' : "";
   const INSET = 2; // safe inset for printer drift
   const spineW = tpl.spine === "none" ? 0 : tpl.spineWidthMm;
   const faceX = tpl.spine === "left" ? spineW : 0;
@@ -229,7 +298,7 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
           logoBottom = 1.2 + lh + 0.8;
         }
       } else if (item.storeName) {
-        parts.push(`<text x="${(sx + spineW / 2).toFixed(2)}" y="3" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-weight="700" font-size="${(1.9 * fs).toFixed(2)}" letter-spacing="0.2" fill="#000">${esc(item.storeName.toUpperCase().slice(0, 12))}</text>`);
+        parts.push(`<text x="${(sx + spineW / 2).toFixed(2)}" y="3" text-anchor="middle" font-family="${fam}" font-weight="${wMid}" font-size="${(1.9 * fs * fsc).toFixed(2)}" letter-spacing="0.2" fill="#000">${esc(item.storeName.toUpperCase().slice(0, 12))}</text>`);
         logoBottom = 4.4;
       }
     }
@@ -241,17 +310,17 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
       // Price + tagline sit side-by-side across the spine (a 32mm spine can't
       // fit both end-to-end); the PAIR is optically centered on the spine's
       // width so it lines up under the centered logo.
-      const priceH = tpl.show.price ? 4.8 * fs * tpl.priceScale * 0.72 : 0;
-      const tagH = tagline ? 2.0 * fs : 0;
+      const priceH = tpl.show.price ? 4.8 * fs * tpl.priceScale * fsc * 0.72 : 0;
+      const tagH = tagline ? 2.0 * fs * fsc : 0;
       const gap = priceH && tagH ? 0.9 : 0;
       const total = priceH + gap + tagH;
       const priceDy = tagH ? -(total / 2 - priceH / 2) : 0;
       const tagDy = priceH ? total / 2 - tagH / 2 : 0;
       if (tpl.show.price) {
-        parts.push(`<text x="${cx.toFixed(2)}" y="${cy.toFixed(2)}" ${rotAttr} dy="${priceDy.toFixed(2)}" text-anchor="middle" dominant-baseline="central" font-family="Arial,Helvetica,sans-serif" font-weight="800" font-size="${(4.8 * fs * tpl.priceScale).toFixed(2)}" fill="#000">${esc(money(item.priceCents))}</text>`);
+        parts.push(`<text x="${cx.toFixed(2)}" y="${cy.toFixed(2)}" ${rotAttr} dy="${priceDy.toFixed(2)}" text-anchor="middle" dominant-baseline="central" font-family="${fam}" font-weight="${wHeavy}"${ls(4.8 * fs * tpl.priceScale * fsc)} font-size="${(4.8 * fs * tpl.priceScale * fsc).toFixed(2)}" fill="#000">${esc(money(item.priceCents))}</text>`);
       }
       if (tagline) {
-        parts.push(`<text x="${cx.toFixed(2)}" y="${cy.toFixed(2)}" ${rotAttr} dy="${tagDy.toFixed(2)}" text-anchor="middle" dominant-baseline="central" font-family="Arial,Helvetica,sans-serif" font-weight="600" font-size="${(2.0 * fs).toFixed(2)}" letter-spacing="0.2" fill="#000">${esc(tagline)}</text>`);
+        parts.push(`<text x="${cx.toFixed(2)}" y="${cy.toFixed(2)}" ${rotAttr} dy="${tagDy.toFixed(2)}" text-anchor="middle" dominant-baseline="central" font-family="${fam}" font-weight="${wMid}" font-size="${(2.0 * fs * fsc).toFixed(2)}" letter-spacing="0.2" fill="#000">${esc(tagline)}</text>`);
       }
     }
   }
@@ -276,15 +345,15 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
       parts.push(`<image href="${esc(tpl.logoUrl)}" x="${(cxFace - lw / 2).toFixed(2)}" y="${y.toFixed(2)}" width="${lw.toFixed(2)}" height="${lh.toFixed(2)}" preserveAspectRatio="xMidYMid meet"/>`);
       y += lh + 1;
     } else if (item.storeName) {
-      y += 2.1 * fs;
-      parts.push(`<text x="${cxFace.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-weight="700" font-size="${(2.1 * fs).toFixed(2)}" letter-spacing="0.25" fill="#000">${esc(item.storeName.toUpperCase().slice(0, 18))}</text>`);
+      y += 2.1 * fs * fsc;
+      parts.push(`<text x="${cxFace.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="middle" font-family="${fam}" font-weight="${wMid}" font-size="${(2.1 * fs * fsc).toFixed(2)}" letter-spacing="0.25" fill="#000">${esc(item.storeName.toUpperCase().slice(0, 18))}</text>`);
       y += 0.9;
     }
     // Tagline rides under the no-spine header too.
     const nsTag = tpl.show.spineText ? tpl.spineText.trim() : "";
     if (nsTag) {
-      y += 2.2 * fs;
-      parts.push(`<text x="${cxFace.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-weight="600" font-size="${(1.9 * fs).toFixed(2)}" letter-spacing="0.2" fill="#000">${esc(nsTag)}</text>`);
+      y += 2.2 * fs * fsc;
+      parts.push(`<text x="${cxFace.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="middle" font-family="${fam}" font-weight="${wMid}" font-size="${(1.9 * fs * fsc).toFixed(2)}" letter-spacing="0.2" fill="#000">${esc(nsTag)}</text>`);
       y += 0.7;
     }
   }
@@ -292,11 +361,11 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
     const raw = item.title.replace(/\s+/g, " ").trim();
     const cut = raw.length > tpl.titleMaxChars ? raw.slice(0, Math.max(1, tpl.titleMaxChars - 1)).trimEnd() + "…" : raw;
     const perLine = Math.max(6, Math.ceil(cut.length / tpl.titleMaxLines));
-    const size = Math.min(4.8 * fs, Math.max(2.8 * fs, contentW / (perLine * 0.54)));
-    const maxChars = Math.max(4, Math.floor(contentW / (size * 0.54)));
+    const size = Math.min(4.8 * fs * fsc, Math.max(2.6 * fs, contentW / (perLine * chW)));
+    const maxChars = Math.max(4, Math.floor(contentW / (size * chW)));
     y += size;
     for (const line of wrapTitle(cut, maxChars, tpl.titleMaxLines)) {
-      parts.push(`<text x="${cxFace.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-weight="800" font-size="${size.toFixed(2)}" fill="#000">${esc(line)}</text>`);
+      parts.push(`<text x="${cxFace.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="middle" font-family="${fam}" font-weight="${wHeavy}"${titleStyleAttr}${ls(size)} font-size="${size.toFixed(2)}" fill="#000">${esc(line)}</text>`);
       y += size * 1.15;
     }
     y -= size * 1.15 - 3.0 * fs; // hand off: next baseline for the meta line
@@ -309,26 +378,26 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
     tpl.show.sku && item.sku ? item.sku : "",
   ].filter(Boolean);
   if (metaBits.length) {
-    parts.push(`<text x="${cxFace.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="${(2.4 * fs).toFixed(2)}" fill="#000">${esc(metaBits.join("  ·  "))}</text>`);
-    y += 2.6 * fs;
+    parts.push(`<text x="${cxFace.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="middle" font-family="${fam}"${ls(2.4 * fs * fsc)} font-size="${(2.4 * fs * fsc).toFixed(2)}" fill="#000">${esc(metaBits.join("  ·  "))}</text>`);
+    y += 2.6 * fs * fsc;
   }
   // Face price: big, centered — and ALWAYS clear of the barcode strip: the
   // baseline is clamped ≥1.2mm above the bars, and the font shrinks only if a
   // tall title/meta stack leaves genuinely too little room.
   if (tpl.show.price) {
     const floorY = wantBarcode ? bcY - 1.2 : H - INSET;
-    let priceFont = 6.0 * fs * tpl.priceScale;
+    let priceFont = 6.0 * fs * tpl.priceScale * fsc;
     const room = floorY - y;
     if (priceFont * 0.82 > room) priceFont = Math.max(3.2, room / 0.82);
     const py = Math.min(y + priceFont * 0.82, floorY);
-    parts.push(`<text x="${cxFace.toFixed(2)}" y="${py.toFixed(2)}" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-weight="800" font-size="${priceFont.toFixed(2)}" fill="#000">${esc(money(item.priceCents))}</text>`);
+    parts.push(`<text x="${cxFace.toFixed(2)}" y="${py.toFixed(2)}" text-anchor="middle" font-family="${fam}" font-weight="${wHeavy}"${ls(priceFont)} font-size="${priceFont.toFixed(2)}" fill="#000">${esc(money(item.priceCents))}</text>`);
     y = py;
   }
   // Vertical "Retail · PDX" rail along the right edge, centered on the LABEL's
   // full height so it reads as a cohesive side rail (owner spec).
   if (tagBits.length) {
     const rx = fx + fw - 0.8;
-    parts.push(`<text x="${rx.toFixed(2)}" y="${(H / 2).toFixed(2)}" transform="rotate(-90 ${rx.toFixed(2)} ${(H / 2).toFixed(2)})" text-anchor="middle" dominant-baseline="central" font-family="Arial,Helvetica,sans-serif" font-size="${(2.0 * fs).toFixed(2)}" letter-spacing="0.15" fill="#000">${esc(tagBits.join(" · "))}</text>`);
+    parts.push(`<text x="${rx.toFixed(2)}" y="${(H / 2).toFixed(2)}" transform="rotate(-90 ${rx.toFixed(2)} ${(H / 2).toFixed(2)})" text-anchor="middle" dominant-baseline="central" font-family="${fam}" font-size="${(2.0 * fs * fsc).toFixed(2)}" letter-spacing="0.15" fill="#000">${esc(tagBits.join(" · "))}</text>`);
   }
   // Barcode pinned to the bottom (face-width, or full label width — see above).
   // Never stretch to fill: modules cap at 0.30mm so a compact numeric code

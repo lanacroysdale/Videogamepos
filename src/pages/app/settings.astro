@@ -6,7 +6,7 @@ import { lowStockSettings, freeShipSettings } from "../../lib/lowStock";
 import { themeSettings, THEMES, SIDEBARS } from "../../lib/themeSettings";
 import { aiSettings, aiStatus, AI_PROVIDERS, AI_QUALITIES } from "../../lib/ai";
 import { barSettings } from "../../lib/barSettings";
-import { labelTemplates } from "../../lib/labels";
+import { labelTemplates, LABEL_FONTS } from "../../lib/labels";
 import type { StoreDepartment, StoreInventoryType, StoreLocation } from "../../lib/types";
 import { createSupabaseAdminClient } from "../../lib/supabase";
 
@@ -281,6 +281,11 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
                 <label class="lt-num">Font ×<input id="lt-fscale" type="number" min="0.7" max="1.5" step="0.05" /></label>
                 <label class="lt-num">Price ×<input id="lt-pscale" type="number" min="0.8" max="2" step="0.05" /></label>
                 <label class="lt-num">Cut-off<input id="lt-tmax" type="number" min="10" max="60" step="1" /></label>
+              </div>
+              <div class="lt-row">
+                <label class="lt-sel">Font<select id="lt-font">{LABEL_FONTS.filter((f) => f.key !== "custom").map((f) => <option value={f.key}>{f.label}</option>)}<option value="custom">Custom (uploaded)</option></select></label>
+                <label class="btn btn-ghost btn-sm">⬆ Upload font<input type="file" id="lt-fontfile" accept=".woff2,.woff,.ttf,.otf" hidden /></label>
+                <span id="lt-fontstatus" class="muted-2"></span>
               </div>
             </div>
             <div class="lt-group">
@@ -695,7 +700,7 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
 </style>
 
 <script>
-  import { renderLabelSvg, barcodeFits, DEFAULT_TEMPLATE } from "../../lib/labels";
+  import { renderLabelSvg, barcodeFits, ensureLabelFont, DEFAULT_TEMPLATE } from "../../lib/labels";
   const $ = (id: string) => document.getElementById(id) as HTMLInputElement;
   const save = async (body: any, statusEl: HTMLElement, btn: HTMLButtonElement) => {
     btn.disabled = true; statusEl.textContent = "Saving…";
@@ -1067,6 +1072,8 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       $("lt-bch").value = String(t.barcodeHeightMm); $("lt-fscale").value = String(t.fontScale);
       $("lt-pscale").value = String(t.priceScale ?? 1.25);
       $("lt-tmax").value = String(t.titleMaxChars ?? 28);
+      ($("lt-font") as unknown as HTMLSelectElement).value = t.fontKey || "system";
+      document.getElementById("lt-fontstatus")!.textContent = t.fontUrl ? "custom font ✓" : "";
       $("lt-logoh").value = String(t.logoHeightMm ?? 8);
       ($("lt-logorot") as unknown as HTMLSelectElement).value = t.logoRotate === "sideways" ? "sideways" : "upright";
       (document.getElementById("lt-logoclear") as HTMLElement).hidden = !t.logoUrl;
@@ -1089,6 +1096,7 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       t.fontScale = Number($("lt-fscale").value) || t.fontScale;
       t.priceScale = Number($("lt-pscale").value) || t.priceScale || 1.25;
       t.titleMaxChars = Number($("lt-tmax").value) || t.titleMaxChars || 28;
+      t.fontKey = ($("lt-font") as unknown as HTMLSelectElement).value || "system";
       t.logoHeightMm = Number($("lt-logoh").value) || t.logoHeightMm || 8;
       t.logoRotate = ($("lt-logorot") as unknown as HTMLSelectElement).value === "sideways" ? "sideways" : "upright";
       shows.forEach((cb) => (t.show[cb.dataset.ltshow!] = cb.checked));
@@ -1100,7 +1108,10 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     }
     function ltPreview() {
       const t = lts[sel];
-      try { document.getElementById("lt-preview")!.innerHTML = renderLabelSvg(t, SAMPLE, { preview: true }); } catch { /* mid-edit invalid numbers */ }
+      const draw = () => { try { document.getElementById("lt-preview")!.innerHTML = renderLabelSvg(t, SAMPLE, { preview: true }); } catch { /* mid-edit invalid numbers */ } };
+      draw();
+      // Re-draw once the chosen font finishes loading so the preview is honest.
+      ensureLabelFont(t).then(draw).catch(() => {});
       // The renderer falls back to a full-width barcode strip when the face is
       // too narrow — so only warn when even the FULL label can't fit the code.
       (document.getElementById("lt-warn") as HTMLElement).hidden = t.show.barcode ? barcodeFits(SAMPLE.internalCode, t.widthMm - 4) : true;
@@ -1136,6 +1147,27 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       finally { input.value = ""; }
     });
     document.getElementById("lt-logoclear")?.addEventListener("click", () => { lts[sel].logoUrl = ""; ltForm(); });
+
+    // Custom font upload → sets the template to the uploaded face.
+    (document.getElementById("lt-fontfile") as HTMLInputElement | null)?.addEventListener("change", async (e) => {
+      const input = e.target as HTMLInputElement;
+      const f = input.files?.[0];
+      if (!f) return;
+      const st = document.getElementById("lt-fontstatus")!;
+      st.textContent = "Uploading…";
+      try {
+        const fd = new FormData(); fd.append("file", f);
+        const r = await fetch("/api/pos/upload-font", { method: "POST", body: fd });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j.ok) throw new Error(j.error || "Upload failed");
+        lts[sel].fontUrl = j.url;
+        lts[sel].fontKey = "custom";
+        document.getElementById("lt-font-custom")?.remove(); // re-register @font-face for the new file
+        st.textContent = "custom font ✓ — Save templates to keep it";
+        ltForm();
+      } catch (err: any) { st.textContent = ""; alert(err.message); }
+      finally { input.value = ""; }
+    });
 
     document.getElementById("lt-save")?.addEventListener("click", (e) =>
       save({ labelTemplates: lts }, document.getElementById("lt-status")!, e.currentTarget as HTMLButtonElement));
