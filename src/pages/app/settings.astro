@@ -657,12 +657,12 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   .acc-switch.on .acc-knob { left: calc(100% - 1rem - 1px); background: var(--cyan); }
 
   /* Label designer runtime nodes (chips + preview SVG) — must be global. */
-  .lt-chip { appearance: none; -webkit-appearance: none; border-radius: 0; font: inherit; font-size: 0.84rem; font-weight: 600; padding: 0.4rem 0.8rem; border: 1px solid #45505f; background: #1a2230; color: #e8ecf1; cursor: pointer; }
-  .lt-chip:hover { border-color: #2ce6e0; }
-  .lt-chip.on { background: #2ce6e0; border-color: #2ce6e0; color: #04222a; font-weight: 800; }
+  .lt-chip { appearance: none; -webkit-appearance: none; border-radius: 0; font: inherit; font-size: 0.84rem; font-weight: 600; padding: 0.4rem 0.8rem; border: 1px solid var(--border-strong, #45505f); background: var(--panel, #1a2230); color: var(--text, #e8ecf1); cursor: pointer; }
+  .lt-chip:hover { border-color: var(--cyan, #2ce6e0); }
+  .lt-chip.on { background: var(--cyan, #2ce6e0); border-color: var(--cyan, #2ce6e0); color: #04222a; font-weight: 800; }
   /* Backdrop hugs the label — no wide grey band. */
   .lt-preview { margin: 0.4rem auto 0; padding: 0.7rem; background: #666; width: fit-content; max-width: 100%; }
-  .lt-preview svg { display: block; width: 480px; max-width: 100%; height: auto; box-shadow: 0 3px 10px rgba(0,0,0,.45); }
+  .lt-preview svg { display: block; width: 340px; max-width: 100%; height: auto; box-shadow: 0 3px 10px rgba(0,0,0,.45); }
 </style>
 
 <script>
