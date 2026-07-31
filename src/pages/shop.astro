@@ -8,6 +8,7 @@ import { createSupabaseAdminClient } from "../lib/supabase";
 import { lowStockSettings, showLowStock, freeShipSettings } from "../lib/lowStock";
 import { classify, DEPARTMENTS, PLATFORMS, CONDITIONS, REGIONS, FRANCHISES } from "../lib/shopFilters";
 import type { Rule } from "../lib/shopFilters";
+import { syncableTypeIds } from "../lib/inventoryTypes";
 
 // HIDDEN, BROWSE-ONLY shop. Reads the SHARED inventory pool so anything sold in
 // store disappears here automatically. Server-side service-role read selecting
@@ -18,14 +19,18 @@ const { data: settingsRow } = await admin.from("store_settings").select("setting
 const ls = lowStockSettings(settingsRow?.settings);
 const fs = freeShipSettings(settingsRow?.settings);
 const freeShipText = `🚚 Free shipping on orders over ${fmt(fs.freeShipThresholdCents)}`;
-const { data: rows, error } = await admin
+// Inventory-type gate: only web-syncable pools (e.g. NOT Personal Collection)
+// appear online. Null pre-migration → filter skipped, catalog unchanged.
+const allowedTypeIds = await syncableTypeIds(admin);
+let shopQ = admin
   .from("product_variants")
   .select(
     "id, condition, completeness, price_cents, online_price_cents, quantity, product:products(id, title, slug, platform, franchise, image_url, description, category:categories(name))",
   )
   .eq("online_visible", true)
-  .gt("quantity", 0)
-  .order("price_cents", { ascending: true });
+  .gt("quantity", 0);
+if (allowedTypeIds) shopQ = shopQ.in("inventory_type_id", allowedTypeIds);
+const { data: rows, error } = await shopQ.order("price_cents", { ascending: true });
 
 const listings = (rows ?? []).map((v: any) => {
   const item = {

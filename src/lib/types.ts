@@ -64,6 +64,8 @@ export interface ProductVariant {
   cost_cents: number;
   online_price_cents: number | null;
   online_visible: boolean;
+  inventory_type_id: string;
+  location_id: string | null;
   quantity: number;
   restocked_at: string | null;
   created_at: string;
@@ -119,6 +121,31 @@ export interface StoreDepartment {
   icon: string | null;
   is_enabled: boolean;
   is_system: boolean;
+  sort_order: number;
+  created_at: string;
+}
+
+// Inventory type = a first-class stock pool (Retail / Online / Personal
+// Collection…) with behavior: website sync + checkout blocking. Variant-level.
+export interface StoreInventoryType {
+  id: string;
+  key: string;
+  name: string;
+  icon: string | null;
+  color: string | null;
+  allow_website_sync: boolean;
+  block_at_checkout: boolean;
+  is_system: boolean;
+  sort_order: number;
+  created_at: string;
+}
+
+// The "PDX" on a printed label (multi-location roadmap: transfers later).
+export interface StoreLocation {
+  id: string;
+  key: string;
+  name: string;
+  is_default: boolean;
   sort_order: number;
   created_at: string;
 }

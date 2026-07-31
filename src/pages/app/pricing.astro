@@ -2,22 +2,62 @@
 export const prerender = false;
 import AppLayout from "../../layouts/AppLayout.astro";
 import { fmt } from "../../lib/money";
+import { labelTemplates } from "../../lib/labels";
+import { compAbbrev } from "../../lib/conditionDisplay";
 
 const supabase = Astro.locals.supabase;
+const [{ data: settingsRow }, { data: invTypes }, { data: locations }, { data: completeness }, { data: grades }] = await Promise.all([
+  supabase.from("store_settings").select("store_name, settings").eq("id", 1).maybeSingle(),
+  supabase.from("store_inventory_types").select("id, name"),
+  supabase.from("store_locations").select("id, key, is_default"),
+  supabase.from("completeness_levels").select("code, label").eq("is_active", true),
+  supabase.from("condition_grades").select("code, label, icon").eq("is_active", true),
+]);
+
+// inventory_type_id/location_id only exist post-migration — selecting them
+// early would 400 both queries and mask real pending changes behind an empty state.
+const typesReady = !!invTypes;
+const VARIANT_COLS = `id, condition, sku, internal_code, price_cents, quantity, completeness_code, grade_code${typesReady ? ", inventory_type_id, location_id" : ""}, product:products(title, platform, category:categories(name))`;
 const { data: pending } = await supabase
   .from("price_changes")
-  .select("id, old_cents, suggested_cents, source, created_at, variant:product_variants(condition, sku, product:products(title, platform))")
+  .select(`id, old_cents, suggested_cents, source, created_at, variant:product_variants(${VARIANT_COLS})`)
   .eq("status", "pending")
   .order("created_at", { ascending: false });
 
 const { data: recent } = await supabase
   .from("price_changes")
-  .select("id, old_cents, suggested_cents, status, reviewed_at, variant:product_variants(condition, product:products(title))")
+  .select(`id, old_cents, suggested_cents, status, reviewed_at, variant:product_variants(${VARIANT_COLS})`)
   .in("status", ["approved", "reverted"])
   .order("reviewed_at", { ascending: false })
-  .limit(8);
+  .limit(12);
 
 const pct = (oldC: number, newC: number) => (oldC ? Math.round(((newC - oldC) / oldC) * 100) : 0);
+
+// Everything the label printer needs, per price-change row (keyed by change id).
+const typeName = new Map((invTypes ?? []).map((t: any) => [t.id, t.name]));
+const locKey = new Map((locations ?? []).map((l: any) => [l.id, l.key]));
+const defaultLocKey = (locations ?? []).find((l: any) => l.is_default)?.key ?? "";
+const condShort = (v: any) => {
+  const g = (grades ?? []).find((x: any) => x.code === v?.grade_code);
+  const parts = [v?.completeness_code ? compAbbrev(v.completeness_code, (completeness ?? []) as any) : null, g ? (g.icon || g.label) : null].filter(Boolean);
+  return parts.length ? parts.join(" · ") : (v?.condition || "—");
+};
+const rowInfo = (p: any) => ({
+  title: p.variant?.product?.title ?? "—",
+  categoryName: p.variant?.product?.platform || p.variant?.product?.category?.name || "",
+  condShort: condShort(p.variant),
+  priceCents: p.variant?.price_cents ?? 0,
+  suggestedCents: p.suggested_cents,
+  quantity: p.variant?.quantity ?? 0,
+  internalCode: p.variant?.internal_code ?? "",
+  sku: p.variant?.sku ?? "",
+  invTypeName: typeName.get(p.variant?.inventory_type_id) ?? "",
+  locationKey: locKey.get(p.variant?.location_id) ?? defaultLocKey,
+});
+const lblRows: Record<string, any> = {};
+for (const p of [...(pending ?? []), ...(recent ?? [])]) lblRows[(p as any).id] = rowInfo(p);
+const platforms = [...new Set((pending ?? []).map((p: any) => p.variant?.product?.platform).filter(Boolean))].sort();
+const clientBlob = { rows: lblRows, templates: labelTemplates((settingsRow as any)?.settings), storeName: (settingsRow as any)?.store_name || "TimeLag" };
 ---
 
 <AppLayout title="Pricing" active="pricing">
@@ -32,15 +72,21 @@ const pct = (oldC: number, newC: number) => (oldC ? Math.round(((newC - oldC) / 
 
   <div class="pos-panel">
     <h2>Pending changes <span class="sub">({pending?.length ?? 0})</span></h2>
+    <div style="display:flex;gap:0.6rem;align-items:center;flex-wrap:wrap;margin:0.6rem 0 0.8rem;">
+      <select id="pc-platform"><option value="">All platforms</option>{platforms.map((pl: string) => <option value={pl}>{pl}</option>)}</select>
+      <button id="pc-print" class="btn btn-ghost btn-sm" title="Print fresh price labels for the checked rows — copies default to every shelf copy">🏷 Print labels for selected</button>
+      <span class="muted" style="font-size:0.8rem;">Approve first, then print — labels use the item's new price.</span>
+    </div>
     {(!pending || pending.length === 0) && <p class="empty">No pending changes. Run a sync to check for updates.</p>}
     {pending && pending.length > 0 && (
       <table class="tbl">
-        <thead><tr><th>Item</th><th>Source</th><th class="num">Current</th><th class="num">Suggested</th><th class="num">Change</th><th></th></tr></thead>
+        <thead><tr><th><input type="checkbox" id="pc-all" title="Select all shown" /></th><th>Item</th><th>Source</th><th class="num">Current</th><th class="num">Suggested</th><th class="num">Change</th><th></th></tr></thead>
         <tbody id="pc-body">
           {pending.map((p: any) => {
             const change = pct(p.old_cents, p.suggested_cents);
             return (
-              <tr data-pc={p.id}>
+              <tr data-pc={p.id} data-platform={p.variant?.product?.platform ?? ""}>
+                <td><input type="checkbox" class="pc-sel" data-id={p.id} /></td>
                 <td><strong>{p.variant?.product?.title ?? "—"}</strong><span class="plat" style="display:block;color:var(--muted-2);font-size:0.8rem;">{p.variant?.product?.platform} · {p.variant?.condition}</span></td>
                 <td><span class="pill muted" style="font-size:0.7rem;">{p.source}</span></td>
                 <td class="num">{fmt(p.old_cents)}</td>
@@ -62,7 +108,7 @@ const pct = (oldC: number, newC: number) => (oldC ? Math.round(((newC - oldC) / 
     <div class="pos-panel" style="margin-top:1rem;">
       <h2>Recently reviewed</h2>
       <table class="tbl">
-        <thead><tr><th>Item</th><th class="num">From → To</th><th>Decision</th><th>When</th></tr></thead>
+        <thead><tr><th>Item</th><th class="num">From → To</th><th>Decision</th><th>When</th><th></th></tr></thead>
         <tbody>
           {recent.map((p: any) => (
             <tr>
@@ -70,16 +116,25 @@ const pct = (oldC: number, newC: number) => (oldC ? Math.round(((newC - oldC) / 
               <td class="num">{fmt(p.old_cents)} → {fmt(p.suggested_cents)}</td>
               <td><span class={`pill ${p.status === "approved" ? "green" : "magenta"}`}>{p.status}</span></td>
               <td class="muted">{p.reviewed_at ? new Date(p.reviewed_at).toLocaleString() : ""}</td>
+              <td>{p.status === "approved" && <button class="btn btn-ghost btn-sm" data-printpc={p.id} title="Reprint labels at the approved price">🏷</button>}</td>
             </tr>
           ))}
         </tbody>
       </table>
     </div>
   )}
+
+  <textarea id="pc-data" hidden set:text={JSON.stringify(clientBlob)}></textarea>
 </AppLayout>
 
 <script>
+  import { openPrintDialog } from "../../lib/labelPrint";
+
   const $ = (id: string) => document.getElementById(id)!;
+  let blob: any = {};
+  try { blob = JSON.parse(($("pc-data") as HTMLTextAreaElement)?.value || "{}"); } catch {}
+  const rows: Record<string, any> = blob.rows || {};
+
   async function api(body: any) {
     const r = await fetch("/api/pos/pricing", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
     const j = await r.json();
@@ -101,13 +156,57 @@ const pct = (oldC: number, newC: number) => (oldC ? Math.round(((newC - oldC) / 
     finally { btn.disabled = false; btn.textContent = "⟳ Run PriceCharting sync"; }
   });
 
+  // Build the print line for a price-change row. Labels always show the row's
+  // CURRENT effective price (updated locally when a change is approved).
+  function lineFor(id: string) {
+    const r = rows[id];
+    if (!r || !r.internalCode) return null;
+    return {
+      item: { title: r.title, categoryName: r.categoryName, condShort: r.condShort, priceCents: r.priceCents, invTypeName: r.invTypeName, locationKey: r.locationKey, internalCode: r.internalCode, sku: r.sku, storeName: blob.storeName },
+      defaultCopies: Math.max(1, r.quantity), // a price change re-tags every shelf copy
+    };
+  }
+
   function bind() {
     document.querySelectorAll<HTMLElement>("[data-approve]").forEach((b) => b.addEventListener("click", async () => {
-      try { await api({ action: "approve", id: b.dataset.approve }); b.closest("tr")!.remove(); } catch (e: any) { alert(e.message); }
+      try {
+        await api({ action: "approve", id: b.dataset.approve });
+        const id = b.dataset.approve!;
+        if (rows[id]) rows[id].priceCents = rows[id].suggestedCents; // labels now print the NEW price
+        const tr = b.closest("tr")!;
+        const cell = b.parentElement!;
+        cell.innerHTML = `<span class="pill green">approved ✓</span>`;
+        const cb = tr.querySelector<HTMLInputElement>(".pc-sel");
+        if (cb) cb.checked = true; // pre-check for the print run
+      } catch (e: any) { alert(e.message); }
     }));
     document.querySelectorAll<HTMLElement>("[data-revert]").forEach((b) => b.addEventListener("click", async () => {
       try { await api({ action: "revert", id: b.dataset.revert }); b.closest("tr")!.remove(); } catch (e: any) { alert(e.message); }
     }));
+    document.querySelectorAll<HTMLElement>("[data-printpc]").forEach((b) => b.addEventListener("click", () => {
+      const line = lineFor(b.dataset.printpc!);
+      if (!line) { alert("No label code on this item."); return; }
+      openPrintDialog([line], blob.templates || [], { title: "Print price-update labels" });
+    }));
   }
   bind();
+
+  // Select-all + platform filter + bulk print.
+  ($("pc-all") as HTMLInputElement | null)?.addEventListener("change", (e) => {
+    const on = (e.target as HTMLInputElement).checked;
+    document.querySelectorAll<HTMLInputElement>("#pc-body tr:not([hidden]) .pc-sel").forEach((cb) => (cb.checked = on));
+  });
+  ($("pc-platform") as HTMLSelectElement | null)?.addEventListener("change", (e) => {
+    const v = (e.target as HTMLSelectElement).value;
+    document.querySelectorAll<HTMLTableRowElement>("#pc-body tr").forEach((tr) => {
+      tr.hidden = !!v && tr.dataset.platform !== v;
+    });
+  });
+  $("pc-print")?.addEventListener("click", () => {
+    const lines = [...document.querySelectorAll<HTMLInputElement>("#pc-body tr:not([hidden]) .pc-sel:checked")]
+      .map((cb) => lineFor(cb.dataset.id!))
+      .filter(Boolean) as any[];
+    if (!lines.length) { alert("Check at least one row (and approve it first so the label shows the new price)."); return; }
+    openPrintDialog(lines, blob.templates || [], { title: "Print price-update labels" });
+  });
 </script>

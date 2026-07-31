@@ -1,5 +1,6 @@
 import type { APIRoute } from "astro";
 import { createSupabaseAdminClient } from "../lib/supabase";
+import { syncableTypeIds } from "../lib/inventoryTypes";
 import { SITE } from "../consts";
 
 export const prerender = false;
@@ -19,12 +20,16 @@ function gCondition(v: any): string {
 
 export const GET: APIRoute = async () => {
   const admin = createSupabaseAdminClient();
-  const { data: rows } = await admin
+  // Inventory-type gate: non-syncable pools (e.g. Personal Collection) stay out
+  // of the feed. Null pre-migration → filter skipped.
+  const allowedTypeIds = await syncableTypeIds(admin);
+  let feedQ = admin
     .from("product_variants")
     .select("price_cents, online_price_cents, quantity, condition, completeness_code, product:products(id, title, slug, platform, brand, genre, description, image_url, category:categories(name))")
     .eq("online_visible", true)
-    .gt("quantity", 0)
-    .order("price_cents", { ascending: true });
+    .gt("quantity", 0);
+  if (allowedTypeIds) feedQ = feedQ.in("inventory_type_id", allowedTypeIds);
+  const { data: rows } = await feedQ.order("price_cents", { ascending: true });
 
   // One offer per product — keep the cheapest available variant.
   const seen = new Set<string>();

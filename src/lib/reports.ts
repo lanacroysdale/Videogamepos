@@ -26,6 +26,7 @@ export type Item = {
   menu_item_id: string | null;
   category_id: string | null;
   department: string | null; // snapshot dept key: 'retail'|'food_bev'|'arcade'|'other'
+  inventory_type: string | null; // snapshot stock-pool key: 'retail'|'online'|'personal_collection'|…
   kind: string;
   description: string;
   qty: number;
@@ -223,4 +224,13 @@ export function departmentOf(it: Item): string {
   if (it.menu_item_id) return "food_bev";
   if (it.variant_id) return "retail";
   return "other";
+}
+
+// The inventory-type (stock pool) key for a sold line: stamped snapshot first;
+// pre-feature variant lines fall back to 'retail'; menu/service lines are not
+// inventory (null → excluded from the by-type rollup).
+export function inventoryTypeOf(it: Item): string | null {
+  if (it.inventory_type) return it.inventory_type;
+  if (it.variant_id) return "retail";
+  return null;
 }

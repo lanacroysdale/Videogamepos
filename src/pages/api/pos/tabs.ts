@@ -11,6 +11,7 @@ import {
 } from "../../../lib/menu";
 import { autoCloseOpenTabs, decrementVariantStock } from "../../../lib/tabs";
 import { barSettings } from "../../../lib/barSettings";
+import { typeMapByVariant } from "../../../lib/inventoryTypes";
 
 export const prerender = false;
 const json = (d: unknown, s = 200) =>
@@ -193,9 +194,25 @@ export const POST: APIRoute = async ({ locals, request }) => {
     if (tab.status !== "open") return json({ error: "That tab is already closed." }, 409);
 
     const { data: items } = await supabase
-      .from("transaction_items").select("variant_id, qty, unit_price_cents, discount_cents").eq("transaction_id", tabId);
+      .from("transaction_items").select("id, variant_id, qty, unit_price_cents, discount_cents").eq("transaction_id", tabId);
     const rows = items ?? [];
     if (rows.length === 0) return json({ error: "Add an item before settling." }, 400);
+
+    // Inventory-type pass for retail lines parked on tabs (no-op today — tab
+    // lines are menu/custom — but correct the day cross-side pickup lands):
+    // live block check + type/department stamp for reporting.
+    const variantLines = rows.filter((it: any) => it.variant_id);
+    if (variantLines.length) {
+      const { ready: tReady, map: tMap } = await typeMapByVariant(supabase, variantLines.map((it: any) => it.variant_id));
+      const blockedLine = variantLines.find((it: any) => tMap.get(it.variant_id)?.block_at_checkout);
+      if (blockedLine) return json({ error: "This tab includes an item from a blocked inventory type — remove it or unblock the type first." }, 409);
+      if (tReady) {
+        for (const it of variantLines as any[]) {
+          const t = tMap.get(it.variant_id);
+          if (t) await supabase.from("transaction_items").update({ inventory_type: t.key, department: "retail" }).eq("id", it.id);
+        }
+      }
+    }
 
     const subtotal = rows.reduce((s: number, it: any) => s + (it.unit_price_cents || 0) * (it.qty || 1), 0);
     const discount = Math.min(subtotal, rows.reduce((s: number, it: any) => s + (it.discount_cents || 0), 0));

@@ -6,7 +6,8 @@ import { lowStockSettings, freeShipSettings } from "../../lib/lowStock";
 import { themeSettings, THEMES, SIDEBARS } from "../../lib/themeSettings";
 import { aiSettings, aiStatus, AI_PROVIDERS, AI_QUALITIES } from "../../lib/ai";
 import { barSettings } from "../../lib/barSettings";
-import type { StoreDepartment } from "../../lib/types";
+import { labelTemplates } from "../../lib/labels";
+import type { StoreDepartment, StoreInventoryType, StoreLocation } from "../../lib/types";
 import { createSupabaseAdminClient } from "../../lib/supabase";
 
 const supabase = Astro.locals.supabase;
@@ -29,7 +30,9 @@ if (isOwner) {
   );
   team = (profs ?? []).map((p: any) => ({ id: p.id, full_name: p.full_name, role: p.role, email: emailById.get(p.id) ?? "", isYou: p.id === Astro.locals.user!.id }));
 }
-const { data: row } = await supabase.from("store_settings").select("settings").eq("id", 1).maybeSingle();
+const { data: row } = await supabase.from("store_settings").select("store_name, settings").eq("id", 1).maybeSingle();
+const storeName = (row as any)?.store_name || "TimeLag";
+const lblTemplates = labelTemplates(row?.settings);
 const ls = lowStockSettings(row?.settings);
 const fs = freeShipSettings(row?.settings);
 const th = themeSettings(row?.settings);
@@ -45,6 +48,18 @@ let departments: StoreDepartment[] = [];
 if (isOwner) {
   const { data: depts } = await supabase.from("store_departments").select("*").order("sort_order").order("name");
   departments = (depts as StoreDepartment[]) ?? [];
+}
+const isManager = ["owner", "manager"].includes(Astro.locals.profile?.role ?? "");
+// Inventory types + locations (empty pre-migration → panel shows a setup note).
+let invTypes: StoreInventoryType[] = [];
+let locations: StoreLocation[] = [];
+if (isManager) {
+  const [{ data: itRows }, { data: locRows }] = await Promise.all([
+    supabase.from("store_inventory_types").select("*").order("sort_order").order("name"),
+    supabase.from("store_locations").select("*").order("sort_order").order("name"),
+  ]);
+  invTypes = (itRows as StoreInventoryType[]) ?? [];
+  locations = (locRows as StoreLocation[]) ?? [];
 }
 const aiSt = aiStatus(ai.provider);
 const aiProviderLabel = aiSt.provider === "gemini" ? "Gemini" : aiSt.provider === "anthropic" ? "Claude" : "";
@@ -159,6 +174,160 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
           <button id="dm-save" class="btn btn-primary btn-sm" type="button">Save</button>
           <button id="dm-cancel" class="btn btn-ghost btn-sm" type="button">Cancel</button>
           <span id="dm-status" class="muted-2"></span>
+        </div>
+      </div>
+    </div>
+  )}
+
+  {isManager && (
+    <div class="pos-panel set-panel" id="invtypes-panel" style="margin-bottom:1.25rem;">
+      <h2>Inventory types</h2>
+      <p class="muted set-desc">
+        Separate stock pools — Retail, Online, <strong>Personal Collection</strong> — set per item in Inventory.
+        <strong>Website</strong> = allowed on the shop/feeds. <strong>Blocked</strong> = can’t be sold at checkout
+        (keep your collection blocked day-to-day; untoggle it at the expo).
+      </p>
+      {invTypes.length === 0 ? (
+        <p class="muted">Run <code>supabase/migrations/20260731000001_inventory_types_locations.sql</code> in the Supabase SQL editor, then refresh.</p>
+      ) : (
+        <table class="tbl dept-tbl">
+          <thead><tr><th></th><th>Type</th><th title="Allowed on the website/feeds">Website</th><th title="Refuse selling at checkout">Blocked</th><th class="dept-act-col"></th></tr></thead>
+          <tbody>
+            {invTypes.map((t) => (
+              <tr data-it-id={t.id} data-system={t.is_system ? "1" : "0"} data-name={t.name} data-icon={t.icon ?? ""} data-color={t.color ?? ""}>
+                <td class="dept-ico">{t.icon}</td>
+                <td><strong>{t.name}</strong>{t.is_system && <span class="muted dept-core"> · core</span>}</td>
+                <td><input type="checkbox" class="dept-enabled it-sync" checked={t.allow_website_sync} /></td>
+                <td><input type="checkbox" class="dept-enabled it-block" checked={t.block_at_checkout} /></td>
+                <td class="dept-act-col">
+                  <button class="link-btn it-edit" type="button">edit</button>
+                  {!t.is_system && <button class="link-btn it-del" type="button">delete</button>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div class="dept-actions">
+        <button id="it-add" class="btn btn-ghost btn-sm" type="button">+ Inventory type</button>
+        <span id="it-status" class="muted"></span>
+      </div>
+
+      <h3 class="set-subh">Locations</h3>
+      <p class="muted set-desc" style="margin-bottom:0.6rem;">The short code printed on labels (e.g. <code>PDX</code>) — add stores/warehouses as you grow.</p>
+      {locations.length > 0 && (
+        <table class="tbl dept-tbl">
+          <thead><tr><th>Code</th><th>Name</th><th>Default</th><th class="dept-act-col"></th></tr></thead>
+          <tbody>
+            {locations.map((l) => (
+              <tr data-loc-id={l.id} data-key={l.key} data-name={l.name}>
+                <td><strong>{l.key}</strong></td>
+                <td>{l.name}</td>
+                <td><input type="radio" name="loc-default" class="loc-default" checked={l.is_default} /></td>
+                <td class="dept-act-col">
+                  <button class="link-btn loc-edit" type="button">edit</button>
+                  <button class="link-btn loc-del" type="button">delete</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div class="dept-actions">
+        <button id="loc-add" class="btn btn-ghost btn-sm" type="button">+ Location</button>
+        <span id="loc-status" class="muted"></span>
+      </div>
+    </div>
+  )}
+
+  {isManager && (
+    <div class="pos-panel set-panel" id="labels-panel" style="margin-bottom:1.25rem;">
+      <h2>Label templates</h2>
+      <p class="muted set-desc">
+        Price-tag layouts for the label printer — a spine flag with the price + logo, and a face with
+        title, category, condition, price, and the scannable barcode. Save different versions (spine
+        left/right, wrap styles) and pick a default. Set your printer driver's label size to match and
+        print at 100% / Actual size.
+      </p>
+      <div class="lt-layout">
+        <div class="lt-left">
+          <div id="lt-list" class="lt-list"></div>
+          <div class="dept-actions">
+            <button id="lt-add" class="btn btn-ghost btn-sm" type="button">+ Template</button>
+            <button id="lt-del" class="btn btn-ghost btn-sm" type="button">Delete</button>
+          </div>
+          <div class="dm-grid" style="margin-top:0.6rem;">
+            <label class="dm-field">Name<input id="lt-name" /></label>
+          </div>
+          <div class="dm-grid">
+            <label class="dm-field">Width (mm)<input id="lt-w" type="number" min="20" max="110" step="1" /></label>
+            <label class="dm-field">Height (mm)<input id="lt-h" type="number" min="10" max="80" step="1" /></label>
+          </div>
+          <div class="dm-grid">
+            <label class="dm-field">Spine<select id="lt-spine"><option value="right">Right</option><option value="left">Left</option><option value="none">None</option></select></label>
+            <label class="dm-field">Spine width (mm)<input id="lt-spinew" type="number" min="8" max="25" step="1" /></label>
+          </div>
+          <div class="dm-grid">
+            <label class="dm-field">Barcode height (mm)<input id="lt-bch" type="number" min="5" max="20" step="1" /></label>
+            <label class="dm-field">Font scale<input id="lt-fscale" type="number" min="0.7" max="1.5" step="0.05" /></label>
+          </div>
+          <div class="lt-toggles" id="lt-shows">
+            {["logo","title","category","condition","price","invType","location","sku","barcode"].map((k) => (
+              <label class="dm-toggle"><input type="checkbox" data-ltshow={k} /> {k === "invType" ? "Inventory type" : k === "sku" ? "SKU" : k[0].toUpperCase() + k.slice(1)}</label>
+            ))}
+            <label class="dm-toggle"><input type="checkbox" id="lt-bctext" /> Code text under bars</label>
+            <label class="dm-toggle"><input type="checkbox" id="lt-2lines" /> Two-line titles</label>
+            <label class="dm-toggle"><input type="checkbox" id="lt-default" /> ⭐ Default template</label>
+          </div>
+        </div>
+        <div class="lt-right">
+          <div class="dm-field" style="min-width:0;">Preview
+            <div id="lt-preview" class="lt-preview"></div>
+          </div>
+          <p id="lt-warn" class="muted-2" style="color:var(--magenta);" hidden>⚠ Barcode won’t fit at a scannable density — widen the label or shrink the spine.</p>
+        </div>
+      </div>
+      <div class="set-actions">
+        <button id="lt-save" class="btn btn-primary">Save label templates</button>
+        <span id="lt-status" class="muted"></span>
+      </div>
+    </div>
+  )}
+
+  {isManager && (
+    <div class="dept-modal" id="it-modal" hidden>
+      <div class="dept-modal-card">
+        <h3 id="itm-title">New inventory type</h3>
+        <input type="hidden" id="itm-id" />
+        <label class="dm-field">Name<input id="itm-name" autocomplete="off" placeholder="e.g. Personal Collection" /></label>
+        <div class="dm-grid">
+          <label class="dm-field">Icon<input id="itm-icon" maxlength="2" placeholder="🔒" /></label>
+          <label class="dm-field">Color <span class="muted-2">(optional)</span><input id="itm-color" placeholder="#ff49d0" /></label>
+        </div>
+        <label class="dm-toggle"><input type="checkbox" id="itm-sync" checked /> Allowed on the website / feeds</label>
+        <label class="dm-toggle"><input type="checkbox" id="itm-block" /> Blocked at checkout</label>
+        <div class="dm-actions">
+          <button id="itm-save" class="btn btn-primary btn-sm" type="button">Save</button>
+          <button id="itm-cancel" class="btn btn-ghost btn-sm" type="button">Cancel</button>
+          <span id="itm-status" class="muted-2"></span>
+        </div>
+      </div>
+    </div>
+  )}
+
+  {isManager && (
+    <div class="dept-modal" id="loc-modal" hidden>
+      <div class="dept-modal-card">
+        <h3 id="lm-title">New location</h3>
+        <input type="hidden" id="lm-id" />
+        <div class="dm-grid">
+          <label class="dm-field">Short code<input id="lm-key" maxlength="6" placeholder="PDX" style="text-transform:uppercase;" /></label>
+          <label class="dm-field">Name<input id="lm-name" autocomplete="off" placeholder="Portland" /></label>
+        </div>
+        <div class="dm-actions">
+          <button id="lm-save" class="btn btn-primary btn-sm" type="button">Save</button>
+          <button id="lm-cancel" class="btn btn-ghost btn-sm" type="button">Cancel</button>
+          <span id="lm-status" class="muted-2"></span>
         </div>
       </div>
     </div>
@@ -373,6 +542,7 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       <span id="ai-status" class="muted"></span>
     </div>
   </div>
+  <textarea id="lt-data" hidden set:text={JSON.stringify({ templates: lblTemplates, storeName })}></textarea>
 </AppLayout>
 
 <style>
@@ -424,9 +594,20 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   .dm-field input, .dm-field select { font: inherit; font-weight: 400; padding: 0.45rem 0.55rem; background: var(--bg); color: var(--text); border: 1px solid var(--border-strong); }
   .dm-toggle { display: flex; align-items: center; gap: 0.4rem; font-size: 0.9rem; }
   .dm-actions { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.3rem; }
+
+  /* Label template designer */
+  .lt-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; align-items: start; }
+  @media (max-width: 700px) { .lt-layout { grid-template-columns: 1fr; } }
+  .lt-list { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.6rem; }
+  .lt-chip { font: inherit; font-size: 0.82rem; padding: 0.3rem 0.7rem; border: 1px solid var(--border-strong); background: transparent; color: var(--muted); cursor: pointer; }
+  .lt-chip.on { border-color: var(--cyan); color: var(--cyan); }
+  .lt-toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 0.25rem 0.8rem; margin-top: 0.6rem; }
+  .lt-preview { margin-top: 0.4rem; padding: 0.8rem; background: #666; overflow: auto; display: grid; place-items: center; }
+  .lt-preview svg { transform: scale(2); transform-origin: center; box-shadow: 0 4px 14px rgba(0,0,0,.5); margin: 2.2rem 0; }
 </style>
 
 <script>
+  import { renderLabelSvg, barcodeFits, DEFAULT_TEMPLATE } from "../../lib/labels";
   const $ = (id: string) => document.getElementById(id) as HTMLInputElement;
   const save = async (body: any, statusEl: HTMLElement, btn: HTMLButtonElement) => {
     btn.disabled = true; statusEl.textContent = "Saving…";
@@ -674,5 +855,170 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
         catch (e2: any) { alert(e2.message); }
       }
     });
+  }
+
+  // ---- Inventory types + locations (managers) ----
+  const invPanel = document.getElementById("invtypes-panel");
+  if (invPanel) {
+    const icApi = async (body: any) => {
+      const r = await fetch("/api/pos/inventory-config", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) throw new Error(j.error || "Failed");
+      return j;
+    };
+    const itStatus = document.getElementById("it-status")!;
+    const locStatus = document.getElementById("loc-status")!;
+
+    // Quick flag toggles (the expo switch lives here).
+    invPanel.querySelectorAll<HTMLInputElement>(".it-sync, .it-block").forEach((cb) => {
+      cb.addEventListener("change", async () => {
+        const tr = cb.closest("tr") as HTMLElement;
+        const flag = cb.classList.contains("it-sync") ? "allow_website_sync" : "block_at_checkout";
+        itStatus.textContent = "Saving…";
+        try { await icApi({ action: "setTypeFlag", id: tr.dataset.itId, flag, value: cb.checked }); itStatus.textContent = "✓ Saved"; }
+        catch (e: any) { cb.checked = !cb.checked; itStatus.textContent = ""; alert(e.message); }
+      });
+    });
+
+    // Type editor modal.
+    const itModal = document.getElementById("it-modal");
+    const iq = (id: string) => document.getElementById(id) as HTMLInputElement;
+    function openType(tr?: HTMLElement) {
+      (document.getElementById("itm-title") as HTMLElement).textContent = tr ? "Edit inventory type" : "New inventory type";
+      iq("itm-id").value = tr?.dataset.itId || "";
+      iq("itm-name").value = tr?.dataset.name || "";
+      iq("itm-icon").value = tr?.dataset.icon || "";
+      iq("itm-color").value = tr?.dataset.color || "";
+      iq("itm-sync").checked = tr ? (tr.querySelector(".it-sync") as HTMLInputElement).checked : true;
+      iq("itm-block").checked = tr ? (tr.querySelector(".it-block") as HTMLInputElement).checked : false;
+      document.getElementById("itm-status")!.textContent = "";
+      if (itModal) itModal.hidden = false;
+    }
+    document.getElementById("it-add")?.addEventListener("click", () => openType());
+    invPanel.querySelectorAll<HTMLButtonElement>(".it-edit").forEach((b) => b.addEventListener("click", () => openType(b.closest("tr") as HTMLElement)));
+    document.getElementById("itm-cancel")?.addEventListener("click", () => { if (itModal) itModal.hidden = true; });
+    itModal?.addEventListener("click", (e) => { if (e.target === itModal) itModal.hidden = true; });
+    document.getElementById("itm-save")?.addEventListener("click", async () => {
+      const name = iq("itm-name").value.trim();
+      if (!name) { alert("Type needs a name."); return; }
+      document.getElementById("itm-status")!.textContent = "Saving…";
+      try {
+        await icApi({ action: "saveType", id: iq("itm-id").value || undefined, name,
+          icon: iq("itm-icon").value, color: iq("itm-color").value,
+          allowWebsiteSync: iq("itm-sync").checked, blockAtCheckout: iq("itm-block").checked });
+        location.reload();
+      } catch (e: any) { document.getElementById("itm-status")!.textContent = ""; alert(e.message); }
+    });
+    invPanel.querySelectorAll<HTMLButtonElement>(".it-del").forEach((b) => b.addEventListener("click", async () => {
+      const tr = b.closest("tr") as HTMLElement;
+      if (!confirm(`Delete inventory type “${tr.dataset.name}”?`)) return;
+      try { await icApi({ action: "deleteType", id: tr.dataset.itId }); location.reload(); } catch (e: any) { alert(e.message); }
+    }));
+
+    // Locations.
+    invPanel.querySelectorAll<HTMLInputElement>(".loc-default").forEach((r) => r.addEventListener("change", async () => {
+      const tr = r.closest("tr") as HTMLElement;
+      locStatus.textContent = "Saving…";
+      try { await icApi({ action: "setDefaultLocation", id: tr.dataset.locId }); locStatus.textContent = "✓ Default set"; }
+      catch (e: any) { locStatus.textContent = ""; alert(e.message); location.reload(); }
+    }));
+    const locModal = document.getElementById("loc-modal");
+    function openLoc(tr?: HTMLElement) {
+      (document.getElementById("lm-title") as HTMLElement).textContent = tr ? "Edit location" : "New location";
+      iq("lm-id").value = tr?.dataset.locId || "";
+      iq("lm-key").value = tr?.dataset.key || "";
+      iq("lm-name").value = tr?.dataset.name || "";
+      document.getElementById("lm-status")!.textContent = "";
+      if (locModal) locModal.hidden = false;
+    }
+    document.getElementById("loc-add")?.addEventListener("click", () => openLoc());
+    invPanel.querySelectorAll<HTMLButtonElement>(".loc-edit").forEach((b) => b.addEventListener("click", () => openLoc(b.closest("tr") as HTMLElement)));
+    document.getElementById("lm-cancel")?.addEventListener("click", () => { if (locModal) locModal.hidden = true; });
+    locModal?.addEventListener("click", (e) => { if (e.target === locModal) locModal.hidden = true; });
+    document.getElementById("lm-save")?.addEventListener("click", async () => {
+      const key = iq("lm-key").value.trim().toUpperCase();
+      const name = iq("lm-name").value.trim();
+      if (!key || !name) { alert("Location needs a short code and a name."); return; }
+      document.getElementById("lm-status")!.textContent = "Saving…";
+      try { await icApi({ action: "saveLocation", id: iq("lm-id").value || undefined, key, name }); location.reload(); }
+      catch (e: any) { document.getElementById("lm-status")!.textContent = ""; alert(e.message); }
+    });
+    invPanel.querySelectorAll<HTMLButtonElement>(".loc-del").forEach((b) => b.addEventListener("click", async () => {
+      const tr = b.closest("tr") as HTMLElement;
+      if (!confirm(`Delete location “${tr.dataset.key}”?`)) return;
+      try { await icApi({ action: "deleteLocation", id: tr.dataset.locId }); location.reload(); } catch (e: any) { alert(e.message); }
+    }));
+  }
+
+  // ---- Label template designer (managers) ----
+  const ltPanel = document.getElementById("labels-panel");
+  if (ltPanel) {
+    const blob = JSON.parse(($("lt-data") as unknown as HTMLTextAreaElement)?.value || "{}");
+    const lts: any[] = Array.isArray(blob.templates) && blob.templates.length ? blob.templates : [{ ...DEFAULT_TEMPLATE }];
+    let sel = Math.max(0, lts.findIndex((t: any) => t.isDefault));
+    const SAMPLE = {
+      title: "Mega Man X3", categoryName: "Super Nintendo", condShort: "CIB · ★★★",
+      priceCents: 26000, invTypeName: "Retail", locationKey: "PDX",
+      // 12 chars = the REAL internal-code length ("TL" + 10 hex) so the preview
+      // shows true barcode width, not a flattering short one.
+      internalCode: "TL2C3F5A7B9D", sku: "SNES-MMX3", storeName: blob.storeName || "TimeLag",
+    };
+    const shows = [...ltPanel.querySelectorAll<HTMLInputElement>("[data-ltshow]")];
+
+    function ltList() {
+      const list = document.getElementById("lt-list")!;
+      list.innerHTML = lts.map((t: any, i: number) =>
+        `<button type="button" class="lt-chip${i === sel ? " on" : ""}" data-lt="${i}">${t.isDefault ? "⭐ " : ""}${t.name.replace(/[&<>]/g, (c: string) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] as string))}</button>`).join("");
+      list.querySelectorAll<HTMLButtonElement>("[data-lt]").forEach((b) => b.addEventListener("click", () => { sel = Number(b.dataset.lt); ltForm(); }));
+    }
+    function ltForm() {
+      const t = lts[sel];
+      $("lt-name").value = t.name; $("lt-w").value = String(t.widthMm); $("lt-h").value = String(t.heightMm);
+      ($("lt-spine") as unknown as HTMLSelectElement).value = t.spine; $("lt-spinew").value = String(t.spineWidthMm);
+      $("lt-bch").value = String(t.barcodeHeightMm); $("lt-fscale").value = String(t.fontScale);
+      shows.forEach((cb) => (cb.checked = !!t.show[cb.dataset.ltshow!]));
+      $("lt-bctext").checked = !!t.barcodeShowText;
+      $("lt-2lines").checked = t.titleMaxLines === 2;
+      $("lt-default").checked = !!t.isDefault;
+      ltList(); ltPreview();
+    }
+    function ltRead() {
+      const t = lts[sel];
+      t.name = $("lt-name").value.trim() || t.name;
+      t.widthMm = Number($("lt-w").value) || t.widthMm;
+      t.heightMm = Number($("lt-h").value) || t.heightMm;
+      t.spine = ($("lt-spine") as unknown as HTMLSelectElement).value;
+      t.spineWidthMm = Number($("lt-spinew").value) || t.spineWidthMm;
+      t.barcodeHeightMm = Number($("lt-bch").value) || t.barcodeHeightMm;
+      t.fontScale = Number($("lt-fscale").value) || t.fontScale;
+      shows.forEach((cb) => (t.show[cb.dataset.ltshow!] = cb.checked));
+      t.barcodeShowText = $("lt-bctext").checked;
+      t.titleMaxLines = $("lt-2lines").checked ? 2 : 1;
+      if ($("lt-default").checked) lts.forEach((x: any, i: number) => (x.isDefault = i === sel));
+      else if (t.isDefault) $("lt-default").checked = true; // always exactly one default — move it by starring another template
+      ltList(); ltPreview();
+    }
+    function ltPreview() {
+      const t = lts[sel];
+      try { document.getElementById("lt-preview")!.innerHTML = renderLabelSvg(t, SAMPLE); } catch { /* mid-edit invalid numbers */ }
+      // The renderer falls back to a full-width barcode strip when the face is
+      // too narrow — so only warn when even the FULL label can't fit the code.
+      (document.getElementById("lt-warn") as HTMLElement).hidden = t.show.barcode ? barcodeFits(SAMPLE.internalCode, t.widthMm - 4) : true;
+    }
+    ltPanel.querySelectorAll<HTMLElement>("input, select").forEach((el) => el.addEventListener("input", ltRead));
+    document.getElementById("lt-add")?.addEventListener("click", () => {
+      lts.push({ ...JSON.parse(JSON.stringify(DEFAULT_TEMPLATE)), id: `template-${Date.now()}`, name: `Template ${lts.length + 1}`, isDefault: false });
+      sel = lts.length - 1; ltForm();
+    });
+    document.getElementById("lt-del")?.addEventListener("click", () => {
+      if (lts.length <= 1) { alert("Keep at least one template."); return; }
+      if (!confirm(`Delete “${lts[sel].name}”?`)) return;
+      lts.splice(sel, 1);
+      if (!lts.some((t: any) => t.isDefault)) lts[0].isDefault = true;
+      sel = 0; ltForm();
+    });
+    document.getElementById("lt-save")?.addEventListener("click", (e) =>
+      save({ labelTemplates: lts }, document.getElementById("lt-status")!, e.currentTarget as HTMLButtonElement));
+    ltForm();
   }
 </script>

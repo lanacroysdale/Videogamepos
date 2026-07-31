@@ -10,6 +10,7 @@ import { ebayItemUrl } from "../../lib/ebay";
 import { splitTitle } from "../../lib/title";
 import { lowStockSettings, showLowStock } from "../../lib/lowStock";
 import { classify } from "../../lib/shopFilters";
+import { syncableTypeIds } from "../../lib/inventoryTypes";
 
 // Product detail page — the SEO surface. Server-rendered, indexable (no
 // noindex) once /shop is ungated at launch. Product JSON-LD + details panel.
@@ -17,18 +18,23 @@ const { slug } = Astro.params;
 const admin = createSupabaseAdminClient();
 const { data: settingsRow } = await admin.from("store_settings").select("settings").eq("id", 1).maybeSingle();
 const ls = lowStockSettings(settingsRow?.settings);
-const { data: product } = await admin
+// Inventory-type gate (null pre-migration → no extra column, no filter).
+const allowedTypeIds = await syncableTypeIds(admin);
+const variantCols = `id, condition, completeness_code, grade_code, price_cents, online_price_cents, quantity, online_visible${allowedTypeIds ? ", inventory_type_id" : ""}, product_barcodes(barcode, label)`;
+// (Result cast to any: the dynamic select string defeats supabase-js's
+// literal-type parser, which would otherwise type every field access as error.)
+const { data: product } = (await admin
   .from("products")
   .select(
-    "id, title, slug, platform, franchise, genre, description, image_url, trailer_url, release_year, brand, alternative_names, tags, category:categories(name), product_variants(id, condition, completeness_code, grade_code, price_cents, online_price_cents, quantity, online_visible, product_barcodes(barcode, label))",
+    `id, title, slug, platform, franchise, genre, description, image_url, trailer_url, release_year, brand, alternative_names, tags, category:categories(name), product_variants(${variantCols})`,
   )
   .eq("slug", slug)
-  .maybeSingle();
+  .maybeSingle()) as { data: any };
 
 if (!product) Astro.response.status = 404;
 
 const variants = (product?.product_variants ?? [])
-  .filter((v: any) => v.online_visible && v.quantity > 0)
+  .filter((v: any) => v.online_visible && v.quantity > 0 && (!allowedTypeIds || allowedTypeIds.includes(v.inventory_type_id)))
   .map((v: any) => {
     const displayCents = v.online_price_cents ?? v.price_cents;
     return { ...v, displayCents, lowStock: showLowStock(v.quantity, displayCents, ls) };
@@ -240,7 +246,7 @@ const metaDesc = !product
 
               {variants.length > 1 && (
                 <div class="pdp-condsel" role="group" aria-label="Choose a condition">
-                  {variants.map((v, i) => (
+                  {variants.map((v: any, i: number) => (
                     <button
                       class:list={["pdp-condbtn", { active: i === 0 }]}
                       type="button"

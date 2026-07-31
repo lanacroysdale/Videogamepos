@@ -2,18 +2,26 @@
 export const prerender = false;
 
 import AppLayout from "../../layouts/AppLayout.astro";
+import { labelTemplates } from "../../lib/labels";
 
 const supabase = Astro.locals.supabase;
 const [{ data: categories }, { data: settings }, { data: completeness }, { data: grades }] = await Promise.all([
   supabase.from("categories").select("id, name, color, default_completeness").order("sort_order"),
-  supabase.from("store_settings").select("condition_pricing_enabled, condition_entry_mode").eq("id", 1).maybeSingle(),
+  supabase.from("store_settings").select("condition_pricing_enabled, condition_entry_mode, store_name, settings").eq("id", 1).maybeSingle(),
   supabase.from("completeness_levels").select("code, label, aliases, sort_order").eq("is_active", true).order("sort_order"),
   supabase.from("condition_grades").select("code, label, icon, aliases, rank").eq("is_active", true).order("rank"),
 ]);
+// Inventory types + locations (empty pre-migration → UI hides those controls).
+const [{ data: invTypesSrv }, { data: locationsSrv }] = await Promise.all([
+  supabase.from("store_inventory_types").select("id, key, name, icon, color, block_at_checkout").order("sort_order").order("name"),
+  supabase.from("store_locations").select("id, key, name, is_default").order("sort_order").order("name"),
+]);
+const hasTypes = !!invTypesSrv;
+const variantExtraCols = hasTypes ? ", inventory_type_id, location_id" : "";
 const { data: products } = await supabase
   .from("products")
   .select(
-    "id, title, slug, platform, franchise, genre, description, image_url, alternative_names, tags, category_id, category:categories(name,color), product_variants(id, condition, completeness, completeness_code, grade_code, sku, barcode, price_cents, online_price_cents, cost_cents, quantity, online_visible, product_barcodes(id, barcode, label))",
+    `id, title, slug, platform, franchise, genre, description, image_url, alternative_names, tags, category_id, category:categories(name,color), product_variants(id, condition, completeness, completeness_code, grade_code, sku, barcode, internal_code, price_cents, online_price_cents, cost_cents, quantity, online_visible${variantExtraCols}, product_barcodes(id, barcode, label))`,
   )
   .order("title");
 
@@ -38,11 +46,14 @@ const items = (products ?? []).map((p: any) => ({
     completenessCode: v.completeness_code ?? "",
     gradeCode: v.grade_code ?? "",
     sku: v.sku,
+    internalCode: v.internal_code ?? "",
     priceCents: v.price_cents,
     onlinePriceCents: v.online_price_cents,
     costCents: v.cost_cents,
     quantity: v.quantity,
     onlineVisible: v.online_visible ?? false,
+    inventoryTypeId: v.inventory_type_id ?? "",
+    locationId: v.location_id ?? "",
     barcodes: [
       ...(v.barcode ? [{ id: "primary:" + v.id, barcode: v.barcode, label: "Primary", primary: true }] : []),
       ...(v.product_barcodes ?? []).map((b: any) => ({ id: b.id, barcode: b.barcode, label: b.label, primary: false })),
@@ -57,6 +68,10 @@ const posData = {
   grades: grades ?? [],
   conditionPricing: settings?.condition_pricing_enabled ?? false,
   isManager,
+  invTypes: invTypesSrv ?? [],
+  locations: locationsSrv ?? [],
+  lblTemplates: labelTemplates((settings as any)?.settings),
+  storeName: (settings as any)?.store_name || "TimeLag",
 };
 ---
 
@@ -65,7 +80,14 @@ const posData = {
     {isManager && <button id="ebay-bulk" class="btn btn-ghost btn-sm" title="Import your eBay store listings as draft products (skips ones already imported)">🛒 Import eBay store</button>}
     {isManager && <button id="ebay-sync" class="btn btn-ghost btn-sm" title="Check eBay for ended / out-of-stock listings and zero them on the website (never raises local stock)">🔁 Sync eBay stock</button>}
     {isManager && <button id="resync-img" class="btn btn-ghost btn-sm" title="Fetch covers for items with no image (only fills empties)">🔄 Resync images</button>}
+    <a href="/entries" class="btn btn-ghost btn-sm" title="Past receiving entries + label reprints">📥 Entries</a>
+    <button id="recv-toggle" class="btn btn-ghost btn-sm" title="Start a receiving session — new products and received stock get grouped for label printing">▶ Start receiving</button>
     <button id="toggle-add" class="btn btn-primary btn-sm">＋ Add product</button>
+  </div>
+
+  <div id="recv-bar" class="pos-panel" hidden style="margin-bottom:1rem;display:flex;align-items:center;gap:0.8rem;flex-wrap:wrap;border-color:var(--cyan);">
+    <span>📥 Receiving <strong id="recv-label"></strong> <span class="muted" style="font-size:0.82rem;">— new products and “＋ Receive” stock are logged to this entry</span></span>
+    <button id="recv-finish" class="btn btn-primary btn-sm" style="margin-left:auto;">✓ Finish &amp; print labels</button>
   </div>
 
   <div id="add-panel" class="pos-panel" hidden style="margin-bottom:1rem;">
@@ -87,6 +109,9 @@ const posData = {
       <label>Price $<input id="np-price" type="number" min="0" step="0.01" value="0" /></label>
       <label>Qty<input id="np-qty" type="number" min="0" value="1" /></label>
       <label>Barcode (optional)<input id="np-barcode" /></label>
+      {(invTypesSrv?.length ?? 0) > 0 && (
+        <label>Inventory type<select id="np-invtype">{invTypesSrv!.map((t: any) => <option value={t.id} selected={t.key === "retail"}>{t.icon} {t.name}</option>)}</select></label>
+      )}
     </div>
     <button id="np-save" class="btn btn-primary btn-sm" style="margin-top:0.7rem;">Save product</button>
   </div>
@@ -109,6 +134,9 @@ const posData = {
       <button class="chip filt" data-filt="web">On web</button>
       <button class="chip filt" data-filt="ebay">🛒 eBay imports</button>
       <button class="chip filt warn-chip" data-filt="attention" id="attn-chip">⚠ Needs attention</button>
+      {(invTypesSrv ?? []).filter((t: any) => t.key !== "retail").map((t: any) => (
+        <button class="chip tfilt" data-invtype={t.id} title={`Only ${t.name} stock`}>{t.icon} {t.name}</button>
+      ))}
     </div>
     <div id="smart-bar" class="smart-bar" hidden></div>
     <p class="inv-count" id="inv-count"></p>
@@ -156,6 +184,9 @@ const posData = {
   .inv-toolbar select { min-width:140px; }
   .chip.filt { cursor:pointer; }
   .chip.filt.active { border-color:var(--cyan); color:var(--cyan); }
+  .chip.tfilt { cursor:pointer; }
+  .chip.tfilt.active { border-color:var(--magenta); color:var(--magenta); }
+  .vchip .vtype { font-size:0.72rem; }
   .inv-count { color:var(--muted-2); font-size:0.82rem; margin:0.7rem 0 0.3rem; }
   .smart-bar { display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; margin-top:0.7rem; padding:0.5rem 0.8rem; background:rgba(44,230,224,.07); border:1px solid rgba(44,230,224,.28); border-radius:10px; font-size:0.86rem; }
   .smart-bar .sb-label { color:var(--muted-2); font-size:0.68rem; text-transform:uppercase; letter-spacing:0.06em; }
@@ -294,6 +325,7 @@ const posData = {
 <script>
   import { buildPlatforms, parseQuery as _parseQuery, smartMatches as _smartMatches, matchScore } from "../../lib/smartSearch";
   import { resolveComp, compAbbrev } from "../../lib/conditionDisplay";
+  import { openPrintDialog } from "../../lib/labelPrint";
 
   const data = JSON.parse(document.getElementById("pos-data")!.textContent!);
   let items: any[] = data.items;
@@ -384,6 +416,30 @@ const posData = {
     clearTimeout(toastT); toastT = setTimeout(() => (t.hidden = true), 2000);
   }
 
+  // Inventory types + locations (empty pre-migration → related UI stays hidden).
+  const invTypes: any[] = (data as any).invTypes || [];
+  const locations: any[] = (data as any).locations || [];
+  const typeById = new Map(invTypes.map((t: any) => [t.id, t]));
+  const retailTypeId = invTypes.find((t: any) => t.key === "retail")?.id || "";
+  const lblTemplates: any[] = (data as any).lblTemplates || [];
+  const storeName: string = (data as any).storeName || "TimeLag";
+
+  // Everything a printed label needs for one variant.
+  function labelItemOf(p: any, v: any) {
+    const loc = locations.find((l: any) => l.id === v.locationId) || locations.find((l: any) => l.is_default);
+    return {
+      title: p.title,
+      categoryName: p.platform || p.categoryName || "",
+      condShort: condLabel(v),
+      priceCents: v.priceCents,
+      invTypeName: typeById.get(v.inventoryTypeId)?.name ?? "",
+      locationKey: loc?.key ?? "",
+      internalCode: v.internalCode || "",
+      sku: v.sku || "",
+      storeName,
+    };
+  }
+
   const totalQty = (p: any) => p.variants.reduce((s: number, v: any) => s + v.quantity, 0);
   const maxPrice = (p: any) => Math.max(0, ...p.variants.map((v: any) => v.priceCents));
   const anyWeb = (p: any) => p.variants.some((v: any) => v.onlineVisible);
@@ -406,13 +462,20 @@ const posData = {
   }
   const gradeOpts = (sel: string) =>
     `<option value="">—</option>` + grades.map((g) => `<option value="${g.code}"${g.code === sel ? " selected" : ""}>${esc((g.icon ? g.icon + " " : "") + g.label)}</option>`).join("");
+  const typeOpts = (sel: string) =>
+    invTypes.map((t: any) => `<option value="${t.id}"${t.id === sel ? " selected" : ""}>${esc((t.icon ? t.icon + " " : "") + t.name)}</option>`).join("");
+  const locOpts = (sel: string) =>
+    `<option value="">—</option>` + locations.map((l: any) => `<option value="${l.id}"${l.id === sel ? " selected" : ""}>${esc(l.key)}</option>`).join("");
 
   function vchip(v: any) {
     const cls = v.quantity > 0 ? "" : "oos";
     const web = v.onlineVisible
       ? `<span class="web" title="On website">🌐</span>`
       : `<span class="nweb" title="In store only">·</span>`;
-    return `<span class="vchip ${cls}"><span class="cond">${esc(condLabel(v))}</span> ${money(v.priceCents)} · ${v.quantity} ${web}</span>`;
+    // Flag non-retail pools (e.g. 🔒 Personal Collection) at a glance.
+    const t = typeById.get(v.inventoryTypeId);
+    const tIcon = t && t.key !== "retail" ? `<span class="vtype" title="${esc(t.name)}">${esc(t.icon || "📦")}</span> ` : "";
+    return `<span class="vchip ${cls}">${tIcon}<span class="cond">${esc(condLabel(v))}</span> ${money(v.priceCents)} · ${v.quantity} ${web}</span>`;
   }
 
   function cardHtml(p: any) {
@@ -454,6 +517,7 @@ const posData = {
       if (state.web && !anyWeb(p)) return false;
       if (state.ebay && !p.ebayId) return false;
       if (state.attention && issues(p).length === 0) return false;
+      if ((state as any).invType && !p.variants.some((v: any) => v.inventoryTypeId === (state as any).invType)) return false;
       return true;
     });
     const parsed = state.parsed;
@@ -557,7 +621,7 @@ const posData = {
       <div class="m-section">
         <div class="m-label">Pricing &amp; web — per condition${conditionPricing ? ` <span class="cp-on">↻ condition pricing on</span>` : ""}</div>
         <table class="cond-table">
-          <thead><tr><th>Completeness</th><th>Grade</th><th>SKU</th><th>In‑store $</th><th>Online $</th><th>Qty</th><th>Web</th></tr></thead>
+          <thead><tr><th>Completeness</th><th>Grade</th><th>SKU</th><th>In‑store $</th><th>Online $</th><th>Qty</th><th>Web</th>${invTypes.length ? "<th>Type</th><th>Loc</th>" : ""}</tr></thead>
           <tbody id="cond-body">${condRows}</tbody>
         </table>
         <button type="button" class="btn btn-ghost btn-sm" id="add-cond" style="margin-top:0.5rem;">＋ Add condition</button>
@@ -590,6 +654,38 @@ const posData = {
     bindReprice(p);
     wireModalComps();
     $("add-cond").addEventListener("click", () => addCondition(p));
+
+    // Label printing (per-condition buttons live in the Barcodes section).
+    document.querySelectorAll<HTMLButtonElement>("[data-printlabel]").forEach((b) => b.addEventListener("click", () => {
+      const v = p.variants.find((x: any) => x.id === b.dataset.printlabel);
+      if (!v) return;
+      if (!v.internalCode) { alert("This condition has no label code yet — reload the page and try again."); return; }
+      openPrintDialog([{ item: labelItemOf(p, v), defaultCopies: 1, allCopies: v.quantity }], lblTemplates, { title: `Print · ${p.title}` });
+    }));
+    // Receive stock onto the current entry (starts one lazily if needed).
+    document.querySelectorAll<HTMLButtonElement>("[data-recvstock]").forEach((b) => b.addEventListener("click", async () => {
+      const v = p.variants.find((x: any) => x.id === b.dataset.recvstock);
+      if (!v) return;
+      const qty = parseInt(prompt(`Receive how many — ${p.title} (${condLabel(v)})?`, "1") || "0");
+      if (!qty || qty <= 0) return;
+      const costRaw = prompt("Cost per unit $ (optional — what you paid):", "");
+      const unitCostCents = costRaw && costRaw.trim() !== "" ? Math.round(parseFloat(costRaw) * 100) || 0 : null;
+      try {
+        await ensureEntry();
+        const j = await api({ action: "receiveStock", entryId, variantId: v.id, qtyAdded: qty, unitCostCents });
+        v.quantity = j.newQuantity;
+        const qi = $("cond-body")?.querySelector<HTMLInputElement>(`[data-vrow="${v.id}"] [data-vf="qty"]`);
+        if (qi) qi.value = String(j.newQuantity);
+        render();
+        toast(`✓ Received ${qty} — now ${j.newQuantity} in stock (Entry #${entryHuman})`);
+      } catch (e: any) {
+        if (/closed/i.test(e.message)) {
+          // Entry finished elsewhere — reset the bar so ▶ Start receiving works.
+          clearEntry();
+          alert(e.message + " (Receiving bar reset — press ▶ Start receiving and try again.)");
+        } else alert(e.message);
+      }
+    }));
 
     // Running-average cost (managers): weighted avg paid per unit from trade-ins,
     // over a selectable timeframe.
@@ -692,13 +788,17 @@ const posData = {
         <td class="c-num"><input data-vf="online" type="number" min="0" step="0.01" value="${v.onlinePriceCents != null ? (v.onlinePriceCents / 100).toFixed(2) : ""}" placeholder="${(v.priceCents / 100).toFixed(2)}"></td>
         <td class="c-num"><input data-vf="qty" type="number" min="0" value="${v.quantity}"></td>
         <td class="c-web"><input data-vf="web" type="checkbox"${v.onlineVisible ? " checked" : ""}></td>
+        ${invTypes.length ? `<td><select data-vf="invtype">${typeOpts(v.inventoryTypeId)}</select></td><td><select data-vf="loc">${locOpts(v.locationId)}</select></td>` : ""}
       </tr>`;
   }
 
   function bcBlockHtml(v: any) {
     return `
       <div class="bc-block" data-bcv="${v.id}">
-        <div class="bc-head">${esc(condLabel(v))}${v.sku ? " · " + esc(v.sku) : ""}</div>
+        <div class="bc-head" style="display:flex;align-items:center;gap:0.5rem;">${esc(condLabel(v))}${v.sku ? " · " + esc(v.sku) : ""}
+          <button type="button" class="btn btn-ghost btn-sm" data-recvstock="${v.id}" style="margin-left:auto;" title="Receive stock onto the current entry (logs the receipt for label printing)">＋ Receive</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-printlabel="${v.id}" title="Print price labels for this condition">🏷 Print</button>
+        </div>
         <div data-bclist>${v.barcodes.map(bcChip).join("") || `<span style="color:var(--muted-2);font-size:0.76rem;">No barcodes</span>`}</div>
         <div class="bc-add">
           <input data-bcnew placeholder="New barcode">
@@ -779,7 +879,7 @@ const posData = {
     const compLabel = completeness.find((c) => c.code === defComp)?.label || "New";
     try {
       const j = await api({ action: "addVariant", productId: p.id, completenessCode: defComp, gradeCode: "3", condition: compLabel, priceCents: 0, quantity: 0 });
-      const nv: any = { id: j.variant.id, condition: compLabel, completeness: null, completenessCode: defComp, gradeCode: "3", sku: null, priceCents: 0, onlinePriceCents: null, costCents: null, quantity: 0, onlineVisible: false, barcodes: [] };
+      const nv: any = { id: j.variant.id, condition: compLabel, completeness: null, completenessCode: defComp, gradeCode: "3", sku: null, internalCode: j.variant.internal_code || "", priceCents: 0, onlinePriceCents: null, costCents: null, quantity: 0, onlineVisible: false, inventoryTypeId: retailTypeId, locationId: "", barcodes: [] };
       p.variants.push(nv);
       $("cond-body").insertAdjacentHTML("beforeend", condRowHtml(nv));
       $("bc-blocks").insertAdjacentHTML("beforeend", bcBlockHtml(nv));
@@ -829,6 +929,7 @@ const posData = {
           onlinePriceCents: onlineRaw === "" ? null : toCents(onlineRaw),
           quantity: Math.max(0, Math.round(parseInt(f("qty").value)) || 0),
           onlineVisible: f("web").checked,
+          ...(invTypes.length ? { inventoryTypeId: f("invtype").value, locationId: f("loc").value || null } : {}),
         };
         await api(payload);
         Object.assign(v, {
@@ -836,6 +937,7 @@ const posData = {
           sku: f("sku").value.trim() || null, priceCents: payload.priceCents,
           onlinePriceCents: payload.onlinePriceCents, quantity: payload.quantity, onlineVisible: payload.onlineVisible,
         });
+        if (invTypes.length) Object.assign(v, { inventoryTypeId: f("invtype").value, locationId: f("loc").value || "" });
       }
       render(); closeModal(); toast("✓ Saved to POS + website");
     } catch (e: any) {
@@ -857,6 +959,92 @@ const posData = {
     (state as any)[chip.dataset.filt!] = chip.classList.contains("active");
     render();
   }));
+  // Inventory-type chips: exclusive toggle (click again to clear).
+  document.querySelectorAll<HTMLElement>(".chip.tfilt").forEach((chip) => chip.addEventListener("click", () => {
+    const on = !chip.classList.contains("active");
+    document.querySelectorAll(".chip.tfilt").forEach((c) => c.classList.remove("active"));
+    chip.classList.toggle("active", on);
+    (state as any).invType = on ? chip.dataset.invtype : "";
+    render();
+  }));
+
+  /* ---------- Receiving session (inventory entries) ---------- */
+  let entryId = "";
+  let entryHuman = 0;
+  try { const s = JSON.parse(sessionStorage.getItem("tl-entry") || "null"); if (s?.id) { entryId = s.id; entryHuman = s.h; } } catch {}
+  function clearEntry() {
+    entryId = ""; entryHuman = 0;
+    try { sessionStorage.removeItem("tl-entry"); } catch {}
+    renderRecvBar();
+  }
+  // A restored session may have been finished on another station — validate it,
+  // otherwise the bar wedges (ensureEntry no-ops while entryId is set).
+  if (entryId) {
+    api({ action: "getEntry", entryId })
+      .then((j: any) => { if (j.entry?.status !== "open") clearEntry(); })
+      .catch(() => clearEntry());
+  }
+  function renderRecvBar() {
+    const bar = $("recv-bar");
+    if (!bar) return;
+    (bar as HTMLElement).hidden = !entryId;
+    if (entryId) $("recv-label").textContent = `Entry #${entryHuman}`;
+    const t = $("recv-toggle");
+    if (t) t.textContent = entryId ? `📥 Receiving #${entryHuman}` : "▶ Start receiving";
+  }
+  async function ensureEntry() {
+    if (entryId) return;
+    const j = await api({ action: "startEntry" });
+    entryId = j.entry.id; entryHuman = j.entry.human_id;
+    try { sessionStorage.setItem("tl-entry", JSON.stringify({ id: entryId, h: entryHuman })); } catch {}
+    renderRecvBar();
+    toast(j.resumed ? `📥 Resumed Entry #${entryHuman}` : `📥 Started Entry #${entryHuman}`);
+  }
+  $("recv-toggle")?.addEventListener("click", () => { ensureEntry().catch((e: any) => alert(e.message)); });
+  $("recv-finish")?.addEventListener("click", async () => {
+    if (!entryId) return;
+    try {
+      try {
+        await api({ action: "commitEntry", entryId });
+      } catch (e: any) {
+        if (/already committed/i.test(e.message)) {
+          // Another station finished it — don't re-print the whole run here.
+          clearEntry();
+          toast("That entry was already finished on another station — reprint from 📥 Entries if needed.");
+          return;
+        }
+        throw e;
+      }
+      const j = await api({ action: "getEntry", entryId });
+      // Build the post-entry print run: copies default to what ARRIVED (skip-
+      // duplicates by design), with an "all copies" escape hatch per line.
+      const lines = (j.items || []).filter((it: any) => it.variant?.internal_code).map((it: any) => {
+        const v = it.variant, pr = v.product || {};
+        const loc = locations.find((l: any) => l.id === v.location_id) || locations.find((l: any) => l.is_default);
+        return {
+          item: {
+            title: pr.title ?? "?",
+            categoryName: pr.platform || pr.category?.name || "",
+            condShort: condLabel({ completenessCode: v.completeness_code, gradeCode: v.grade_code, condition: v.condition }),
+            priceCents: v.price_cents ?? 0,
+            invTypeName: typeById.get(v.inventory_type_id)?.name ?? "",
+            locationKey: loc?.key ?? "",
+            internalCode: v.internal_code,
+            sku: v.sku || "",
+            storeName,
+          },
+          defaultCopies: it.qty_added,
+          allCopies: v.quantity,
+          hint: v.price_cents !== it.price_cents_at_entry ? "price changed since this batch" : undefined,
+        };
+      });
+      const finished = entryHuman;
+      clearEntry();
+      if (lines.length) openPrintDialog(lines, lblTemplates, { title: `Print · Entry #${finished}` });
+      else toast("Entry closed — nothing with a label code to print");
+    } catch (e: any) { alert(e.message); }
+  });
+  renderRecvBar();
 
   /* ---------- Add product ---------- */
   $("toggle-add").addEventListener("click", () => { ($("add-panel") as HTMLElement).hidden = !($("add-panel") as HTMLElement).hidden; });
@@ -899,13 +1087,15 @@ const posData = {
       priceCents: Math.round(parseFloat(($("np-price") as HTMLInputElement).value) * 100) || 0,
       quantity: parseInt(($("np-qty") as HTMLInputElement).value) || 0,
       barcode: ($("np-barcode") as HTMLInputElement).value || null,
+      inventoryTypeId: (document.getElementById("np-invtype") as HTMLSelectElement | null)?.value || undefined,
+      entryId: entryId || undefined, // log to the active receiving entry
     };
     if (!body.title || !body.categoryId) { alert("Title and category required"); return; }
     try {
       const j = await api(body);
       const cat = categories.find((c: any) => c.id === body.categoryId);
       const newItem: any = { id: j.productId, title: body.title, slug: body.title.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""), platform: body.platform, franchise: "", genre: "", description: "", imageUrl: "", altNames: [], categoryId: body.categoryId, categoryName: cat?.name ?? "", categoryColor: cat?.color ?? "#2ce6e0",
-        variants: [{ id: j.variantId, condition, completeness: null, completenessCode: comp, gradeCode: grade, sku: null, priceCents: body.priceCents, onlinePriceCents: null, costCents: null, quantity: body.quantity, onlineVisible: false, barcodes: body.barcode ? [{ id: "primary:" + j.variantId, barcode: body.barcode, label: "Primary", primary: true }] : [] }] };
+        variants: [{ id: j.variantId, condition, completeness: null, completenessCode: comp, gradeCode: grade, sku: null, internalCode: j.internalCode || "", priceCents: body.priceCents, onlinePriceCents: null, costCents: null, quantity: body.quantity, onlineVisible: false, inventoryTypeId: body.inventoryTypeId || retailTypeId, locationId: "", barcodes: body.barcode ? [{ id: "primary:" + j.variantId, barcode: body.barcode, label: "Primary", primary: true }] : [] }] };
       items.push(newItem);
       ($("add-panel") as HTMLElement).hidden = true;
       ($("np-title") as HTMLInputElement).value = "";

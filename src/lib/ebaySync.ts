@@ -1,4 +1,5 @@
 import { checkAvailability } from "./ebay";
+import { syncableTypeIds } from "./inventoryTypes";
 
 // Pull stock DOWN from eBay: for every product imported from eBay (tagged
 // `ebay:<id>`), if the listing has ended or gone out of stock on eBay, set its
@@ -6,9 +7,13 @@ import { checkAvailability } from "./ebay";
 // We never raise quantity (that would clobber local/in-store counts) and we
 // skip transient API errors so a blip can't wrongly zero a live listing.
 export async function syncEbayStock(admin: any) {
+  // Non-web-syncable pools (e.g. a copy reassigned to Personal Collection) are
+  // not eBay's to zero — treat them as not-live. Null pre-migration → no gate.
+  const allowedTypeIds = await syncableTypeIds(admin);
+  const variantCols = `id, quantity, online_visible${allowedTypeIds ? ", inventory_type_id" : ""}`;
   const { data: prods } = await admin
     .from("products")
-    .select("id, title, tags, product_variants(id, quantity, online_visible)")
+    .select(`id, title, tags, product_variants(${variantCols})`)
     .not("tags", "is", null);
 
   const tagged = (prods || [])
@@ -21,7 +26,9 @@ export async function syncEbayStock(admin: any) {
   for (const p of tagged) {
     const av = await checkAvailability(p.ebayId);
     if (av.status === "ended" || av.status === "out_of_stock") {
-      const live = (p.product_variants || []).filter((v: any) => v.quantity > 0 || v.online_visible);
+      const live = (p.product_variants || []).filter(
+        (v: any) => (v.quantity > 0 || v.online_visible) && (!allowedTypeIds || allowedTypeIds.includes(v.inventory_type_id)),
+      );
       if (live.length) {
         await admin.from("product_variants")
           .update({ quantity: 0, online_visible: false })

@@ -12,9 +12,15 @@ const gemGlow = themeSettings(storeRow?.settings).gemEffectEnabled;
 
 const { data: categories } = await supabase.from("categories").select("*").order("sort_order");
 
+// Inventory types (empty pre-migration): drive the client-side blocked-at-
+// checkout hint. The SERVER re-checks live flags on submit — this is UX only.
+const { data: invTypeRows } = await supabase.from("store_inventory_types").select("id, key, name, icon, block_at_checkout");
+const hasTypes = !!invTypeRows;
+const typeInfoById = new Map((invTypeRows ?? []).map((t: any) => [t.id, t]));
+
 const { data: variantRows } = await supabase
   .from("product_variants")
-  .select("id, condition, completeness, price_cents, quantity, sku, barcode, product:products(title, platform, category:categories(id,name,color,is_trackable))")
+  .select(`id, condition, completeness, price_cents, quantity, sku, barcode, internal_code${hasTypes ? ", inventory_type_id" : ""}, product_barcodes(barcode), product:products(title, platform, category:categories(id,name,color,is_trackable))`)
   .order("price_cents", { ascending: false });
 
 const catalog = (variantRows ?? []).map((v: any) => ({
@@ -27,6 +33,10 @@ const catalog = (variantRows ?? []).map((v: any) => ({
   qty: v.quantity,
   sku: v.sku,
   barcode: v.barcode,
+  internalCode: v.internal_code ?? "",
+  altBarcodes: (v.product_barcodes ?? []).map((b: any) => b.barcode),
+  blocked: hasTypes ? !!typeInfoById.get(v.inventory_type_id)?.block_at_checkout : false,
+  typeName: hasTypes ? (typeInfoById.get(v.inventory_type_id)?.name ?? "") : "",
   categoryId: v.product?.category?.id ?? null,
   categoryName: v.product?.category?.name ?? "",
   categoryColor: v.product?.category?.color ?? "#2ce6e0",
@@ -336,6 +346,8 @@ const posData = { catalog, categories: categories ?? [], customer };
   function addVariant(variantId: string) {
     const v = catalog.find((x) => x.variantId === variantId);
     if (!v) return;
+    // Blocked inventory type (e.g. Personal Collection) — server re-checks too.
+    if ((v as any).blocked) { alert(`“${v.title}” is ${(v as any).typeName || "a blocked inventory type"} — not for sale. A manager can unblock it in Settings → Inventory types.`); return; }
     const existing = cart.find((i) => i.variantId === variantId);
     if (existing) existing.qty++;
     else cart.push({ key: crypto.randomUUID(), variantId, categoryId: v.categoryId, kind: "sale", title: v.title, meta: `${v.platform} · ${v.condition}`, unitPriceCents: v.priceCents, qty: 1, discountCents: 0 });
@@ -417,8 +429,14 @@ const posData = { catalog, categories: categories ?? [], customer };
   // ---------- Search + scan ----------
   $("prod-search").addEventListener("input", (e) => {
     search = (e.target as HTMLInputElement).value;
-    // Barcode auto-add (simulated scan): exact barcode match adds + clears.
-    const hit = catalog.find((v) => v.barcode && v.barcode === search.trim());
+    // Barcode auto-add (wedge scanners "type" the code): match the primary
+    // barcode, the printed internal label code (TL…, case-insensitive), or any
+    // extra barcode on file — then add + clear.
+    const code = search.trim();
+    const hit = code && catalog.find((v: any) =>
+      (v.barcode && v.barcode === code) ||
+      (v.internalCode && v.internalCode === code.toUpperCase()) ||
+      (v.altBarcodes && v.altBarcodes.includes(code)));
     if (hit) { addVariant(hit.variantId); search = ""; (e.target as HTMLInputElement).value = ""; }
     renderProducts();
   });

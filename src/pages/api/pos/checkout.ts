@@ -1,4 +1,5 @@
 import type { APIRoute } from "astro";
+import { typeMapByVariant } from "../../../lib/inventoryTypes";
 
 export const prerender = false;
 
@@ -67,6 +68,23 @@ export const POST: APIRoute = async ({ locals, request }) => {
     discount_cents: Math.max(0, Math.round(Number(it.discountCents)) || 0),
   }));
 
+  // Inventory-type pass — LIVE read (never the page's cached flags, so the expo
+  // block toggle bites immediately): refuse blocked pools, then stamp each
+  // variant line with its type key (+ retail department) for reporting.
+  // `typesReady` is false pre-migration — the inventory_type key must then be
+  // OMITTED entirely (PostgREST rejects unknown insert keys → would 500 sales).
+  const { ready: typesReady, map: typeMap } = await typeMapByVariant(locals.supabase, items.filter((it) => it.variant_id).map((it) => it.variant_id as string));
+  const blockedLines = items.filter((it) => it.variant_id && typeMap.get(it.variant_id as string)?.block_at_checkout);
+  if (blockedLines.length) {
+    const names = [...new Set(blockedLines.map((it) => it.description))].join(", ");
+    return json({ error: `Not for sale: ${names} — blocked inventory type. A manager can unblock it in Settings → Inventory types.` }, 409);
+  }
+  const stamped = items.map((it) => ({
+    ...it,
+    department: it.variant_id ? "retail" : null,
+    ...(typesReady ? { inventory_type: it.variant_id ? (typeMap.get(it.variant_id as string)?.key ?? null) : null } : {}),
+  }));
+
   const cartDiscount = Math.max(0, Math.round(Number(body.cartDiscountCents)) || 0);
   const subtotal = items.reduce((s, it) => s + it.unit_price_cents * it.qty, 0);
   const itemDiscounts = items.reduce((s, it) => s + it.discount_cents, 0);
@@ -107,7 +125,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
     await locals.supabase.from("transaction_items").delete().eq("transaction_id", resumeId);
     const { error: iErr } = await locals.supabase
       .from("transaction_items")
-      .insert(items.map((it) => ({ ...it, transaction_id: resumeId })));
+      .insert(stamped.map((it) => ({ ...it, transaction_id: resumeId })));
     if (iErr) return json({ error: iErr.message }, 500);
   } else {
     const { data, error } = await locals.supabase
@@ -119,7 +137,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
     txn = data;
     const { error: iErr } = await locals.supabase
       .from("transaction_items")
-      .insert(items.map((it) => ({ ...it, transaction_id: txn.id })));
+      .insert(stamped.map((it) => ({ ...it, transaction_id: txn.id })));
     if (iErr) return json({ error: iErr.message }, 500);
   }
 

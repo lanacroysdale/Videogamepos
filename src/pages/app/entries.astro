@@ -1,0 +1,176 @@
+---
+export const prerender = false;
+import AppLayout from "../../layouts/AppLayout.astro";
+import { labelTemplates } from "../../lib/labels";
+
+// Inventory ENTRIES — receiving-session history. Every receive lands on an
+// entry ("Entry #142"); this page lists them, shows what arrived (with
+// then-vs-now price flags), and REPRINTS labels for any past entry.
+const supabase = Astro.locals.supabase;
+
+const [{ data: settingsRow }, { data: invTypes }, { data: locations }, { data: completeness }, { data: grades }] = await Promise.all([
+  supabase.from("store_settings").select("store_name, settings").eq("id", 1).maybeSingle(),
+  supabase.from("store_inventory_types").select("id, key, name, icon"),
+  supabase.from("store_locations").select("id, key, is_default"),
+  supabase.from("completeness_levels").select("code, label").eq("is_active", true),
+  supabase.from("condition_grades").select("code, label, icon").eq("is_active", true),
+]);
+
+let needsMigration = false;
+const { data: entryRows, error: entryErr } = await supabase
+  .from("inventory_entries")
+  .select("id, human_id, source, status, note, created_at, committed_at, employee:profiles(full_name), inventory_entry_items(qty_added)")
+  .order("created_at", { ascending: false })
+  .limit(50);
+if (entryErr) needsMigration = true;
+
+const entries = (entryRows ?? []).map((e: any) => ({
+  id: e.id, humanId: e.human_id, source: e.source, status: e.status, note: e.note ?? "",
+  createdAt: e.created_at, committedAt: e.committed_at,
+  employee: e.employee?.full_name ?? "—",
+  lineCount: (e.inventory_entry_items ?? []).length,
+  unitCount: (e.inventory_entry_items ?? []).reduce((s: number, it: any) => s + (it.qty_added || 0), 0),
+}));
+
+const pageData = {
+  entries,
+  invTypes: invTypes ?? [],
+  locations: locations ?? [],
+  completeness: completeness ?? [],
+  grades: grades ?? [],
+  lblTemplates: labelTemplates((settingsRow as any)?.settings),
+  storeName: (settingsRow as any)?.store_name || "TimeLag",
+};
+---
+
+<AppLayout title="Inventory entries" active="inventory">
+  <div slot="actions">
+    <a href="/inventory" class="btn btn-ghost btn-sm">← Inventory</a>
+  </div>
+
+  {needsMigration ? (
+    <div class="pos-panel">
+      <h2>Set up entries</h2>
+      <p class="muted" style="margin-top:0.6rem;">Run <code>supabase/migrations/20260731000002_inventory_entries.sql</code> in the Supabase SQL editor, then refresh.</p>
+    </div>
+  ) : (
+    <div class="pos-grid two" style="align-items:start;">
+      <div class="pos-panel">
+        <h2>Receiving entries</h2>
+        <p class="muted" style="margin:0.3rem 0 0.8rem;font-size:0.85rem;">Every receiving session lands here — open one to see what arrived and reprint its labels.</p>
+        <div id="entry-list"></div>
+      </div>
+      <div class="pos-panel" id="entry-detail-panel">
+        <h2 id="ed-title">Select an entry</h2>
+        <div id="entry-detail"><p class="empty">Pick an entry on the left to see its lines.</p></div>
+      </div>
+    </div>
+  )}
+
+  <script type="application/json" id="pos-data" set:html={JSON.stringify(pageData)}></script>
+</AppLayout>
+
+<style is:global>
+  .ent-row { display:grid; grid-template-columns:auto 1fr auto; gap:0.6rem; align-items:center; padding:0.5rem 0.2rem; border-bottom:1px solid var(--border); cursor:pointer; }
+  .ent-row:hover { background:rgba(255,255,255,.03); }
+  .ent-row.on { box-shadow:inset 3px 0 0 var(--cyan); background:rgba(0,224,255,.06); }
+  .ent-id { font-weight:800; }
+  .ent-meta { color:var(--muted-2); font-size:0.8rem; }
+  .ed-line { display:grid; grid-template-columns:2.4rem 1fr auto; gap:0.5rem; align-items:center; padding:0.42rem 0.2rem; border-bottom:1px solid rgba(127,127,127,.12); font-size:0.9rem; }
+  .ed-qty { font-weight:700; color:var(--muted-2); }
+  .ed-price { text-align:right; font-variant-numeric:tabular-nums; }
+  .ed-changed { color:var(--magenta); font-size:0.74rem; }
+</style>
+
+<script>
+  import { openPrintDialog } from "../../lib/labelPrint";
+  import { compAbbrev } from "../../lib/conditionDisplay";
+
+  const $ = (id: string) => document.getElementById(id) as any;
+  let data: any = {};
+  try { data = JSON.parse(($("pos-data") as HTMLScriptElement)?.textContent || "{}"); } catch {}
+  const entries: any[] = data.entries || [];
+  const typeById = new Map((data.invTypes || []).map((t: any) => [t.id, t]));
+  const locById = new Map((data.locations || []).map((l: any) => [l.id, l]));
+  const defaultLocKey = (data.locations || []).find((l: any) => l.is_default)?.key ?? "";
+  const grades: any[] = data.grades || [];
+  const esc = (s: any) => String(s ?? "").replace(/[&<>"']/g, (m: string) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m] as string));
+  const money = (c: number) => "$" + ((c || 0) / 100).toFixed(2);
+  const when = (iso: string) => new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+
+  function condShort(v: any) {
+    const g = grades.find((x: any) => x.code === v.grade_code);
+    const parts = [v.completeness_code ? compAbbrev(v.completeness_code, data.completeness) : null, g ? (g.icon || g.label) : null].filter(Boolean);
+    return parts.length ? parts.join(" · ") : (v.condition || "—");
+  }
+
+  async function api(body: any) {
+    const r = await fetch("/api/pos/inventory", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) throw new Error(j.error || "Failed");
+    return j;
+  }
+
+  let selId = "";
+  function renderList() {
+    const el = $("entry-list");
+    if (!el) return;
+    el.innerHTML = entries.length ? entries.map((e) => `
+      <div class="ent-row${e.id === selId ? " on" : ""}" data-ent="${e.id}">
+        <span class="ent-id">#${e.humanId}</span>
+        <span><span>${when(e.createdAt)} · ${esc(e.employee)}</span><span class="ent-meta" style="display:block;">${e.lineCount} line${e.lineCount === 1 ? "" : "s"} · ${e.unitCount} unit${e.unitCount === 1 ? "" : "s"} · ${esc(e.source)}${e.note ? " · " + esc(e.note) : ""}</span></span>
+        <span class="pill ${e.status === "open" ? "cyan" : "muted"}">${e.status}</span>
+      </div>`).join("") : `<p class="empty">No entries yet — use “Start receiving” on the Inventory page.</p>`;
+    el.querySelectorAll("[data-ent]").forEach((row: any) => row.addEventListener("click", () => openEntry(row.dataset.ent)));
+  }
+
+  async function openEntry(id: string) {
+    selId = id; renderList();
+    const detail = $("entry-detail");
+    detail.innerHTML = `<p class="muted">Loading…</p>`;
+    try {
+      const j = await api({ action: "getEntry", entryId: id });
+      const e = j.entry;
+      $("ed-title").textContent = `Entry #${e.human_id}`;
+      const lines = (j.items || []).map((it: any) => {
+        const v = it.variant || {};
+        const p = v.product || {};
+        const changed = v.price_cents !== it.price_cents_at_entry;
+        return `
+          <div class="ed-line">
+            <span class="ed-qty">${it.qty_added}×</span>
+            <span>${esc(p.title ?? "?")} <span class="muted-2" style="font-size:0.78rem;">${esc(condShort(v))}${it.was_new_variant ? " · new" : ""}</span>
+              ${changed ? `<span class="ed-changed">price ${money(it.price_cents_at_entry)} → ${money(v.price_cents)}</span>` : ""}</span>
+            <span class="ed-price">${money(v.price_cents ?? 0)}</span>
+          </div>`;
+      }).join("");
+      detail.innerHTML = `
+        <p class="muted" style="margin:0 0 0.6rem;font-size:0.84rem;">${when(e.created_at)} · ${esc(e.employee?.full_name ?? "—")} · ${esc(e.source)} · <span class="pill ${e.status === "open" ? "cyan" : "muted"}">${e.status}</span></p>
+        <div>${lines || `<p class="empty">No lines on this entry.</p>`}</div>
+        <div style="display:flex;gap:0.5rem;margin-top:0.9rem;">
+          <button id="ed-print" class="btn btn-primary btn-sm" type="button">🏷 Reprint labels</button>
+        </div>`;
+      $("ed-print")?.addEventListener("click", () => {
+        const printLines = (j.items || []).filter((it: any) => it.variant?.internal_code).map((it: any) => {
+          const v = it.variant, p = v.product || {};
+          const loc = locById.get(v.location_id);
+          return {
+            item: {
+              title: p.title ?? "?", categoryName: p.platform || p.category?.name || "", condShort: condShort(v),
+              priceCents: v.price_cents ?? 0,
+              invTypeName: (typeById.get(v.inventory_type_id) as any)?.name ?? "",
+              locationKey: (loc as any)?.key ?? defaultLocKey,
+              internalCode: v.internal_code, sku: v.sku || "", storeName: data.storeName,
+            },
+            defaultCopies: it.qty_added,
+            allCopies: v.quantity,
+            hint: v.price_cents !== it.price_cents_at_entry ? "price changed since this batch" : undefined,
+          };
+        });
+        openPrintDialog(printLines, data.lblTemplates || [], { title: `Reprint · Entry #${e.human_id}` });
+      });
+    } catch (err: any) { detail.innerHTML = `<p class="empty">${esc(err.message)}</p>`; }
+  }
+
+  renderList();
+</script>

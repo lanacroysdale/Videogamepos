@@ -5,7 +5,7 @@ import AppLayout from "../../layouts/AppLayout.astro";
 import { createSupabaseAdminClient } from "../../lib/supabase";
 import { fmt } from "../../lib/money";
 import {
-  summarize, pctChange, bucketSeries, granularityFor, rollupBy, departmentOf, type Txn, type Item,
+  summarize, pctChange, bucketSeries, granularityFor, rollupBy, departmentOf, inventoryTypeOf, type Txn, type Item,
 } from "../../lib/reports";
 
 // Manager-gated (middleware already enforces it; explicit guard for defense-in-depth).
@@ -53,12 +53,18 @@ const allTxns = await fetchAll<Txn>(() => {
   return qq;
 });
 
+// Inventory-type config — fetched BEFORE the items query because the
+// transaction_items.inventory_type column ships in the same migration as this
+// table: selecting it pre-migration would 400 and silently zero the whole page.
+const { data: invTypeData } = await admin.from("store_inventory_types").select("key,name,icon").order("sort_order");
+const typesReady = !!invTypeData;
+
 // Items filtered by their parent's status/date via an inner embed (avoids a giant
 // .in() of transaction ids), then the embed is stripped off.
 const itemsRaw = await fetchAll<any>(() => {
   let qq = admin
     .from("transaction_items")
-    .select("transaction_id,variant_id,menu_item_id,category_id,department,kind,description,qty,unit_price_cents,discount_cents,transactions!inner(status,completed_at)")
+    .select(`transaction_id,variant_id,menu_item_id,category_id,department${typesReady ? ",inventory_type" : ""},kind,description,qty,unit_price_cents,discount_cents,transactions!inner(status,completed_at)`)
     .eq("transactions.status", "completed")
     .order("transaction_id", { ascending: true });
   if (fetchStartISO) qq = qq.gte("transactions.completed_at", fetchStartISO);
@@ -84,6 +90,12 @@ for (let i = 0; i < menuItemIds.length; i += 300) {
   (data ?? []).forEach((m: any) => menuCostOf.set(m.id, m.cost_cents));
 }
 
+// Inventory-type labels/icons (invTypeData fetched above, pre-items).
+const invTypeInfo = new Map<string, { name: string; icon: string | null }>((invTypeData ?? []).map((t: any) => [t.key, { name: t.name, icon: t.icon }]));
+const INVTYPE_FALLBACK: Record<string, string> = { retail: "Retail", online: "Online", personal_collection: "Personal Collection" };
+const invTypeLabel = (key: string) => invTypeInfo.get(key)?.name ?? INVTYPE_FALLBACK[key] ?? key;
+const invTypeIcon = (key: string) => invTypeInfo.get(key)?.icon ?? "";
+
 // Department labels/icons for the by-department split (falls back before the
 // departments migration runs).
 const { data: deptData } = await admin.from("store_departments").select("key,name,icon");
@@ -106,8 +118,15 @@ const curTxns = curStartMs === null ? allTxns : allTxns.filter((t) => tms(t) >= 
 const prevTxns = curStartMs === null ? [] : allTxns.filter((t) => tms(t) < curStartMs && tms(t) >= prevStartMs!);
 const curIds = new Set(curTxns.map((t) => t.id));
 const prevIds = new Set(prevTxns.map((t) => t.id));
-const curItems = items.filter((i) => curIds.has(i.transaction_id));
-const prevItems = items.filter((i) => prevIds.has(i.transaction_id));
+const curItemsAll = items.filter((i) => curIds.has(i.transaction_id));
+const prevItemsAll = items.filter((i) => prevIds.has(i.transaction_id));
+
+// Optional ?invType= scope (chips): report a single stock pool — e.g. only
+// "sold from My Personal Collection" at the expo.
+const invTypeFilter = Astro.url.searchParams.get("invType") ?? "";
+const inScope = (it: Item) => !invTypeFilter || inventoryTypeOf(it) === invTypeFilter;
+const curItems = invTypeFilter ? curItemsAll.filter(inScope) : curItemsAll;
+const prevItems = invTypeFilter ? prevItemsAll.filter(inScope) : prevItemsAll;
 
 const cur = summarize(curTxns, curItems, costOf, menuCostOf);
 const prev = summarize(prevTxns, prevItems, costOf, menuCostOf);
@@ -136,6 +155,16 @@ const deptRows = [...rollupBy(curItems, departmentOf, costOf, menuCostOf).entrie
   .map(([key, v]) => ({ key, name: deptLabel(key), icon: deptIcon(key), ...v }))
   .sort((a, b) => b.net - a.net);
 const maxDept = Math.max(1, ...deptRows.map((r) => r.net));
+
+// By inventory type (stock pool): Retail / Online / Personal Collection.
+// Menu/service lines aren't inventory (null key) and stay out of this rollup.
+const typeRows = [...rollupBy(curItems, (it) => inventoryTypeOf(it), costOf, menuCostOf).entries()]
+  .filter(([key]) => key !== "—")
+  .map(([key, v]) => ({ key, name: invTypeLabel(key), icon: invTypeIcon(key), ...v }))
+  .sort((a, b) => b.net - a.net);
+const maxTypeRow = Math.max(1, ...typeRows.map((r) => r.net));
+// Chips: every type that exists (config) + any key seen in the data.
+const typeChipKeys = [...new Set([...(invTypeData ?? []).map((t: any) => t.key), ...typeRows.map((r) => r.key)])];
 
 const empAgg = rollupBy(curItems, (it) => txnById.get(it.transaction_id)?.employee_id ?? null);
 const empTxnCount = new Map<string, Set<string>>();
@@ -214,7 +243,7 @@ const cEsc = (raw: string) => {
 };
 const d2 = (c: number) => (c / 100).toFixed(2);
 const csv =
-  `TimeLag sales report,${cEsc(rangeLabel)}\n\nSummary\nMetric,Value\n` +
+  `TimeLag sales report,${cEsc(rangeLabel + (invTypeFilter ? ` · ${invTypeLabel(invTypeFilter)} only` : ""))}\n\nSummary\nMetric,Value\n` +
   `Gross sales,${d2(cur.grossSales)}\nDiscounts,${d2(cur.discounts)}\nReturns,${d2(cur.returns)}\n` +
   `Net sales,${d2(cur.netSales)}\nCost of goods,${d2(cur.cogs)}\nGross profit,${d2(cur.grossProfit)}\n` +
   `Margin %,${cur.marginPct.toFixed(1)}\nTransactions,${cur.txnCount}\nUnits sold,${cur.unitsSold}\n` +
@@ -222,13 +251,15 @@ const csv =
   `Net sales by ${gran}\nPeriod,Net\n` + series.map((b) => `${cEsc(b.label)},${d2(b.net)}`).join("\n") +
   `\n\nBy department\nDepartment,Net,Units,Margin %\n` +
   deptRows.map((r) => `${cEsc(r.name)},${d2(r.net)},${r.units},${marginOf(r) ?? ""}`).join("\n") +
+  `\n\nBy inventory type\nInventory type,Net,Units,Margin %\n` +
+  typeRows.map((r) => `${cEsc(r.name)},${d2(r.net)},${r.units},${marginOf(r) ?? ""}`).join("\n") +
   `\n\nBy category\nCategory,Net,Units,Margin %\n` +
   catRows.map((r) => `${cEsc(r.name)},${d2(r.net)},${r.units},${marginOf(r) ?? ""}`).join("\n") +
   `\n\nBy employee\nEmployee,Net,Transactions\n` +
   empRows.map((r) => `${cEsc(r.name)},${d2(r.net)},${r.txns}`).join("\n") +
   `\n\nTop products\nProduct,Net,Units\n` +
   topProducts.map((r) => `${cEsc(r.name)},${d2(r.net)},${r.units}`).join("\n");
-const csvName = `timelag-report-${sel.key}.csv`;
+const csvName = `timelag-report-${sel.key}${invTypeFilter ? `-${invTypeFilter}` : ""}.csv`;
 
 const gaTraffic = false; // GA Data API not wired yet — see panel below.
 ---
@@ -236,13 +267,23 @@ const gaTraffic = false; // GA Data API not wired yet — see panel below.
 <AppLayout title="Reports" active="reports">
   <div slot="actions" class="rep-actions">
     {RANGES.map((r) => (
-      <a href={`/reports?range=${r.key}`} class:list={["chip", { on: r.key === sel.key }]}>{r.label}</a>
+      <a href={`/reports?range=${r.key}${invTypeFilter ? `&invType=${invTypeFilter}` : ""}`} class:list={["chip", { on: r.key === sel.key }]}>{r.label}</a>
     ))}
     <button id="rep-csv" class="btn btn-ghost btn-sm" type="button">⬇ CSV</button>
     <button id="rep-print" class="btn btn-ghost btn-sm" type="button">🖨 Print</button>
   </div>
 
-  <p class="muted rep-sub">Completed sales · <strong>{rangeLabel}</strong>{hasPrev ? " · vs. previous period" : ""}</p>
+  <p class="muted rep-sub">Completed sales · <strong>{rangeLabel}</strong>{invTypeFilter ? ` · ${invTypeLabel(invTypeFilter)} only` : ""}{hasPrev ? " · vs. previous period" : ""}</p>
+
+  {typeChipKeys.length > 0 && (
+    <div class="rep-actions" style="margin-bottom:1rem;">
+      <span class="muted" style="font-size:0.8rem;">Stock pool:</span>
+      <a href={`/reports?range=${sel.key}`} class:list={["chip", { on: !invTypeFilter }]}>All</a>
+      {typeChipKeys.map((k: string) => (
+        <a href={`/reports?range=${sel.key}&invType=${k}`} class:list={["chip", { on: invTypeFilter === k }]}>{invTypeIcon(k)} {invTypeLabel(k)}</a>
+      ))}
+    </div>
+  )}
 
   {cur.txnCount === 0 && cur.returns === 0 ? (
     <div class="pos-panel"><p class="empty">No completed sales in this period.</p></div>
@@ -270,6 +311,20 @@ const gaTraffic = false; // GA Data API not wired yet — see panel below.
           </div>
         ))}
       </div>
+
+      {/* ---- By inventory type (stock pool: Retail / Online / Personal Collection) ---- */}
+      {typeRows.length > 0 && (
+        <div class="pos-panel rep-block">
+          <h2>By inventory type <span class="sub">— which stock pool sold</span></h2>
+          {typeRows.map((r) => (
+            <div class="hbar-row">
+              <span>{r.icon} {r.name} <span class="pill muted">{marginTxt(r)}</span> <span class="muted-2" style="font-size:0.78rem;">{r.units}u</span></span>
+              <div class="hbar-track"><div class="hbar-fill" style={`width:${Math.round((r.net / maxTypeRow) * 100)}%`}></div></div>
+              <span class="num">{fmt(r.net)}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* ---- Sales trend ---- */}
       <div class="pos-panel rep-block">
@@ -306,17 +361,23 @@ const gaTraffic = false; // GA Data API not wired yet — see panel below.
         {/* ---- Payment mix + trade-ins ---- */}
         <div class="pos-panel">
           <h2>Payments <span class="sub">— tender on sales</span></h2>
-          {totalTender === 0 ? <p class="empty">No tender recorded.</p> : payRows.map((p) => (
-            <div class="hbar-row">
-              <span>{p.l}</span>
-              <div class="hbar-track"><div class="hbar-fill" style={`width:${Math.round((p.v / Math.max(1, totalTender)) * 100)}%`}></div></div>
-              <span class="num">{fmt(p.v)}</span>
-            </div>
-          ))}
-          <div class="rep-trade">
-            <div class="stat"><span class="n">{fmt(cur.tradeInPayout)}</span><span class="l">Trade-in payout</span></div>
-            <div class="stat"><span class="n">{cur.tradeInCount}</span><span class="l">Trade-ins</span></div>
-          </div>
+          {invTypeFilter ? (
+            <p class="empty">Tender isn't split by stock pool — a single sale can mix pools on one payment. Clear the Stock pool filter to see payments.</p>
+          ) : (
+            <>
+              {totalTender === 0 ? <p class="empty">No tender recorded.</p> : payRows.map((p) => (
+                <div class="hbar-row">
+                  <span>{p.l}</span>
+                  <div class="hbar-track"><div class="hbar-fill" style={`width:${Math.round((p.v / Math.max(1, totalTender)) * 100)}%`}></div></div>
+                  <span class="num">{fmt(p.v)}</span>
+                </div>
+              ))}
+              <div class="rep-trade">
+                <div class="stat"><span class="n">{fmt(cur.tradeInPayout)}</span><span class="l">Trade-in payout</span></div>
+                <div class="stat"><span class="n">{cur.tradeInCount}</span><span class="l">Trade-ins</span></div>
+              </div>
+            </>
+          )}
         </div>
       </div>
 
