@@ -365,18 +365,30 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
 
   // Title auto-sizes: short names print BIG, long names shrink to fit, and the
   // configurable titleMaxChars cut-off ellipsizes runaways.
-  let y = INSET; // no-spine tags: title starts at the top — the logo lives in
-  // a lower corner of the price band now (owner spec), not a top header.
+  let y = INSET;
   const metaSize = 2.4 * fs * fsc * (FP.metaScale ?? 1);
+  // No-spine: the logo (image, else store name) + tagline occupy a SIDE COLUMN
+  // beside the title + meta block — logoSide picks which side, and title/meta
+  // shift over to make room. Price and barcode STAY CENTERED (owner spec).
+  const nsTagline = spineW === 0 && tpl.show.spineText ? tpl.spineText.trim() : "";
+  const nsSide = spineW === 0 && (tpl.show.logo || !!nsTagline);
+  const sideRight = tpl.logoSide === "right";
+  const nameF = 1.7 * fs * fsc, tagF = 1.6 * fs * fsc;
+  const lgH = nsSide && tpl.show.logo && tpl.logoUrl ? Math.min(tpl.logoHeightMm, 9) : 0;
+  const lgW = lgH ? Math.min(contentW * 0.3, lgH * 2.6) : 0;
+  const lgName = nsSide && tpl.show.logo && !tpl.logoUrl ? (item.storeName || "").toUpperCase().slice(0, 10) : "";
+  const sideW = nsSide ? Math.min(contentW * 0.38, Math.max(lgW, lgName.length * nameF * 0.62, nsTagline.length * tagF * 0.56)) + 1.2 : 0;
+  const colW = contentW - sideW;                            // title/meta column
+  const colCx = fx + (sideRight ? colW / 2 : sideW + colW / 2);
   if (tpl.show.title) {
     const raw = item.title.replace(/\s+/g, " ").trim();
     const cut = raw.length > tpl.titleMaxChars ? raw.slice(0, Math.max(1, tpl.titleMaxChars - 1)).trimEnd() + "…" : raw;
     const perLine = Math.max(6, Math.ceil(cut.length / tpl.titleMaxLines));
-    const size = Math.min(4.8 * fs * fsc, Math.max(2.6 * fs, contentW / (perLine * chW)));
-    const maxChars = Math.max(4, Math.floor(contentW / (size * chW)));
+    const size = Math.min(4.8 * fs * fsc, Math.max(2.6 * fs, colW / (perLine * chW)));
+    const maxChars = Math.max(4, Math.floor(colW / (size * chW)));
     y += size * (FP.titleTop ?? 1); // per-font lift: tall display faces start higher
     for (const line of wrapTitle(cut, maxChars, tpl.titleMaxLines)) {
-      parts.push(`<text x="${cxFace.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="middle" font-family="${fam}" font-weight="${wHeavy}"${titleStyleAttr}${ls(size)} font-size="${size.toFixed(2)}" fill="#000">${esc(line)}</text>`);
+      parts.push(`<text x="${colCx.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="middle" font-family="${fam}" font-weight="${wHeavy}"${titleStyleAttr}${ls(size)} font-size="${size.toFixed(2)}" fill="#000">${esc(line)}</text>`);
       y += size * 1.15;
     }
     // Hand off to the meta baseline GEOMETRICALLY — title descenders + meta cap
@@ -392,45 +404,31 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
     tpl.show.sku && item.sku ? item.sku : "",
   ].filter(Boolean);
   if (metaBits.length) {
-    parts.push(`<text x="${cxFace.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="middle" font-family="${fam}"${ls(metaSize)} font-size="${metaSize.toFixed(2)}" fill="#000">${esc(metaBits.join("  ·  "))}</text>`);
+    parts.push(`<text x="${colCx.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="middle" font-family="${fam}"${ls(metaSize)} font-size="${metaSize.toFixed(2)}" fill="#000">${esc(metaBits.join("  ·  "))}</text>`);
     y += metaSize * 1.08;
+  }
+  // Draw the side column stack, vertically centered on the title+meta block.
+  if (nsSide) {
+    const stackH = lgH + (lgName ? nameF * 1.15 : 0) + (nsTagline ? tagF * 1.3 : 0);
+    let sy = Math.max(INSET, (INSET + y) / 2 - stackH / 2);
+    const ax = sideRight ? fx + contentW : fx;
+    const anchor = sideRight ? "end" : "start";
+    if (lgH) {
+      parts.push(`<image href="${esc(tpl.logoUrl)}" x="${(sideRight ? ax - lgW : ax).toFixed(2)}" y="${sy.toFixed(2)}" width="${lgW.toFixed(2)}" height="${lgH.toFixed(2)}" preserveAspectRatio="${sideRight ? "xMaxYMid" : "xMinYMid"} meet"/>`);
+      sy += lgH;
+    } else if (lgName) {
+      sy += nameF;
+      parts.push(`<text x="${ax.toFixed(2)}" y="${sy.toFixed(2)}" text-anchor="${anchor}" font-family="${fam}" font-weight="${wMid}" font-size="${nameF.toFixed(2)}" letter-spacing="0.2" fill="#000">${esc(lgName)}</text>`);
+    }
+    if (nsTagline) {
+      sy += tagF * 1.3;
+      parts.push(`<text x="${ax.toFixed(2)}" y="${sy.toFixed(2)}" text-anchor="${anchor}" font-family="${fam}" font-weight="${wMid}" font-size="${tagF.toFixed(2)}" letter-spacing="0.15" fill="#000">${esc(nsTagline)}</text>`);
+    }
   }
   // Face price: big, centered — and ALWAYS clear of the barcode strip: the
   // baseline is clamped ≥1.2mm above the bars, and the font shrinks only if a
   // tall title/meta stack leaves genuinely too little room.
   const floorY = wantBarcode ? bcY - 1.0 : H - INSET;
-  // No-spine: the logo (image, else store name) + tagline stack into a lower
-  // CORNER of the price band — logoSide picks which corner — and the price
-  // centers itself in the remaining width beside it.
-  let priceCx = cxFace;
-  const nsTagline = spineW === 0 && tpl.show.spineText ? tpl.spineText.trim() : "";
-  if (spineW === 0 && (tpl.show.logo || nsTagline)) {
-    const right = tpl.logoSide === "right";
-    const nameFont = 1.9 * fs * fsc;
-    const tagFont = 1.7 * fs * fsc;
-    const lh = tpl.show.logo && tpl.logoUrl ? Math.min(tpl.logoHeightMm, 8) : 0;
-    const lw = lh ? Math.min(contentW * 0.32, lh * 2.8) : 0;
-    const name = tpl.show.logo && !tpl.logoUrl ? (item.storeName || "").toUpperCase().slice(0, 12) : "";
-    const cornerW = Math.min(contentW * 0.45, Math.max(lw, name.length * nameFont * 0.62, nsTagline.length * tagFont * 0.56));
-    const stackH = lh + (name ? nameFont * 1.1 : 0) + (nsTagline ? tagFont * 1.3 : 0);
-    // Center the stack in the band; clamp so it never rides onto the bars.
-    let sy = Math.max(y, Math.min((y + floorY) / 2 - stackH / 2, floorY - stackH));
-    const ax = right ? fx + contentW : fx;
-    const anchor = right ? "end" : "start";
-    if (lh) {
-      parts.push(`<image href="${esc(tpl.logoUrl)}" x="${(right ? ax - lw : ax).toFixed(2)}" y="${sy.toFixed(2)}" width="${lw.toFixed(2)}" height="${lh.toFixed(2)}" preserveAspectRatio="${right ? "xMaxYMid" : "xMinYMid"} meet"/>`);
-      sy += lh;
-    } else if (name) {
-      sy += nameFont;
-      parts.push(`<text x="${ax.toFixed(2)}" y="${sy.toFixed(2)}" text-anchor="${anchor}" font-family="${fam}" font-weight="${wMid}" font-size="${nameFont.toFixed(2)}" letter-spacing="0.2" fill="#000">${esc(name)}</text>`);
-    }
-    if (nsTagline) {
-      sy += tagFont * 1.3;
-      parts.push(`<text x="${ax.toFixed(2)}" y="${sy.toFixed(2)}" text-anchor="${anchor}" font-family="${fam}" font-weight="${wMid}" font-size="${tagFont.toFixed(2)}" letter-spacing="0.15" fill="#000">${esc(nsTagline)}</text>`);
-    }
-    const free = contentW - cornerW - 1.2;
-    priceCx = right ? fx + free / 2 : fx + cornerW + 1.2 + free / 2;
-  }
   if (tpl.show.price) {
     let priceFont = 6.0 * fs * tpl.priceScale * fsc * (FP.priceBoost ?? 1);
     const room = floorY - y;
@@ -443,7 +441,7 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
     const py = Math.min(y + room / 2 + priceFont * 0.37, floorY);
     const strong = FP.priceStrong ? ` stroke="#000" stroke-width="${(priceFont * 0.05).toFixed(2)}" paint-order="stroke"` : "";
     const pItal = FP.priceItalic ? ' font-style="italic"' : "";
-    parts.push(`<text x="${priceCx.toFixed(2)}" y="${py.toFixed(2)}" text-anchor="middle" font-family="${fam}" font-weight="${wHeavy}"${pItal}${strong}${ls(priceFont)} font-size="${priceFont.toFixed(2)}" fill="#000">${esc(money(item.priceCents))}</text>`);
+    parts.push(`<text x="${cxFace.toFixed(2)}" y="${py.toFixed(2)}" text-anchor="middle" font-family="${fam}" font-weight="${wHeavy}"${pItal}${strong}${ls(priceFont)} font-size="${priceFont.toFixed(2)}" fill="#000">${esc(money(item.priceCents))}</text>`);
     y = py;
   }
   // Vertical "Retail · PDX" rail along the right edge, centered on the LABEL's
