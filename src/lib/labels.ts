@@ -48,7 +48,7 @@ export const DEFAULT_TEMPLATE: LabelTemplate = {
   name: "Wrap tag 2.25 × 1.25″",
   widthMm: 57,
   heightMm: 32,
-  spine: "right",
+  spine: "left", // front-to-spine: face on the case FRONT, flap wraps the spine
   spineWidthMm: 13,
   show: { logo: true, title: true, category: true, condition: true, price: true, invType: true, location: true, sku: false, barcode: true },
   barcodeHeightMm: 8,
@@ -233,6 +233,12 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
   }
 
   // ---- Face ----
+  // The inventory-type · location tag runs as a VERTICAL rail down the face's
+  // right edge (owner spec), so text content keeps clear of that strip.
+  const tagBits = [tpl.show.invType ? item.invTypeName : "", tpl.show.location ? item.locationKey : ""].filter(Boolean);
+  const railW = tagBits.length ? 2.8 * fs : 0;
+  const contentW = fw - railW;
+
   // Title auto-sizes: short names print BIG, long names shrink to fit, and the
   // configurable titleMaxChars cut-off ellipsizes runaways.
   let y = INSET;
@@ -240,8 +246,8 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
     const raw = item.title.replace(/\s+/g, " ").trim();
     const cut = raw.length > tpl.titleMaxChars ? raw.slice(0, Math.max(1, tpl.titleMaxChars - 1)).trimEnd() + "…" : raw;
     const perLine = Math.max(6, Math.ceil(cut.length / tpl.titleMaxLines));
-    const size = Math.min(4.8 * fs, Math.max(2.8 * fs, fw / (perLine * 0.54)));
-    const maxChars = Math.max(4, Math.floor(fw / (size * 0.54)));
+    const size = Math.min(4.8 * fs, Math.max(2.8 * fs, contentW / (perLine * 0.54)));
+    const maxChars = Math.max(4, Math.floor(contentW / (size * 0.54)));
     y += size;
     for (const line of wrapTitle(cut, maxChars, tpl.titleMaxLines)) {
       parts.push(`<text x="${fx}" y="${y.toFixed(2)}" font-family="Arial,Helvetica,sans-serif" font-weight="800" font-size="${size.toFixed(2)}" fill="#000">${esc(line)}</text>`);
@@ -260,20 +266,22 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
     parts.push(`<text x="${fx}" y="${y.toFixed(2)}" font-family="Arial,Helvetica,sans-serif" font-size="${(2.4 * fs).toFixed(2)}" fill="#000">${esc(metaBits.join("  ·  "))}</text>`);
     y += 3 * fs;
   }
-  // Price (face) + inventory type / location tag line.
-  const tagBits = [tpl.show.invType ? item.invTypeName : "", tpl.show.location ? item.locationKey : ""].filter(Boolean);
-  if (tpl.show.price || tagBits.length) {
-    // Advance by the price's own ascent so a big price can't climb into the
-    // category/condition line above it.
-    const priceFont = 5.2 * fs * tpl.priceScale;
+  // Face price: big, left-aligned in the same column as the title/meta.
+  if (tpl.show.price) {
+    // Advance by the price's own ascent so it can't climb into the meta line.
+    const priceFont = 6.0 * fs * tpl.priceScale;
     const py = y + priceFont * 0.82;
-    if (tpl.show.price) {
-      parts.push(`<text x="${fx}" y="${py.toFixed(2)}" font-family="Arial,Helvetica,sans-serif" font-weight="800" font-size="${priceFont.toFixed(2)}" fill="#000">${esc(money(item.priceCents))}</text>`);
-    }
-    if (tagBits.length) {
-      parts.push(`<text x="${(fx + fw).toFixed(2)}" y="${py.toFixed(2)}" text-anchor="end" font-family="Arial,Helvetica,sans-serif" font-size="${(2.1 * fs).toFixed(2)}" fill="#000">${esc(tagBits.join(" · "))}</text>`);
-    }
+    parts.push(`<text x="${fx}" y="${py.toFixed(2)}" font-family="Arial,Helvetica,sans-serif" font-weight="800" font-size="${priceFont.toFixed(2)}" fill="#000">${esc(money(item.priceCents))}</text>`);
     y = py;
+  }
+  // Vertical "Retail · PDX" rail along the right edge of the face (reads
+  // bottom-up), spanning the area above the barcode strip.
+  if (tagBits.length) {
+    const rx = fx + fw - 0.8;
+    const rTop = INSET;
+    const rBottom = wantBarcode ? Math.max(rTop + 2, bcY - 1) : H - INSET;
+    const ry = (rTop + rBottom) / 2;
+    parts.push(`<text x="${rx.toFixed(2)}" y="${ry.toFixed(2)}" transform="rotate(-90 ${rx.toFixed(2)} ${ry.toFixed(2)})" text-anchor="middle" dominant-baseline="central" font-family="Arial,Helvetica,sans-serif" font-size="${(2.0 * fs).toFixed(2)}" letter-spacing="0.15" fill="#000">${esc(tagBits.join(" · "))}</text>`);
   }
   // Barcode pinned to the bottom (face-width, or full label width — see above).
   // Never stretch to fill: modules cap at 0.30mm so a compact numeric code
