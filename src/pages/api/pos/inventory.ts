@@ -76,6 +76,8 @@ export const POST: APIRoute = async ({ locals, request }) => {
         unit_cost_cents: b.unitCostCents == null ? null : Math.max(0, Math.round(Number(b.unitCostCents)) || 0),
         price_cents_at_entry: v.price_cents ?? 0, was_new_variant: !!b.wasNew,
         applied: false,
+        // supplier column ships with 20260801000003 — key omitted unless sent
+        ...(b.supplier ? { supplier: String(b.supplier).slice(0, 120) } : {}),
       }).select("id").single();
       if (error) return json({ error: /applied/.test(error.message) ? "Run migration 20260801000002_entry_drafts.sql first." : error.message }, 500);
       return json({ ok: true, itemId: item.id });
@@ -85,6 +87,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
       const patch: Record<string, unknown> = {};
       if (b.qty != null) patch.qty_added = Math.max(1, Math.round(Number(b.qty)) || 1);
       if (b.unitCostCents !== undefined) patch.unit_cost_cents = b.unitCostCents == null ? null : Math.max(0, Math.round(Number(b.unitCostCents)) || 0);
+      if (b.supplier !== undefined) patch.supplier = b.supplier ? String(b.supplier).slice(0, 120) : null;
       if (!Object.keys(patch).length) return json({ error: "Nothing to update" }, 400);
       // RLS only matches lines on OPEN entries — a frozen line comes back null.
       const { data, error } = await sb.from("inventory_entry_items").update(patch).eq("id", b.itemId).select("id").maybeSingle();
@@ -105,6 +108,45 @@ export const POST: APIRoute = async ({ locals, request }) => {
       const { data, error } = await sb.from("inventory_entries").update({ order_total_cents: cents }).eq("id", b.entryId).eq("status", "open").select("id").maybeSingle();
       if (error) return json({ error: error.message }, 500);
       if (!data) return json({ error: "Draft not found or already committed." }, 409);
+      return json({ ok: true });
+    }
+    case "setEntrySupplier": {
+      if (!b.entryId) return json({ error: "entryId required" }, 400);
+      const { data, error } = await sb.from("inventory_entries")
+        .update({ supplier: b.supplier ? String(b.supplier).slice(0, 120) : null })
+        .eq("id", b.entryId).eq("status", "open").select("id").maybeSingle();
+      if (error) return json({ error: error.message }, 500);
+      if (!data) return json({ error: "Draft not found or already committed." }, 409);
+      return json({ ok: true });
+    }
+    case "revertEntry": {
+      // Delete a COMMITTED entry = reverse the stock it applied. Managers
+      // only, ≤24h — the RPC re-enforces both; typed-DELETE UX is client-side.
+      if (!b.entryId) return json({ error: "entryId required" }, 400);
+      if (!["owner", "manager"].includes(locals.profile?.role ?? "")) return json({ error: "Managers only." }, 403);
+      const { data: reversed, error } = await sb.rpc("revert_entry", { p_entry_id: b.entryId });
+      if (error) {
+        const missing = (error as any).code === "PGRST202" || /could not find the function/i.test(error.message);
+        return json({ error: missing ? "Run migration 20260801000003_entry_edit_sources.sql first." : error.message }, 400);
+      }
+      return json({ ok: true, reversed: Number(reversed ?? 0) });
+    }
+    case "addSupplierLink": {
+      if (!["owner", "manager"].includes(locals.profile?.role ?? "")) return json({ error: "Managers only." }, 403);
+      if (!b.productId || !String(b.label ?? "").trim()) return json({ error: "Product and label required" }, 400);
+      const url = b.url ? String(b.url).trim().slice(0, 500) : null;
+      if (url && !/^https?:\/\//i.test(url)) return json({ error: "Links must start with http(s)://" }, 400);
+      const { data, error } = await sb.from("product_suppliers")
+        .insert({ product_id: b.productId, label: String(b.label).trim().slice(0, 120), url })
+        .select("id, label, url").single();
+      if (error) return json({ error: error.message }, 500);
+      return json({ ok: true, link: data });
+    }
+    case "deleteSupplierLink": {
+      if (!["owner", "manager"].includes(locals.profile?.role ?? "")) return json({ error: "Managers only." }, 403);
+      if (!b.id) return json({ error: "id required" }, 400);
+      const { error } = await sb.from("product_suppliers").delete().eq("id", b.id);
+      if (error) return json({ error: error.message }, 500);
       return json({ ok: true });
     }
     case "deleteEntry": {
@@ -155,18 +197,20 @@ export const POST: APIRoute = async ({ locals, request }) => {
     }
     case "getEntry": {
       if (!b.entryId) return json({ error: "entryId required" }, 400);
-      // label_code / order_total_cents ship in later migrations — probe so
-      // these selects can't 400 pre-migration.
-      const [{ error: lcErr }, { error: otErr }] = await Promise.all([
+      // label_code / order_total_cents / supplier ship in later migrations —
+      // probe so these selects can't 400 pre-migration.
+      const [{ error: lcErr }, { error: otErr }, { error: supErr }] = await Promise.all([
         sb.from("product_variants").select("label_code").limit(1),
         sb.from("inventory_entries").select("order_total_cents").limit(1),
+        sb.from("inventory_entries").select("supplier").limit(1),
       ]);
       const lcCol = lcErr ? "" : ", label_code";
       const otCol = otErr ? "" : ", order_total_cents";
+      const supCol = supErr ? "" : ", supplier";
       const [{ data: entry }, { data: items, error }] = await Promise.all([
-        sb.from("inventory_entries").select(`id, human_id, source, status, note, created_at, committed_at${otCol}, employee:profiles(full_name)`).eq("id", b.entryId).maybeSingle(),
+        sb.from("inventory_entries").select(`id, human_id, source, status, note, created_at, committed_at${otCol}${supCol}, employee:profiles(full_name)`).eq("id", b.entryId).maybeSingle(),
         sb.from("inventory_entry_items")
-          .select(`id, qty_added, unit_cost_cents, price_cents_at_entry, was_new_variant, created_at, variant:product_variants(id, sku, internal_code${lcCol}, price_cents, quantity, completeness_code, grade_code, condition, inventory_type_id, location_id, product:products(title, platform, category:categories(name)))`)
+          .select(`id, qty_added, unit_cost_cents, price_cents_at_entry, was_new_variant, created_at${supCol}, variant:product_variants(id, sku, internal_code${lcCol}, price_cents, quantity, completeness_code, grade_code, condition, inventory_type_id, location_id, product:products(title, platform, category:categories(name)))`)
           .eq("entry_id", b.entryId).order("created_at"),
       ]);
       if (!entry) return json({ error: "Entry not found." }, 404);

@@ -40,6 +40,7 @@ const pageData = {
   grades: grades ?? [],
   lblTemplates: labelTemplates((settingsRow as any)?.settings),
   storeName: (settingsRow as any)?.store_name || "TimeLag",
+  isManager: ["owner", "manager"].includes(Astro.locals.profile?.role ?? ""),
 };
 ---
 
@@ -76,7 +77,12 @@ const pageData = {
   .ent-row.on { box-shadow:inset 3px 0 0 var(--cyan); background:rgba(0,224,255,.06); }
   .ent-id { font-weight:800; }
   .ent-meta { color:var(--muted-2); font-size:0.8rem; }
-  .ed-line { display:grid; grid-template-columns:2.4rem 1fr auto; gap:0.5rem; align-items:center; padding:0.42rem 0.2rem; border-bottom:1px solid rgba(127,127,127,.12); font-size:0.9rem; }
+  .ed-line { display:grid; grid-template-columns:2.4rem 1fr auto auto; gap:0.5rem; align-items:center; padding:0.42rem 0.2rem; border-bottom:1px solid rgba(127,127,127,.12); font-size:0.9rem; }
+  .ed-src { color:var(--muted-2); font-size:0.76rem; }
+  .ed-editrow { display:flex; gap:0.7rem; align-items:end; flex-wrap:wrap; padding:0.6rem; margin:0.3rem 0; background:rgba(44,230,224,.06); border:1px solid rgba(44,230,224,.25); }
+  .ed-editrow label { display:grid; gap:0.2rem; font-size:0.76rem; font-weight:600; color:var(--muted); }
+  .ed-editrow select, .ed-editrow input { padding:0.35rem 0.45rem; }
+  .ed-editrow input { width:6rem; text-align:right; }
   .ed-qty { font-weight:700; color:var(--muted-2); }
   .ed-price { text-align:right; font-variant-numeric:tabular-nums; }
   .ed-changed { color:var(--magenta); font-size:0.74rem; }
@@ -140,21 +146,75 @@ const pageData = {
           <div class="ed-line">
             <span class="ed-qty">${it.qty_added}×</span>
             <span>${esc(p.title ?? "?")} <span class="muted-2" style="font-size:0.78rem;">${esc(condShort(v))}${it.was_new_variant ? " · new" : ""}</span>
+              ${it.supplier ? `<span class="ed-src">from ${esc(it.supplier)}</span>` : ""}
               ${changed ? `<span class="ed-changed">price ${money(it.price_cents_at_entry)} → ${money(v.price_cents)}</span>` : ""}</span>
             <span class="ed-price">${money(v.price_cents ?? 0)}</span>
+            ${e.status !== "open" && v.id ? `<button class="link-btn" data-editline="${it.id}" title="Fix condition / price on this item">✎</button>` : `<span></span>`}
           </div>`;
       }).join("");
       const isDraft = e.status === "open";
+      // Committed entries: managers may DELETE (= reverse the stock) only
+      // within the first 24 hours after finishing.
+      const canRevert = !isDraft && data.isManager && e.committed_at &&
+        (Date.now() - new Date(e.committed_at).getTime()) < 24 * 3600 * 1000;
       detail.innerHTML = `
-        <p class="muted" style="margin:0 0 0.6rem;font-size:0.84rem;">${when(e.created_at)} · ${esc(e.employee?.full_name ?? "—")} · ${esc(e.source)} · <span class="pill ${isDraft ? "cyan" : "muted"}">${isDraft ? "draft" : e.status}</span></p>
+        <p class="muted" style="margin:0 0 0.6rem;font-size:0.84rem;">${when(e.created_at)} · ${esc(e.employee?.full_name ?? "—")} · ${esc(e.source)}${e.supplier ? ` · from <strong>${esc(e.supplier)}</strong>` : ""} · <span class="pill ${isDraft ? "cyan" : "muted"}">${isDraft ? "draft" : e.status}</span></p>
         ${isDraft ? `<p class="muted" style="margin:0 0 0.6rem;font-size:0.8rem;">Staged only — nothing is in stock or on the website until this draft is finished.</p>` : ""}
         <div>${lines || `<p class="empty">No lines on this entry.</p>`}</div>
-        <div style="display:flex;gap:0.5rem;margin-top:0.9rem;">
+        <div style="display:flex;gap:0.5rem;margin-top:0.9rem;flex-wrap:wrap;">
           ${isDraft
             ? `<a class="btn btn-primary btn-sm" href="/inventory?entry=${e.id}">▶ Resume draft</a>
                <button id="ed-del" class="btn btn-ghost btn-sm" type="button" style="color:var(--magenta);border-color:rgba(255,73,208,.4);">🗑 Delete draft</button>`
-            : `<button id="ed-print" class="btn btn-primary btn-sm" type="button">🏷 Reprint labels</button>`}
+            : `<button id="ed-print" class="btn btn-primary btn-sm" type="button">🏷 Reprint labels</button>
+               ${canRevert ? `<button id="ed-revert" class="btn btn-ghost btn-sm" type="button" style="color:var(--magenta);border-color:rgba(255,73,208,.4);" title="Managers only, within 24h of finishing">🗑 Delete entry (24h)</button>` : ""}`}
         </div>`;
+
+      // Per-line fix-ups on committed entries: condition / completeness /
+      // price are LIVE variant edits — the entry's qty & cost history stays.
+      (detail as HTMLElement).querySelectorAll("[data-editline]").forEach((b: any) => b.addEventListener("click", () => {
+        const it = (j.items || []).find((x: any) => x.id === b.dataset.editline);
+        if (!it?.variant) return;
+        detail.querySelector(".ed-editrow")?.remove();
+        const v = it.variant;
+        const row = document.createElement("div");
+        row.className = "ed-editrow";
+        row.innerHTML = `
+          <label>Completeness<select data-ee="comp"><option value="">—</option>${(data.completeness || []).map((c: any) => `<option value="${c.code}"${c.code === v.completeness_code ? " selected" : ""}>${esc(c.label)}</option>`).join("")}</select></label>
+          <label>Grade<select data-ee="grade"><option value="">—</option>${grades.map((g: any) => `<option value="${g.code}"${g.code === v.grade_code ? " selected" : ""}>${esc((g.icon ? g.icon + " " : "") + g.label)}</option>`).join("")}</select></label>
+          <label>Price $<input data-ee="price" type="number" min="0" step="0.01" value="${((v.price_cents ?? 0) / 100).toFixed(2)}"></label>
+          <button class="btn btn-primary btn-sm" data-ee="save" type="button">Save</button>
+          <button class="btn btn-ghost btn-sm" data-ee="cancel" type="button">Cancel</button>`;
+        b.closest(".ed-line")!.after(row);
+        row.querySelector('[data-ee="cancel"]')!.addEventListener("click", () => row.remove());
+        row.querySelector('[data-ee="save"]')!.addEventListener("click", async () => {
+          const comp = (row.querySelector('[data-ee="comp"]') as HTMLSelectElement).value;
+          const grade = (row.querySelector('[data-ee="grade"]') as HTMLSelectElement).value;
+          const priceCents = Math.max(0, Math.round(parseFloat((row.querySelector('[data-ee="price"]') as HTMLInputElement).value) * 100) || 0);
+          const condition = [(data.completeness || []).find((c: any) => c.code === comp)?.label, grades.find((g: any) => g.code === grade)?.label].filter(Boolean).join(" ") || v.condition || "Used";
+          try {
+            await api({ action: "updateVariant", id: v.id, completenessCode: comp || null, gradeCode: grade || null, priceCents, condition });
+            openEntry(id); // re-render with fresh values
+          } catch (err: any) { alert(err.message); }
+        });
+      }));
+
+      // Triple-gated committed-entry delete: confirm → type DELETE → confirm.
+      document.getElementById("ed-revert")?.addEventListener("click", async () => {
+        const units = (j.items || []).reduce((s: number, x: any) => s + (x.qty_added || 0), 0);
+        if (!confirm(`Delete committed Entry #${e.human_id}?\n\nThis REVERSES what it added — ${units} unit${units === 1 ? "" : "s"} come back OUT of stock (never below zero) and the entry is permanently removed from history.`)) return;
+        const typed = prompt(`Type DELETE (all caps) to confirm:`);
+        if (typed !== "DELETE") { if (typed != null) alert("Not deleted — you must type DELETE exactly."); return; }
+        if (!confirm("Last check — really delete and reverse this entry? This cannot be undone.")) return;
+        try {
+          const j2 = await api({ action: "revertEntry", entryId: e.id });
+          const idx = entries.findIndex((x) => x.id === e.id);
+          if (idx >= 0) entries.splice(idx, 1);
+          selId = "";
+          renderList();
+          $("ed-title").textContent = "Select an entry";
+          detail.innerHTML = `<p class="empty">Entry #${e.human_id} deleted — ${j2.reversed} line${j2.reversed === 1 ? "" : "s"} reversed out of stock.</p>`;
+        } catch (err: any) { alert(err.message); }
+      });
       document.getElementById("ed-del")?.addEventListener("click", async () => {
         const n = (j.items || []).length;
         if (!confirm(`Delete draft Entry #${e.human_id}?\n\n${n} staged line${n === 1 ? "" : "s"} will be discarded. Nothing was added to stock, so nothing else changes.`)) return;

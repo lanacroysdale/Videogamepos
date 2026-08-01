@@ -21,12 +21,24 @@ const hasTypes = !!invTypesSrv;
 // Entry DRAFTS (migration 20260801000002): staged lines need the `applied`
 // column — probe so the entry screen can gate itself pre-migration.
 const { error: draftProbeErr } = await supabase.from("inventory_entry_items").select("applied").limit(1);
+// Sources + supplier links (migration 20260801000003).
+const { error: srcProbeErr } = await supabase.from("inventory_entries").select("supplier").limit(1);
 const { error: lcProbeErr } = await supabase.from("product_variants").select("label_code").limit(1);
+// Previously-used sources feed the datalist (RLS keeps product_suppliers
+// manager-only; entries are staff-visible anyway).
+let knownSuppliers: string[] = [];
+if (!srcProbeErr) {
+  const [{ data: entSup }, { data: prodSup }] = await Promise.all([
+    supabase.from("inventory_entries").select("supplier").not("supplier", "is", null).order("created_at", { ascending: false }).limit(200),
+    supabase.from("product_suppliers").select("label").limit(200),
+  ]);
+  knownSuppliers = [...new Set([...(entSup ?? []).map((r: any) => r.supplier), ...(prodSup ?? []).map((r: any) => r.label)].filter(Boolean))].slice(0, 40);
+}
 const variantExtraCols = `${hasTypes ? ", inventory_type_id, location_id" : ""}${lcProbeErr ? "" : ", label_code"}`;
 const { data: products } = await supabase
   .from("products")
   .select(
-    `id, title, slug, platform, franchise, genre, description, image_url, alternative_names, tags, category_id, category:categories(name,color), product_variants(id, condition, completeness, completeness_code, grade_code, sku, barcode, internal_code, price_cents, online_price_cents, cost_cents, quantity, online_visible${variantExtraCols}, product_barcodes(id, barcode, label))`,
+    `id, title, slug, platform, franchise, genre, description, image_url, alternative_names, tags, category_id, category:categories(name,color)${srcProbeErr ? "" : ", product_suppliers(id, label, url)"}, product_variants(id, condition, completeness, completeness_code, grade_code, sku, barcode, internal_code, price_cents, online_price_cents, cost_cents, quantity, online_visible${variantExtraCols}, product_barcodes(id, barcode, label))`,
   )
   .order("title");
 
@@ -44,6 +56,7 @@ const items = (products ?? []).map((p: any) => ({
   categoryName: p.category?.name ?? "",
   categoryColor: p.category?.color ?? "#2ce6e0",
   ebayId: (p.tags ?? []).find((t: string) => t.startsWith("ebay:"))?.slice(5) ?? "",
+  supplierLinks: p.product_suppliers ?? [], // manager-only via RLS (staff get [])
   variants: (p.product_variants ?? []).map((v: any) => ({
     id: v.id,
     condition: v.condition,
@@ -82,6 +95,7 @@ const posData = {
   // through the host-split middleware and lands on the dashboard.
   webBase: import.meta.env.PROD ? `https://${MARKETING_HOSTS[0]}` : "",
   draftsReady: !draftProbeErr,
+  sourcesReady: !srcProbeErr,
 };
 ---
 
@@ -100,6 +114,7 @@ const posData = {
       <div class="ent-head">
         <h2 style="margin:0;">📥 Inventory Entry <span id="ent-num"></span></h2>
         <span class="pill cyan">draft — autosaves</span>
+        <label class="ent-src">Source <input id="ent-supplier" list="supplier-list" placeholder="e.g. VGNY, eBay, estate sale…" /></label>
         <div class="ent-head-actions">
           <button id="ent-exit" class="btn btn-ghost btn-sm" type="button" title="Leave — the draft stays in 📥 Entries">💾 Save &amp; exit</button>
           <button id="ent-delete" class="btn btn-ghost btn-sm ent-del" type="button">🗑 Delete draft</button>
@@ -116,9 +131,9 @@ const posData = {
       </div>
       <table class="tbl" id="ent-table">
         <thead><tr>
-          <th style="width:28%">Item</th><th>Condition</th><th class="num">Qty</th>
+          <th style="width:26%">Item</th><th>Condition</th><th class="num">Qty</th>
           <th class="num">Paid $ <small class="muted">each</small></th><th class="num">Price $</th>
-          <th>Compare</th><th></th>
+          <th class="ent-srccol">Source</th><th>Compare</th><th></th>
         </tr></thead>
         <tbody id="ent-body"></tbody>
       </table>
@@ -159,6 +174,7 @@ const posData = {
   </div>
 
   <datalist id="comp-list">{completeness?.map((c) => <option value={c.label}>{c.code}</option>)}</datalist>
+  <datalist id="supplier-list">{knownSuppliers.map((s) => <option value={s} />)}</datalist>
 
   <div class="pos-panel inv-shell" id="inv-shell">
     <div class="inv-toolbar">
@@ -362,6 +378,12 @@ const posData = {
   .ent-head { display:flex; align-items:center; gap:0.7rem; flex-wrap:wrap; }
   .ent-head-actions { display:flex; gap:0.5rem; margin-left:auto; flex-wrap:wrap; }
   .ent-del { color:var(--magenta); border-color:rgba(255,73,208,.4); }
+  .ent-src { display:flex; align-items:center; gap:0.4rem; font-size:0.84rem; font-weight:600; color:var(--muted); }
+  .ent-src input { width:13rem; padding:0.35rem 0.5rem; }
+  #ent-table [data-ef="src"] { width:8rem; text-align:left; }
+  .sup-row { display:flex; align-items:center; gap:0.6rem; padding:0.3rem 0.1rem; border-bottom:1px solid var(--border); font-size:0.86rem; }
+  .sup-row a { color:var(--cyan); }
+  .sup-row .link-btn { margin-left:auto; }
   .ent-add { display:flex; gap:0.6rem; align-items:center; margin-bottom:0.9rem; }
   .ent-add .ti-desc-cell { position:relative; }
   .ent-add input { width:100%; }
@@ -678,6 +700,10 @@ const posData = {
   });
 
   /* ---------- Edit modal ---------- */
+  // Manager-only restock links shown in the modal (staff never receive the data).
+  function supRowHtml(l: any) {
+    return `<div class="sup-row" data-supid="${l.id}">${l.url ? `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)} ↗</a>` : `<span>${esc(l.label)}</span>`}<button class="link-btn" data-supdel="${l.id}" type="button">✕</button></div>`;
+  }
   const modal = $("edit-modal");
   function closeModal() { modal.hidden = true; }
   modal.querySelectorAll("[data-close]").forEach((el) => el.addEventListener("click", closeModal));
@@ -733,7 +759,14 @@ const posData = {
       <div class="m-section">
         <div class="m-label">Barcodes</div>
         <div id="bc-blocks">${bcBlocks}</div>
-      </div>`;
+      </div>
+
+      ${data.isManager && sourcesReady ? `
+      <div class="m-section">
+        <div class="m-label">Suppliers — where to restock <small style="text-transform:none;letter-spacing:0;">(only managers see this)</small></div>
+        <div id="sup-list">${(p.supplierLinks || []).map(supRowHtml).join("")}</div>
+        <div class="bc-add"><input id="sup-label" placeholder="Name — e.g. VGNY, Solutions2Go"><input id="sup-url" placeholder="https://… (optional)" style="width:14rem;"><button id="sup-add" class="btn btn-ghost btn-sm" type="button">＋ Add supplier</button></div>
+      </div>` : ""}`;
 
     const link = $("m-weblink") as HTMLAnchorElement;
     if (anyWeb(p)) { link.href = webBase + (p.slug ? `/shop/${p.slug}` : "/shop"); link.hidden = false; } else { link.hidden = true; }
@@ -744,6 +777,32 @@ const posData = {
     bindReprice(p);
     wireModalComps();
     $("add-cond").addEventListener("click", () => addCondition(p));
+
+    // Supplier links (manager-only section; delegated so re-renders stay clean).
+    if (data.isManager && sourcesReady) {
+      const supList = document.getElementById("sup-list");
+      supList?.addEventListener("click", async (ev) => {
+        const btn = (ev.target as HTMLElement).closest<HTMLElement>("[data-supdel]");
+        if (!btn) return;
+        try {
+          await api({ action: "deleteSupplierLink", id: btn.dataset.supdel });
+          p.supplierLinks = (p.supplierLinks || []).filter((x: any) => x.id !== btn.dataset.supdel);
+          btn.closest(".sup-row")?.remove();
+        } catch (e: any) { alert(e.message); }
+      });
+      document.getElementById("sup-add")?.addEventListener("click", async () => {
+        const label = (document.getElementById("sup-label") as HTMLInputElement).value.trim();
+        const url = (document.getElementById("sup-url") as HTMLInputElement).value.trim();
+        if (!label) { alert("Supplier name required"); return; }
+        try {
+          const j = await api({ action: "addSupplierLink", productId: p.id, label, url: url || null });
+          p.supplierLinks = [...(p.supplierLinks || []), j.link];
+          supList?.insertAdjacentHTML("beforeend", supRowHtml(j.link));
+          (document.getElementById("sup-label") as HTMLInputElement).value = "";
+          (document.getElementById("sup-url") as HTMLInputElement).value = "";
+        } catch (e: any) { alert(e.message); }
+      });
+    }
 
     // Label printing (per-condition buttons live in the Barcodes section).
     document.querySelectorAll<HTMLButtonElement>("[data-printlabel]").forEach((b) => b.addEventListener("click", () => {
@@ -1057,11 +1116,14 @@ const posData = {
      draft autosaves on every edit and survives leaving the page (resume or
      delete it from 📥 Entries). */
   const draftsReady: boolean = !!(data as any).draftsReady;
+  const sourcesReady: boolean = !!(data as any).sourcesReady;
   let entryId = "";
   let entryHuman = 0;
   let entryMode = false;
-  let entRows: any[] = []; // {itemId, variantId, title, platform, cond, qty, costCents, priceCents, wasNew}
+  let entRows: any[] = []; // {itemId, variantId, title, platform, cond, qty, costCents, priceCents, wasNew, supplier}
   let entOrderTotal: number | null = null;
+  let entSupplier = ""; // entry-level source (per-line placeholder default)
+  if (!sourcesReady) document.querySelectorAll<HTMLElement>(".ent-src, .ent-srccol").forEach((el) => (el.style.display = "none"));
   try { const s = JSON.parse(sessionStorage.getItem("tl-entry") || "null"); if (s?.id) { entryId = s.id; entryHuman = s.h; } } catch {}
 
   function setEntryMode(on: boolean) {
@@ -1116,9 +1178,10 @@ const posData = {
         <td class="num"><input data-ef="qty" type="number" min="1" value="${r.qty}"></td>
         <td class="num"><input data-ef="cost" type="number" min="0" step="0.01" value="${r.costCents == null ? "" : (r.costCents / 100).toFixed(2)}" placeholder="—"></td>
         <td class="num"><input data-ef="price" type="number" min="0" step="0.01" value="${(r.priceCents / 100).toFixed(2)}"></td>
+        <td class="ent-srccol"${sourcesReady ? "" : ' style="display:none"'}><input data-ef="src" value="${esc(r.supplier || "")}" placeholder="${esc(entSupplier || "—")}" list="supplier-list"></td>
         <td>${cmpLinks([r.title, r.platform].filter(Boolean).join(" "))}</td>
         <td><button class="link-btn" data-erm title="Remove line">✕</button></td>
-      </tr>`).join("") : `<tr><td colspan="7" class="empty" style="padding:1rem 0.4rem;">Nothing staged yet — scan or search above to add the first item.</td></tr>`;
+      </tr>`).join("") : `<tr><td colspan="8" class="empty" style="padding:1rem 0.4rem;">Nothing staged yet — scan or search above to add the first item.</td></tr>`;
 
     body.querySelectorAll<HTMLElement>("tr[data-item]").forEach((tr) => {
       const r = entRows.find((x) => x.itemId === tr.dataset.item)!;
@@ -1142,6 +1205,10 @@ const posData = {
         if (lv) lv.priceCents = r.priceCents;
         try { await api({ action: "updateVariant", id: r.variantId, priceCents: r.priceCents }); } catch (err: any) { alert(err.message); }
       });
+      tr.querySelector<HTMLInputElement>('[data-ef="src"]')?.addEventListener("change", async (e) => {
+        r.supplier = (e.target as HTMLInputElement).value.trim() || null;
+        try { await api({ action: "updateEntryItem", itemId: r.itemId, supplier: r.supplier }); } catch (err: any) { alert(err.message); }
+      });
       tr.querySelector("[data-erm]")!.addEventListener("click", async () => {
         try {
           await api({ action: "removeEntryItem", itemId: r.itemId });
@@ -1161,11 +1228,14 @@ const posData = {
       entryId = id; entryHuman = j.entry.human_id;
       entOrderTotal = j.entry.order_total_cents ?? null;
       ($("ent-ordertotal") as HTMLInputElement).value = entOrderTotal == null ? "" : (entOrderTotal / 100).toFixed(2);
+      entSupplier = j.entry.supplier || "";
+      const supInp = $("ent-supplier") as HTMLInputElement | null;
+      if (supInp) supInp.value = entSupplier;
       entRows = (j.items || []).map((it: any) => {
         const v = it.variant || {}; const pr = v.product || {};
         return {
           itemId: it.id, variantId: v.id, qty: it.qty_added, costCents: it.unit_cost_cents,
-          priceCents: v.price_cents ?? 0, wasNew: it.was_new_variant,
+          priceCents: v.price_cents ?? 0, wasNew: it.was_new_variant, supplier: it.supplier ?? null,
           title: pr.title ?? "?", platform: pr.platform || pr.category?.name || "",
           cond: condLabel({ completenessCode: v.completeness_code, gradeCode: v.grade_code, condition: v.condition }),
         };
@@ -1211,6 +1281,12 @@ const posData = {
     entTotals();
     try { await api({ action: "setOrderTotal", entryId, orderTotalCents: entOrderTotal }); } catch (err: any) { alert(err.message); }
   });
+  ($("ent-supplier") as HTMLInputElement)?.addEventListener("change", async (e) => {
+    entSupplier = (e.target as HTMLInputElement).value.trim();
+    renderEnt(); // refresh per-line placeholders
+    if (!entryId) return;
+    try { await api({ action: "setEntrySupplier", entryId, supplier: entSupplier || null }); } catch (err: any) { alert(err.message); }
+  });
 
   // Stage a variant onto the draft (scanning the same one again bumps qty).
   async function stageVariant(p: any, v: any) {
@@ -1224,7 +1300,7 @@ const posData = {
         return;
       }
       const j = await api({ action: "stageItem", entryId, variantId: v.id, qty: 1 });
-      entRows.push({ itemId: j.itemId, variantId: v.id, qty: 1, costCents: null, priceCents: v.priceCents, wasNew: false, title: p.title, platform: p.platform || p.categoryName || "", cond: condLabel(v) });
+      entRows.push({ itemId: j.itemId, variantId: v.id, qty: 1, costCents: null, priceCents: v.priceCents, wasNew: false, supplier: null, title: p.title, platform: p.platform || p.categoryName || "", cond: condLabel(v) });
       renderEnt();
     } catch (e: any) { alert(e.message); }
   }
@@ -1404,7 +1480,7 @@ const posData = {
         newItem.variants[0].quantity = 0;
         entRows.push({
           itemId: j.itemId, variantId: j.variantId, qty: body.quantity || 1, costCents: null,
-          priceCents: body.priceCents, wasNew: true, title: newItem.title,
+          priceCents: body.priceCents, wasNew: true, supplier: null, title: newItem.title,
           platform: newItem.platform || newItem.categoryName || "", cond: condLabel(newItem.variants[0]),
         });
         renderEnt();
