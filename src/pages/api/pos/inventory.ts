@@ -43,10 +43,15 @@ export const POST: APIRoute = async ({ locals, request }) => {
       return json({ ok: true, entry: data, resumed: false });
     }
     case "receiveStock": {
+      // Immediate quantity bump (quick adjust from the edit modal). With entry
+      // DRAFTS this no longer requires a session — no entryId = bump + ledger
+      // only; with an entryId it also logs a legacy (already-applied) line.
       const qty = Math.max(1, Math.round(Number(b.qtyAdded)) || 1);
-      if (!b.entryId || !b.variantId) return json({ error: "entryId and variantId required" }, 400);
-      const { data: entry } = await sb.from("inventory_entries").select("status").eq("id", b.entryId).maybeSingle();
-      if (!entry || entry.status !== "open") return json({ error: "That entry is closed — start a new receiving session." }, 409);
+      if (!b.variantId) return json({ error: "variantId required" }, 400);
+      if (b.entryId) {
+        const { data: entry } = await sb.from("inventory_entries").select("status").eq("id", b.entryId).maybeSingle();
+        if (!entry || entry.status !== "open") return json({ error: "That entry is closed — start a new receiving session." }, 409);
+      }
       const { data: v } = await sb.from("product_variants").select("id, price_cents").eq("id", b.variantId).maybeSingle();
       if (!v) return json({ error: "Variant not found." }, 404);
       // Atomic relative increment (RPC) — two stations receiving the same
@@ -54,18 +59,83 @@ export const POST: APIRoute = async ({ locals, request }) => {
       const { data: newQty, error } = await sb.rpc("receive_stock", { p_variant_id: b.variantId, p_qty: qty });
       if (error) return json({ error: error.message }, 500);
       const cost = b.unitCostCents == null ? null : Math.max(0, Math.round(Number(b.unitCostCents)) || 0);
-      await logReceive(b.entryId, b.variantId, qty, v.price_cents ?? 0, cost, false);
+      if (b.entryId) await logReceive(b.entryId, b.variantId, qty, v.price_cents ?? 0, cost, false);
+      else await sb.from("stock_movements").insert({ variant_id: b.variantId, delta: qty, reason: "receive", channel: "in_store", employee_id: uid });
       return json({ ok: true, newQuantity: Number(newQty ?? 0) });
+    }
+    // ---- Entry DRAFTS (staged lines; nothing applies until commit) ----
+    case "stageItem": {
+      const qty = Math.max(1, Math.round(Number(b.qty)) || 1);
+      if (!b.entryId || !b.variantId) return json({ error: "entryId and variantId required" }, 400);
+      const { data: entry } = await sb.from("inventory_entries").select("status").eq("id", b.entryId).maybeSingle();
+      if (!entry || entry.status !== "open") return json({ error: "That draft is closed — start a new entry." }, 409);
+      const { data: v } = await sb.from("product_variants").select("id, price_cents").eq("id", b.variantId).maybeSingle();
+      if (!v) return json({ error: "Variant not found." }, 404);
+      const { data: item, error } = await sb.from("inventory_entry_items").insert({
+        entry_id: b.entryId, variant_id: b.variantId, qty_added: qty,
+        unit_cost_cents: b.unitCostCents == null ? null : Math.max(0, Math.round(Number(b.unitCostCents)) || 0),
+        price_cents_at_entry: v.price_cents ?? 0, was_new_variant: !!b.wasNew,
+        applied: false,
+      }).select("id").single();
+      if (error) return json({ error: /applied/.test(error.message) ? "Run migration 20260801000002_entry_drafts.sql first." : error.message }, 500);
+      return json({ ok: true, itemId: item.id });
+    }
+    case "updateEntryItem": {
+      if (!b.itemId) return json({ error: "itemId required" }, 400);
+      const patch: Record<string, unknown> = {};
+      if (b.qty != null) patch.qty_added = Math.max(1, Math.round(Number(b.qty)) || 1);
+      if (b.unitCostCents !== undefined) patch.unit_cost_cents = b.unitCostCents == null ? null : Math.max(0, Math.round(Number(b.unitCostCents)) || 0);
+      if (!Object.keys(patch).length) return json({ error: "Nothing to update" }, 400);
+      // RLS only matches lines on OPEN entries — a frozen line comes back null.
+      const { data, error } = await sb.from("inventory_entry_items").update(patch).eq("id", b.itemId).select("id").maybeSingle();
+      if (error) return json({ error: error.message }, 500);
+      if (!data) return json({ error: "That line is on a committed entry." }, 409);
+      return json({ ok: true });
+    }
+    case "removeEntryItem": {
+      if (!b.itemId) return json({ error: "itemId required" }, 400);
+      const { data, error } = await sb.from("inventory_entry_items").delete().eq("id", b.itemId).select("id").maybeSingle();
+      if (error) return json({ error: error.message }, 500);
+      if (!data) return json({ error: "That line is on a committed entry." }, 409);
+      return json({ ok: true });
+    }
+    case "setOrderTotal": {
+      if (!b.entryId) return json({ error: "entryId required" }, 400);
+      const cents = b.orderTotalCents == null ? null : Math.max(0, Math.round(Number(b.orderTotalCents)) || 0);
+      const { data, error } = await sb.from("inventory_entries").update({ order_total_cents: cents }).eq("id", b.entryId).eq("status", "open").select("id").maybeSingle();
+      if (error) return json({ error: error.message }, 500);
+      if (!data) return json({ error: "Draft not found or already committed." }, 409);
+      return json({ ok: true });
+    }
+    case "deleteEntry": {
+      if (!b.entryId) return json({ error: "entryId required" }, 400);
+      // Open drafts only (RLS enforces too); lines cascade with the entry.
+      const { data, error } = await sb.from("inventory_entries").delete().eq("id", b.entryId).eq("status", "open").select("id").maybeSingle();
+      if (error) return json({ error: error.message }, 500);
+      if (!data) return json({ error: "Draft not found or already committed." }, 409);
+      return json({ ok: true });
     }
     case "commitEntry": {
       if (!b.entryId) return json({ error: "entryId required" }, 400);
+      // Drafts: commit_entry() applies staged lines (quantity + ledger) and
+      // commits atomically. Pre-migration the function doesn't exist — fall
+      // back to the legacy status flip (those entries applied at receive time).
+      const { data: applied, error: rpcErr } = await sb.rpc("commit_entry", { p_entry_id: b.entryId });
+      if (!rpcErr) return json({ ok: true, applied: Number(applied ?? 0) });
+      // Only a genuinely MISSING function falls back to the legacy flip — any
+      // other RPC failure must surface (a silent flip would commit a draft
+      // without ever applying its stock).
+      const rpcMissing = (rpcErr as any).code === "PGRST202" || /could not find the function/i.test(rpcErr.message);
+      if (!rpcMissing) {
+        return json({ error: rpcErr.message }, /already committed/i.test(rpcErr.message) ? 409 : 500);
+      }
       const { data, error } = await sb
         .from("inventory_entries")
         .update({ status: "committed", committed_at: new Date().toISOString() })
         .eq("id", b.entryId).eq("status", "open").select("id").maybeSingle();
       if (error) return json({ error: error.message }, 500);
       if (!data) return json({ error: "Entry already committed." }, 409);
-      return json({ ok: true });
+      return json({ ok: true, applied: 0 });
     }
     case "listEntries": {
       const { data, error } = await sb
@@ -85,11 +155,16 @@ export const POST: APIRoute = async ({ locals, request }) => {
     }
     case "getEntry": {
       if (!b.entryId) return json({ error: "entryId required" }, 400);
-      // label_code ships in a later migration — probe so this select can't 400.
-      const { error: lcErr } = await sb.from("product_variants").select("label_code").limit(1);
+      // label_code / order_total_cents ship in later migrations — probe so
+      // these selects can't 400 pre-migration.
+      const [{ error: lcErr }, { error: otErr }] = await Promise.all([
+        sb.from("product_variants").select("label_code").limit(1),
+        sb.from("inventory_entries").select("order_total_cents").limit(1),
+      ]);
       const lcCol = lcErr ? "" : ", label_code";
+      const otCol = otErr ? "" : ", order_total_cents";
       const [{ data: entry }, { data: items, error }] = await Promise.all([
-        sb.from("inventory_entries").select("id, human_id, source, status, note, created_at, committed_at, employee:profiles(full_name)").eq("id", b.entryId).maybeSingle(),
+        sb.from("inventory_entries").select(`id, human_id, source, status, note, created_at, committed_at${otCol}, employee:profiles(full_name)`).eq("id", b.entryId).maybeSingle(),
         sb.from("inventory_entry_items")
           .select(`id, qty_added, unit_cost_cents, price_cents_at_entry, was_new_variant, created_at, variant:product_variants(id, sku, internal_code${lcCol}, price_cents, quantity, completeness_code, grade_code, condition, inventory_type_id, location_id, product:products(title, platform, category:categories(name)))`)
           .eq("entry_id", b.entryId).order("created_at"),
@@ -166,7 +241,9 @@ export const POST: APIRoute = async ({ locals, request }) => {
           completeness_code: b.completenessCode || null,
           grade_code: b.gradeCode || null,
           price_cents: Math.max(0, Math.round(Number(b.priceCents)) || 0),
-          quantity: Math.max(0, Math.round(Number(b.quantity)) || 0),
+          // Staged onto a draft → the variant starts at qty 0 (invisible to the
+          // website's qty>0 filters) and the qty lands when the draft commits.
+          quantity: b.stageEntryId ? 0 : Math.max(0, Math.round(Number(b.quantity)) || 0),
           sku: b.sku || null,
           barcode: b.barcode || null,
           // Keys OMITTED when absent (pre-migration PostgREST rejects unknown
@@ -177,6 +254,16 @@ export const POST: APIRoute = async ({ locals, request }) => {
         .select()
         .single();
       if (vErr) return json({ error: vErr.message }, 500);
+      if (b.stageEntryId) {
+        const { data: st, error: stErr } = await sb.from("inventory_entry_items").insert({
+          entry_id: b.stageEntryId, variant_id: variant.id,
+          qty_added: Math.max(1, Math.round(Number(b.quantity)) || 1),
+          unit_cost_cents: b.unitCostCents == null ? null : Math.max(0, Math.round(Number(b.unitCostCents)) || 0),
+          price_cents_at_entry: variant.price_cents ?? 0, was_new_variant: true, applied: false,
+        }).select("id").single();
+        if (stErr) return json({ error: stErr.message }, 500);
+        return json({ ok: true, productId: prod.id, variantId: variant.id, internalCode: variant.internal_code ?? "", itemId: st.id });
+      }
       if (b.entryId && variant.quantity > 0) {
         await logReceive(b.entryId, variant.id, variant.quantity, variant.price_cents ?? 0,
           b.unitCostCents == null ? null : Math.max(0, Math.round(Number(b.unitCostCents)) || 0), true);
@@ -193,13 +280,23 @@ export const POST: APIRoute = async ({ locals, request }) => {
           completeness_code: b.completenessCode || null,
           grade_code: b.gradeCode || null,
           price_cents: Math.max(0, Math.round(Number(b.priceCents)) || 0),
-          quantity: Math.max(0, Math.round(Number(b.quantity)) || 0),
+          quantity: b.stageEntryId ? 0 : Math.max(0, Math.round(Number(b.quantity)) || 0),
           ...(b.inventoryTypeId ? { inventory_type_id: b.inventoryTypeId } : {}),
           ...(b.locationId ? { location_id: b.locationId } : {}),
         })
         .select("id, internal_code, quantity, price_cents")
         .single();
       if (error) return json({ error: error.message }, 500);
+      if (b.stageEntryId) {
+        const { data: st, error: stErr } = await sb.from("inventory_entry_items").insert({
+          entry_id: b.stageEntryId, variant_id: data.id,
+          qty_added: Math.max(1, Math.round(Number(b.quantity)) || 1),
+          unit_cost_cents: b.unitCostCents == null ? null : Math.max(0, Math.round(Number(b.unitCostCents)) || 0),
+          price_cents_at_entry: data.price_cents ?? 0, was_new_variant: true, applied: false,
+        }).select("id").single();
+        if (stErr) return json({ error: stErr.message }, 500);
+        return json({ ok: true, variant: data, itemId: st.id });
+      }
       if (b.entryId && data.quantity > 0) {
         await logReceive(b.entryId, data.id, data.quantity, data.price_cents ?? 0,
           b.unitCostCents == null ? null : Math.max(0, Math.round(Number(b.unitCostCents)) || 0), true);

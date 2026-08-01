@@ -3,6 +3,7 @@ export const prerender = false;
 
 import AppLayout from "../../layouts/AppLayout.astro";
 import { labelTemplates } from "../../lib/labels";
+import { MARKETING_HOSTS } from "../../consts";
 
 const supabase = Astro.locals.supabase;
 const [{ data: categories }, { data: settings }, { data: completeness }, { data: grades }] = await Promise.all([
@@ -17,6 +18,9 @@ const [{ data: invTypesSrv }, { data: locationsSrv }] = await Promise.all([
   supabase.from("store_locations").select("id, key, name, is_default").order("sort_order").order("name"),
 ]);
 const hasTypes = !!invTypesSrv;
+// Entry DRAFTS (migration 20260801000002): staged lines need the `applied`
+// column — probe so the entry screen can gate itself pre-migration.
+const { error: draftProbeErr } = await supabase.from("inventory_entry_items").select("applied").limit(1);
 const { error: lcProbeErr } = await supabase.from("product_variants").select("label_code").limit(1);
 const variantExtraCols = `${hasTypes ? ", inventory_type_id, location_id" : ""}${lcProbeErr ? "" : ", label_code"}`;
 const { data: products } = await supabase
@@ -74,6 +78,10 @@ const posData = {
   locations: locationsSrv ?? [],
   lblTemplates: labelTemplates((settings as any)?.settings),
   storeName: (settings as any)?.store_name || "TimeLag",
+  // Shop links must be ABSOLUTE: on pos.timelag.co a relative /shop/... falls
+  // through the host-split middleware and lands on the dashboard.
+  webBase: import.meta.env.PROD ? `https://${MARKETING_HOSTS[0]}` : "",
+  draftsReady: !draftProbeErr,
 };
 ---
 
@@ -87,9 +95,41 @@ const posData = {
     <button id="toggle-add" class="btn btn-primary btn-sm">＋ Add product</button>
   </div>
 
-  <div id="recv-bar" class="pos-panel" hidden style="margin-bottom:1rem;display:flex;align-items:center;gap:0.8rem;flex-wrap:wrap;border-color:var(--cyan);">
-    <span>📥 Receiving <strong id="recv-label"></strong> <span class="muted" style="font-size:0.82rem;">— new products and “＋ Receive” stock are logged to this entry</span></span>
-    <button id="recv-finish" class="btn btn-primary btn-sm" style="margin-left:auto;">✓ Finish &amp; print labels</button>
+  <div id="entry-screen" hidden>
+    <div class="pos-panel ent-panel">
+      <div class="ent-head">
+        <h2 style="margin:0;">📥 Inventory Entry <span id="ent-num"></span></h2>
+        <span class="pill cyan">draft — autosaves</span>
+        <div class="ent-head-actions">
+          <button id="ent-exit" class="btn btn-ghost btn-sm" type="button" title="Leave — the draft stays in 📥 Entries">💾 Save &amp; exit</button>
+          <button id="ent-delete" class="btn btn-ghost btn-sm ent-del" type="button">🗑 Delete draft</button>
+          <button id="ent-finish" class="btn btn-primary btn-sm" type="button">✓ Finish — add to stock &amp; print</button>
+        </div>
+      </div>
+      <p class="muted" style="margin:0.4rem 0 0.9rem;font-size:0.84rem;">Nothing is added to stock or the website until you press <strong>Finish</strong>. Scan or type below to add lines; put what you <em>paid</em> in “Paid $” and the order total to see what's left to assign.</p>
+      <div class="ent-add">
+        <div class="ti-desc-cell" style="flex:1;">
+          <input id="ent-search" placeholder="Scan a barcode or type to add — e.g. mario kart 64 cib" autocomplete="off" />
+          <div class="ti-suggest" id="ent-suggest" hidden></div>
+        </div>
+        <button id="ent-new" class="btn btn-ghost btn-sm" type="button">＋ New product</button>
+      </div>
+      <table class="tbl" id="ent-table">
+        <thead><tr>
+          <th style="width:28%">Item</th><th>Condition</th><th class="num">Qty</th>
+          <th class="num">Paid $ <small class="muted">each</small></th><th class="num">Price $</th>
+          <th>Compare</th><th></th>
+        </tr></thead>
+        <tbody id="ent-body"></tbody>
+      </table>
+      <div class="ent-totals">
+        <span><strong id="ent-count">0</strong> lines · <strong id="ent-units">0</strong> units</span>
+        <span>Retail <strong id="ent-retail" class="ent-cyan">$0.00</strong></span>
+        <span>Paid <strong id="ent-paid">$0.00</strong></span>
+        <label class="ent-ot">Order total $ <input id="ent-ordertotal" type="number" min="0" step="0.01" placeholder="—" /></label>
+        <span id="ent-remaining" hidden></span>
+      </div>
+    </div>
   </div>
 
   <div id="add-panel" class="pos-panel" hidden style="margin-bottom:1rem;">
@@ -120,7 +160,7 @@ const posData = {
 
   <datalist id="comp-list">{completeness?.map((c) => <option value={c.label}>{c.code}</option>)}</datalist>
 
-  <div class="pos-panel inv-shell">
+  <div class="pos-panel inv-shell" id="inv-shell">
     <div class="inv-toolbar">
       <div class="search">
         <span class="mag" aria-hidden="true">🔎</span>
@@ -149,6 +189,7 @@ const posData = {
     <span class="bulk-count"><strong id="bulk-n">0</strong> selected</span>
     <div class="bulk-actions">
       <button id="bulk-selall" class="btn btn-ghost btn-sm" type="button">Select all shown</button>
+      <button id="bulk-print" class="btn btn-ghost btn-sm" type="button">🏷 Print labels</button>
       <button id="bulk-offline" class="btn btn-ghost btn-sm" type="button">Unpublish</button>
       <button id="bulk-online" class="btn btn-primary btn-sm" type="button">🌐 Publish to web</button>
       <button id="bulk-clear" class="btn btn-ghost btn-sm" type="button">✕ Clear</button>
@@ -183,7 +224,8 @@ const posData = {
   .inv-shell { display:flex; flex-direction:column; }
   .inv-toolbar { display:flex; flex-wrap:wrap; gap:0.6rem; align-items:center; }
   .inv-toolbar .search { flex:1; min-width:200px; }
-  .inv-toolbar select { min-width:140px; }
+  /* Category + sort share the search row instead of stacking as full bars. */
+  .inv-toolbar select { width:auto; flex:0 1 auto; min-width:9.5rem; }
   .chip.filt { cursor:pointer; }
   .chip.filt.active { border-color:var(--cyan); color:var(--cyan); }
   .chip.tfilt { cursor:pointer; }
@@ -315,6 +357,35 @@ const posData = {
   .add-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:0.7rem; }
   .add-grid label { display:grid; gap:0.3rem; font-size:0.85rem; font-weight:600; }
 
+  /* ---- Entry (draft) screen ---- */
+  .ent-panel { border-color:var(--cyan); }
+  .ent-head { display:flex; align-items:center; gap:0.7rem; flex-wrap:wrap; }
+  .ent-head-actions { display:flex; gap:0.5rem; margin-left:auto; flex-wrap:wrap; }
+  .ent-del { color:var(--magenta); border-color:rgba(255,73,208,.4); }
+  .ent-add { display:flex; gap:0.6rem; align-items:center; margin-bottom:0.9rem; }
+  .ent-add .ti-desc-cell { position:relative; }
+  .ent-add input { width:100%; }
+  #ent-table input { padding:0.35rem 0.45rem; text-align:right; }
+  #ent-table [data-ef="qty"] { width:4rem; }
+  #ent-table [data-ef="cost"], #ent-table [data-ef="price"] { width:5.6rem; }
+  .ent-totals { display:flex; align-items:center; gap:1.4rem; flex-wrap:wrap; margin-top:1rem; padding-top:0.8rem; border-top:1px solid var(--border); font-size:0.92rem; }
+  .ent-totals strong { font-family:var(--font-mono); }
+  .ent-cyan { color:var(--cyan); }
+  .ent-ot { display:flex; align-items:center; gap:0.45rem; margin-left:auto; font-weight:600; }
+  .ent-ot input { width:7rem; text-align:right; padding:0.4rem 0.5rem; }
+  #ent-remaining strong { padding:0.15rem 0.55rem; }
+  .ent-rem-ok strong { color:var(--green); }
+  .ent-rem-left strong { color:var(--cyan); }
+  .ent-rem-over strong { color:var(--magenta); }
+  .ti-suggest { position:absolute; left:0; right:0; top:100%; z-index:30; background:var(--panel, #14101d); border:1px solid var(--border-strong); border-radius:8px; margin-top:2px; max-height:280px; overflow:auto; box-shadow:0 12px 30px rgba(0,0,0,.5); }
+  .ti-sug { display:flex; align-items:center; gap:0.5rem; padding:0.45rem 0.6rem; cursor:pointer; font-size:0.85rem; border-bottom:1px solid var(--border); }
+  .ti-sug:last-child { border-bottom:0; }
+  .ti-sug:hover { background:rgba(44,230,224,.1); }
+  .ti-sug-title { font-weight:600; }
+  .ti-sug-meta { color:var(--muted-2); font-size:0.78rem; }
+  .ti-sug-price { margin-left:auto; color:var(--green); font-weight:700; font-family:var(--font-mono); }
+  .ti-links a { font-size:0.78rem; margin-right:0.5rem; white-space:nowrap; }
+
   /* eBay import row */
   .ebay-import { margin-bottom:0.9rem; padding-bottom:0.9rem; border-bottom:1px dashed var(--line); }
   .ebay-row { display:flex; gap:0.5rem; align-items:center; }
@@ -425,6 +496,7 @@ const posData = {
   const retailTypeId = invTypes.find((t: any) => t.key === "retail")?.id || "";
   const lblTemplates: any[] = (data as any).lblTemplates || [];
   const storeName: string = (data as any).storeName || "TimeLag";
+  const webBase: string = (data as any).webBase || "";
 
   // Everything a printed label needs for one variant.
   function labelItemOf(p: any, v: any) {
@@ -488,7 +560,11 @@ const posData = {
     const tags = [p.platform, p.genre, p.franchise].filter(Boolean).map((t: string) => `<span class="inv-tag">${esc(t)}</span>`).join("");
     const skus = p.variants.map((v: any) => v.sku).filter(Boolean);
     const webBtn = anyWeb(p)
-      ? `<a class="btn btn-ghost btn-sm icon-btn" href="${p.slug ? `/shop/${p.slug}` : "/shop"}" target="_blank" rel="noopener">↗ Web</a>`
+      ? `<a class="btn btn-ghost btn-sm icon-btn" href="${webBase}${p.slug ? `/shop/${p.slug}` : "/shop"}" target="_blank" rel="noopener">↗ Web</a>`
+      : "";
+    const sellV = p.variants.find((v: any) => v.quantity > 0);
+    const sellBtn = sellV
+      ? `<a class="btn btn-ghost btn-sm icon-btn" href="/checkout?add=${sellV.id}" title="Add to checkout">🛒 Sell</a>`
       : "";
     return `
       <div class="inv-card${selected.has(p.id) ? " selected" : ""}" data-p="${p.id}">
@@ -508,6 +584,7 @@ const posData = {
         <div class="inv-actions">
           <span class="tot">${totalQty(p)} in stock</span>
           <button class="btn btn-primary btn-sm icon-btn" data-edit="${p.id}">✎ Edit</button>
+          ${sellBtn}
           ${webBtn}
         </div>
       </div>`;
@@ -540,12 +617,12 @@ const posData = {
     $("inv-count").textContent = `${list.length} product${list.length === 1 ? "" : "s"}`;
     $("inv-list").innerHTML = list.length ? list.map(cardHtml).join("") : `<p class="empty">No products match.</p>`;
     document.querySelectorAll<HTMLElement>("[data-edit]").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); openModal(b.dataset.edit!); }));
-    // Click a card (not a control) → preview the product page in a popup window.
+    // Click a card (not a control) → open the item's edit modal (owner spec:
+    // the old shop-page popup 404'd through the host-split and hit dashboard).
     document.querySelectorAll<HTMLElement>(".inv-card").forEach((card) => {
       card.addEventListener("click", (e) => {
         if ((e.target as HTMLElement).closest("button, a, input, select, label")) return;
-        const p = items.find((x) => x.id === card.dataset.p);
-        if (p?.slug) window.open(`/shop/${p.slug}`, "tl-preview", "popup=yes,width=540,height=820");
+        openModal(card.dataset.p!);
       });
     });
     // Bulk-select checkboxes.
@@ -566,7 +643,7 @@ const posData = {
   /* ---------- Bulk edit ---------- */
   function updateBulkBar() {
     const bar = $("bulk-bar") as HTMLElement;
-    bar.hidden = selected.size === 0;
+    bar.hidden = entryMode || selected.size === 0;
     $("bulk-n").textContent = String(selected.size);
   }
   $("bulk-clear").addEventListener("click", () => { selected.clear(); render(); });
@@ -589,6 +666,16 @@ const posData = {
   }
   $("bulk-online").addEventListener("click", () => bulkSetOnline(true));
   $("bulk-offline").addEventListener("click", () => bulkSetOnline(false));
+  // Print labels for every condition of the selected items (1 each by default,
+  // with the per-line "all N" escape hatch for full re-tags).
+  $("bulk-print").addEventListener("click", () => {
+    const lines: any[] = [];
+    items.filter((p) => selected.has(p.id)).forEach((p) => p.variants.forEach((v: any) => {
+      if (v.internalCode || v.labelCode) lines.push({ item: labelItemOf(p, v), defaultCopies: 1, allCopies: v.quantity > 1 ? v.quantity : null });
+    }));
+    if (!lines.length) { alert("Selected items have no label codes yet."); return; }
+    openPrintDialog(lines, lblTemplates, { title: `Print labels — ${lines.length} condition${lines.length === 1 ? "" : "s"}` });
+  });
 
   /* ---------- Edit modal ---------- */
   const modal = $("edit-modal");
@@ -649,7 +736,7 @@ const posData = {
       </div>`;
 
     const link = $("m-weblink") as HTMLAnchorElement;
-    if (anyWeb(p)) { link.href = p.slug ? `/shop/${p.slug}` : "/shop"; link.hidden = false; } else { link.hidden = true; }
+    if (anyWeb(p)) { link.href = webBase + (p.slug ? `/shop/${p.slug}` : "/shop"); link.hidden = false; } else { link.hidden = true; }
     const ebayLink = $("m-ebaylink") as HTMLAnchorElement;
     if (p.ebayId) { ebayLink.href = `https://www.ebay.com/itm/${p.ebayId}`; ebayLink.hidden = false; } else { ebayLink.hidden = true; }
 
@@ -665,7 +752,8 @@ const posData = {
       if (!v.internalCode) { alert("This condition has no label code yet — reload the page and try again."); return; }
       openPrintDialog([{ item: labelItemOf(p, v), defaultCopies: 1, allCopies: v.quantity }], lblTemplates, { title: `Print · ${p.title}` });
     }));
-    // Receive stock onto the current entry (starts one lazily if needed).
+    // Quick stock adjust — IMMEDIATE (quantity + ledger, no draft). Batch
+    // receiving with costs/labels lives in ▶ Start entry.
     document.querySelectorAll<HTMLButtonElement>("[data-recvstock]").forEach((b) => b.addEventListener("click", async () => {
       const v = p.variants.find((x: any) => x.id === b.dataset.recvstock);
       if (!v) return;
@@ -674,20 +762,13 @@ const posData = {
       const costRaw = prompt("Cost per unit $ (optional — what you paid):", "");
       const unitCostCents = costRaw && costRaw.trim() !== "" ? Math.round(parseFloat(costRaw) * 100) || 0 : null;
       try {
-        await ensureEntry();
-        const j = await api({ action: "receiveStock", entryId, variantId: v.id, qtyAdded: qty, unitCostCents });
+        const j = await api({ action: "receiveStock", variantId: v.id, qtyAdded: qty, unitCostCents });
         v.quantity = j.newQuantity;
         const qi = $("cond-body")?.querySelector<HTMLInputElement>(`[data-vrow="${v.id}"] [data-vf="qty"]`);
         if (qi) qi.value = String(j.newQuantity);
         render();
-        toast(`✓ Received ${qty} — now ${j.newQuantity} in stock (Entry #${entryHuman})`);
-      } catch (e: any) {
-        if (/closed/i.test(e.message)) {
-          // Entry finished elsewhere — reset the bar so ▶ Start receiving works.
-          clearEntry();
-          alert(e.message + " (Receiving bar reset — press ▶ Start receiving and try again.)");
-        } else alert(e.message);
-      }
+        toast(`✓ Received ${qty} — now ${j.newQuantity} in stock`);
+      } catch (e: any) { alert(e.message); }
     }));
 
     // Running-average cost (managers): weighted avg paid per unit from trade-ins,
@@ -971,47 +1052,241 @@ const posData = {
     render();
   }));
 
-  /* ---------- Receiving session (inventory entries) ---------- */
+  /* ---------- Entry DRAFTS: clean trade-in-style receiving screen ----------
+     Staged lines only — nothing hits stock or the website until Finish. The
+     draft autosaves on every edit and survives leaving the page (resume or
+     delete it from 📥 Entries). */
+  const draftsReady: boolean = !!(data as any).draftsReady;
   let entryId = "";
   let entryHuman = 0;
+  let entryMode = false;
+  let entRows: any[] = []; // {itemId, variantId, title, platform, cond, qty, costCents, priceCents, wasNew}
+  let entOrderTotal: number | null = null;
   try { const s = JSON.parse(sessionStorage.getItem("tl-entry") || "null"); if (s?.id) { entryId = s.id; entryHuman = s.h; } } catch {}
-  function clearEntry() {
-    entryId = ""; entryHuman = 0;
-    try { sessionStorage.removeItem("tl-entry"); } catch {}
-    renderRecvBar();
-  }
-  // A restored session may have been finished on another station — validate it,
-  // otherwise the bar wedges (ensureEntry no-ops while entryId is set).
-  if (entryId) {
-    api({ action: "getEntry", entryId })
-      .then((j: any) => { if (j.entry?.status !== "open") clearEntry(); })
-      .catch(() => clearEntry());
-  }
-  function renderRecvBar() {
-    const bar = $("recv-bar");
-    if (!bar) return;
-    (bar as HTMLElement).hidden = !entryId;
-    if (entryId) $("recv-label").textContent = `Entry #${entryHuman}`;
+
+  function setEntryMode(on: boolean) {
+    entryMode = on && !!entryId;
+    ($("entry-screen") as HTMLElement).hidden = !entryMode;
+    ($("inv-shell") as HTMLElement).hidden = entryMode;
+    if (entryMode) { selected.clear(); updateBulkBar(); }
     const t = $("recv-toggle");
-    if (t) t.textContent = entryId ? `📥 Receiving #${entryHuman}` : "▶ Start receiving";
+    if (t) t.textContent = entryMode ? `📥 Entry #${entryHuman} (open)` : "▶ Start entry";
+    if (entryMode) { $("ent-num").textContent = `#${entryHuman}`; renderEnt(); }
   }
+  function clearEntry() {
+    entryId = ""; entryHuman = 0; entRows = []; entOrderTotal = null;
+    try { sessionStorage.removeItem("tl-entry"); } catch {}
+    setEntryMode(false);
+  }
+
+  // Competitor price references per line (same links as the trade-in screen).
+  const cmpLinks = (q0: string) => {
+    const q = encodeURIComponent(q0 || "");
+    return `<span class="ti-links">
+      <a href="https://www.pricecharting.com/search-products?q=${q}&type=prices" target="_blank" rel="noopener">PriceCharting↗</a>
+      <a href="https://www.ebay.com/sch/i.html?_nkw=${q}&LH_Sold=1&LH_Complete=1" target="_blank" rel="noopener">eBay sold↗</a>
+      <a href="https://www.gamestop.com/search/?q=${q}" target="_blank" rel="noopener">GameStop↗</a>
+    </span>`;
+  };
+
+  function entTotals() {
+    const units = entRows.reduce((s, r) => s + r.qty, 0);
+    const retail = entRows.reduce((s, r) => s + r.priceCents * r.qty, 0);
+    const paid = entRows.reduce((s, r) => s + (r.costCents ?? 0) * r.qty, 0);
+    $("ent-count").textContent = String(entRows.length);
+    $("ent-units").textContent = String(units);
+    $("ent-retail").textContent = money(retail);
+    $("ent-paid").textContent = money(paid);
+    const rem = $("ent-remaining") as HTMLElement;
+    if (entOrderTotal == null) { rem.hidden = true; return; }
+    const left = entOrderTotal - paid;
+    rem.hidden = false;
+    rem.className = left === 0 ? "ent-rem-ok" : left > 0 ? "ent-rem-left" : "ent-rem-over";
+    rem.innerHTML = left === 0 ? `✓ fully assigned <strong>$0.00</strong>`
+      : left > 0 ? `left to assign <strong>${money(left)}</strong>`
+      : `over by <strong>${money(-left)}</strong>`;
+  }
+
+  function renderEnt() {
+    const body = $("ent-body");
+    body.innerHTML = entRows.length ? entRows.map((r) => `
+      <tr data-item="${r.itemId}">
+        <td><strong>${esc(r.title)}</strong>${r.platform ? ` <span class="ti-sug-meta">${esc(r.platform)}</span>` : ""}${r.wasNew ? ` <span class="pill cyan" style="font-size:0.66rem;">new</span>` : ""}</td>
+        <td>${esc(r.cond)}</td>
+        <td class="num"><input data-ef="qty" type="number" min="1" value="${r.qty}"></td>
+        <td class="num"><input data-ef="cost" type="number" min="0" step="0.01" value="${r.costCents == null ? "" : (r.costCents / 100).toFixed(2)}" placeholder="—"></td>
+        <td class="num"><input data-ef="price" type="number" min="0" step="0.01" value="${(r.priceCents / 100).toFixed(2)}"></td>
+        <td>${cmpLinks([r.title, r.platform].filter(Boolean).join(" "))}</td>
+        <td><button class="link-btn" data-erm title="Remove line">✕</button></td>
+      </tr>`).join("") : `<tr><td colspan="7" class="empty" style="padding:1rem 0.4rem;">Nothing staged yet — scan or search above to add the first item.</td></tr>`;
+
+    body.querySelectorAll<HTMLElement>("tr[data-item]").forEach((tr) => {
+      const r = entRows.find((x) => x.itemId === tr.dataset.item)!;
+      tr.querySelector<HTMLInputElement>('[data-ef="qty"]')!.addEventListener("change", async (e) => {
+        r.qty = Math.max(1, parseInt((e.target as HTMLInputElement).value) || 1);
+        (e.target as HTMLInputElement).value = String(r.qty);
+        entTotals();
+        try { await api({ action: "updateEntryItem", itemId: r.itemId, qty: r.qty }); } catch (err: any) { alert(err.message); }
+      });
+      tr.querySelector<HTMLInputElement>('[data-ef="cost"]')!.addEventListener("change", async (e) => {
+        const raw = (e.target as HTMLInputElement).value.trim();
+        r.costCents = raw === "" ? null : toCents(raw);
+        entTotals();
+        try { await api({ action: "updateEntryItem", itemId: r.itemId, unitCostCents: r.costCents }); } catch (err: any) { alert(err.message); }
+      });
+      tr.querySelector<HTMLInputElement>('[data-ef="price"]')!.addEventListener("change", async (e) => {
+        r.priceCents = toCents((e.target as HTMLInputElement).value);
+        entTotals();
+        // Price edits are LIVE variant edits (labels print this price).
+        const lv = items.flatMap((p) => p.variants).find((x: any) => x.id === r.variantId);
+        if (lv) lv.priceCents = r.priceCents;
+        try { await api({ action: "updateVariant", id: r.variantId, priceCents: r.priceCents }); } catch (err: any) { alert(err.message); }
+      });
+      tr.querySelector("[data-erm]")!.addEventListener("click", async () => {
+        try {
+          await api({ action: "removeEntryItem", itemId: r.itemId });
+          entRows = entRows.filter((x) => x.itemId !== r.itemId);
+          renderEnt();
+        } catch (err: any) { alert(err.message); }
+      });
+    });
+    entTotals();
+  }
+
+  // Load a draft's lines (resume from Entries, page reload, or ?entry= link).
+  async function loadEntry(id: string): Promise<boolean> {
+    try {
+      const j = await api({ action: "getEntry", entryId: id });
+      if (j.entry?.status !== "open") return false;
+      entryId = id; entryHuman = j.entry.human_id;
+      entOrderTotal = j.entry.order_total_cents ?? null;
+      ($("ent-ordertotal") as HTMLInputElement).value = entOrderTotal == null ? "" : (entOrderTotal / 100).toFixed(2);
+      entRows = (j.items || []).map((it: any) => {
+        const v = it.variant || {}; const pr = v.product || {};
+        return {
+          itemId: it.id, variantId: v.id, qty: it.qty_added, costCents: it.unit_cost_cents,
+          priceCents: v.price_cents ?? 0, wasNew: it.was_new_variant,
+          title: pr.title ?? "?", platform: pr.platform || pr.category?.name || "",
+          cond: condLabel({ completenessCode: v.completeness_code, gradeCode: v.grade_code, condition: v.condition }),
+        };
+      });
+      try { sessionStorage.setItem("tl-entry", JSON.stringify({ id: entryId, h: entryHuman })); } catch {}
+      return true;
+    } catch { return false; }
+  }
+
   async function ensureEntry() {
     if (entryId) return;
     const j = await api({ action: "startEntry" });
     entryId = j.entry.id; entryHuman = j.entry.human_id;
     try { sessionStorage.setItem("tl-entry", JSON.stringify({ id: entryId, h: entryHuman })); } catch {}
-    renderRecvBar();
-    toast(j.resumed ? `📥 Resumed Entry #${entryHuman}` : `📥 Started Entry #${entryHuman}`);
+    if (j.resumed) await loadEntry(entryId);
+    toast(j.resumed ? `📥 Resumed draft Entry #${entryHuman}` : `📥 Started Entry #${entryHuman}`);
   }
-  $("recv-toggle")?.addEventListener("click", () => { ensureEntry().catch((e: any) => alert(e.message)); });
-  $("recv-finish")?.addEventListener("click", async () => {
+
+  $("recv-toggle")?.addEventListener("click", async () => {
+    if (!draftsReady) { alert("Run supabase/migrations/20260801000002_entry_drafts.sql in the Supabase SQL editor first, then refresh."); return; }
+    try { await ensureEntry(); setEntryMode(true); } catch (e: any) { alert(e.message); }
+  });
+  $("ent-exit")?.addEventListener("click", () => {
+    const h = entryHuman;
+    entryId = ""; entryHuman = 0; entRows = [];
+    try { sessionStorage.removeItem("tl-entry"); } catch {}
+    setEntryMode(false);
+    toast(`💾 Draft Entry #${h} saved — resume it from 📥 Entries`);
+  });
+  $("ent-delete")?.addEventListener("click", async () => {
     if (!entryId) return;
+    const n = entRows.length;
+    if (!confirm(`Delete draft Entry #${entryHuman}?\n\n${n} staged line${n === 1 ? "" : "s"} will be discarded. Nothing was added to stock, so nothing else changes.`)) return;
+    try {
+      await api({ action: "deleteEntry", entryId });
+      toast(`🗑 Draft deleted`);
+      clearEntry();
+    } catch (e: any) { alert(e.message); }
+  });
+  ($("ent-ordertotal") as HTMLInputElement)?.addEventListener("change", async (e) => {
+    const raw = (e.target as HTMLInputElement).value.trim();
+    entOrderTotal = raw === "" ? null : toCents(raw);
+    entTotals();
+    try { await api({ action: "setOrderTotal", entryId, orderTotalCents: entOrderTotal }); } catch (err: any) { alert(err.message); }
+  });
+
+  // Stage a variant onto the draft (scanning the same one again bumps qty).
+  async function stageVariant(p: any, v: any) {
+    try {
+      await ensureEntry();
+      const existing = entRows.find((r) => r.variantId === v.id);
+      if (existing) {
+        existing.qty += 1;
+        renderEnt();
+        await api({ action: "updateEntryItem", itemId: existing.itemId, qty: existing.qty });
+        return;
+      }
+      const j = await api({ action: "stageItem", entryId, variantId: v.id, qty: 1 });
+      entRows.push({ itemId: j.itemId, variantId: v.id, qty: 1, costCents: null, priceCents: v.priceCents, wasNew: false, title: p.title, platform: p.platform || p.categoryName || "", cond: condLabel(v) });
+      renderEnt();
+    } catch (e: any) { alert(e.message); }
+  }
+
+  // Typeahead: suggestions are individual VARIANTS (condition + price); an
+  // exact barcode / label-code match stages instantly (wedge scanners).
+  const entSearch = $("ent-search") as HTMLInputElement;
+  function entSuggest() {
+    const box = $("ent-suggest") as HTMLElement;
+    const q = entSearch.value.trim();
+    if (q.length < 2) { box.hidden = true; return; }
+    const flat = items.flatMap((p) => p.variants.map((v: any) => ({ p, v })));
+    const hit = flat.find(({ v }: any) =>
+      (v.barcodes || []).some((b: any) => b.barcode === q) || (v.labelCode && v.labelCode === q) || (v.internalCode && v.internalCode === q.toUpperCase()));
+    if (hit) { entSearch.value = ""; box.hidden = true; stageVariant(hit.p, hit.v); return; }
+    const parsed = parseQuery(q);
+    const matches = smartMatches(parsed).slice(0, 5);
+    const opts = matches.flatMap((m: any) => {
+      const vs = [...m.p.variants].sort((a: any, b: any) =>
+        (b.completenessCode === parsed.completenessCode ? 1 : 0) - (a.completenessCode === parsed.completenessCode ? 1 : 0));
+      return vs.map((v: any) => ({ p: m.p, v }));
+    }).slice(0, 8);
+    box.innerHTML = opts.map((o: any, i: number) => `
+      <div class="ti-sug" data-i="${i}">
+        <span class="ti-sug-title">${esc(o.p.title)}</span>
+        <span class="ti-sug-meta">${esc(o.p.platform || "")} · ${esc(condLabel(o.v))}</span>
+        <span class="ti-sug-price">${money(o.v.priceCents)}</span>
+      </div>`).join("") + `
+      <div class="ti-sug" data-new><span class="ti-sug-title">＋ New product “${esc(q)}”</span><span class="ti-sug-meta">create &amp; stage</span></div>`;
+    box.hidden = false;
+    box.querySelectorAll<HTMLElement>("[data-i]").forEach((el) => el.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      const o = opts[+el.dataset.i!];
+      box.hidden = true; entSearch.value = "";
+      stageVariant(o.p, o.v);
+    }));
+    box.querySelector("[data-new]")?.addEventListener("mousedown", (e) => { e.preventDefault(); box.hidden = true; entNewProduct(q); });
+  }
+  entSearch?.addEventListener("input", entSuggest);
+  entSearch?.addEventListener("blur", () => setTimeout(() => { ($("ent-suggest") as HTMLElement).hidden = true; }, 150));
+  $("ent-new")?.addEventListener("click", () => entNewProduct(entSearch.value.trim()));
+  function entNewProduct(q: string) {
+    const parsed = q ? parseQuery(q) : null;
+    const panel = $("add-panel") as HTMLElement;
+    panel.hidden = false;
+    if (parsed?.title) ($("np-title") as HTMLInputElement).value = parsed.title.replace(/\b\w/g, (c: string) => c.toUpperCase());
+    if (parsed?.platform) ($("np-platform") as HTMLInputElement).value = parsed.platform;
+    if (parsed) { setComp($("np-comp") as HTMLInputElement, parsed.completenessCode || "", $("np-comp-abbr")); if (parsed.gradeCode) ($("np-grade") as HTMLSelectElement).value = parsed.gradeCode; }
+    ($("np-qty") as HTMLInputElement).value = "1";
+    panel.scrollIntoView({ behavior: "smooth", block: "center" });
+    ($("np-price") as HTMLInputElement).focus();
+  }
+
+  $("ent-finish")?.addEventListener("click", async () => {
+    if (!entryId) return;
+    if (!entRows.length) { alert("Nothing staged — add at least one line (or delete the draft)."); return; }
+    const btn = $("ent-finish") as HTMLButtonElement; btn.disabled = true; const o = btn.textContent;
     try {
       try {
         await api({ action: "commitEntry", entryId });
       } catch (e: any) {
         if (/already committed/i.test(e.message)) {
-          // Another station finished it — don't re-print the whole run here.
           clearEntry();
           toast("That entry was already finished on another station — reprint from 📥 Entries if needed.");
           return;
@@ -1019,8 +1294,8 @@ const posData = {
         throw e;
       }
       const j = await api({ action: "getEntry", entryId });
-      // Build the post-entry print run: copies default to what ARRIVED (skip-
-      // duplicates by design), with an "all copies" escape hatch per line.
+      // Print run: copies default to what ARRIVED (skip-duplicates by design),
+      // with the "all copies" escape hatch per line.
       const lines = (j.items || []).filter((it: any) => it.variant?.internal_code).map((it: any) => {
         const v = it.variant, pr = v.product || {};
         const loc = locations.find((l: any) => l.id === v.location_id) || locations.find((l: any) => l.is_default);
@@ -1042,13 +1317,35 @@ const posData = {
           hint: v.price_cents !== it.price_cents_at_entry ? "price changed since this batch" : undefined,
         };
       });
+      // Reflect the now-applied quantities in the grid data.
+      (j.items || []).forEach((it: any) => {
+        const lv = items.flatMap((p) => p.variants).find((x: any) => x.id === it.variant?.id);
+        if (lv && it.variant) lv.quantity = it.variant.quantity;
+      });
       const finished = entryHuman;
       clearEntry();
+      render();
+      toast(`✓ Entry #${finished} added to stock`);
       if (lines.length) openPrintDialog(lines, lblTemplates, { title: `Print · Entry #${finished}` });
-      else toast("Entry closed — nothing with a label code to print");
     } catch (e: any) { alert(e.message); }
+    finally { btn.disabled = false; btn.textContent = o; }
   });
-  renderRecvBar();
+
+  // Boot: ?entry= deep link (Entries → Resume) beats the saved session.
+  (async () => {
+    const urlEntry = new URLSearchParams(location.search).get("entry");
+    if (urlEntry && draftsReady) {
+      const ok = await loadEntry(urlEntry);
+      history.replaceState(null, "", location.pathname);
+      if (ok) { setEntryMode(true); return; }
+    }
+    if (entryId) {
+      if (await loadEntry(entryId)) { setEntryMode(true); return; }
+      entryId = ""; entryHuman = 0;
+      try { sessionStorage.removeItem("tl-entry"); } catch {}
+    }
+    setEntryMode(false);
+  })();
 
   /* ---------- Add product ---------- */
   $("toggle-add").addEventListener("click", () => { ($("add-panel") as HTMLElement).hidden = !($("add-panel") as HTMLElement).hidden; });
@@ -1089,10 +1386,11 @@ const posData = {
       categoryId: ($("np-cat") as HTMLSelectElement).value,
       condition, completenessCode: comp, gradeCode: grade,
       priceCents: Math.round(parseFloat(($("np-price") as HTMLInputElement).value) * 100) || 0,
-      quantity: parseInt(($("np-qty") as HTMLInputElement).value) || 0,
+      quantity: parseInt(($("np-qty") as HTMLInputElement).value) || (entryMode ? 1 : 0),
       barcode: ($("np-barcode") as HTMLInputElement).value || null,
       inventoryTypeId: (document.getElementById("np-invtype") as HTMLSelectElement | null)?.value || undefined,
-      entryId: entryId || undefined, // log to the active receiving entry
+      // In entry mode the qty is STAGED on the draft (variant starts at 0).
+      ...(entryMode && entryId ? { stageEntryId: entryId } : {}),
     };
     if (!body.title || !body.categoryId) { alert("Title and category required"); return; }
     try {
@@ -1101,6 +1399,17 @@ const posData = {
       const newItem: any = { id: j.productId, title: body.title, slug: body.title.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""), platform: body.platform, franchise: "", genre: "", description: "", imageUrl: "", altNames: [], categoryId: body.categoryId, categoryName: cat?.name ?? "", categoryColor: cat?.color ?? "#2ce6e0",
         variants: [{ id: j.variantId, condition, completeness: null, completenessCode: comp, gradeCode: grade, sku: null, internalCode: j.internalCode || "", priceCents: body.priceCents, onlinePriceCents: null, costCents: null, quantity: body.quantity, onlineVisible: false, inventoryTypeId: body.inventoryTypeId || retailTypeId, locationId: "", barcodes: body.barcode ? [{ id: "primary:" + j.variantId, barcode: body.barcode, label: "Primary", primary: true }] : [] }] };
       items.push(newItem);
+      if (entryMode && j.itemId) {
+        // Staged: server created the variant at qty 0; the qty lands on Finish.
+        newItem.variants[0].quantity = 0;
+        entRows.push({
+          itemId: j.itemId, variantId: j.variantId, qty: body.quantity || 1, costCents: null,
+          priceCents: body.priceCents, wasNew: true, title: newItem.title,
+          platform: newItem.platform || newItem.categoryName || "", cond: condLabel(newItem.variants[0]),
+        });
+        renderEnt();
+        ($("ent-search") as HTMLInputElement).value = "";
+      }
       ($("add-panel") as HTMLElement).hidden = true;
       ($("np-title") as HTMLInputElement).value = "";
       ($("inv-search") as HTMLInputElement).value = ""; state.q = ""; state.parsed = null; renderSmart();

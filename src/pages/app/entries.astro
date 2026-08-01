@@ -57,7 +57,7 @@ const pageData = {
     <div class="pos-grid two" style="align-items:start;">
       <div class="pos-panel">
         <h2>Receiving entries</h2>
-        <p class="muted" style="margin:0.3rem 0 0.8rem;font-size:0.85rem;">Every receiving session lands here — open one to see what arrived and reprint its labels.</p>
+        <p class="muted" style="margin:0.3rem 0 0.8rem;font-size:0.85rem;">Drafts autosave here until you finish them — resume or delete a draft, and reprint labels from committed entries.</p>
         <div id="entry-list"></div>
       </div>
       <div class="pos-panel" id="entry-detail-panel">
@@ -119,8 +119,8 @@ const pageData = {
       <div class="ent-row${e.id === selId ? " on" : ""}" data-ent="${e.id}">
         <span class="ent-id">#${e.humanId}</span>
         <span><span>${when(e.createdAt)} · ${esc(e.employee)}</span><span class="ent-meta" style="display:block;">${e.lineCount} line${e.lineCount === 1 ? "" : "s"} · ${e.unitCount} unit${e.unitCount === 1 ? "" : "s"} · ${esc(e.source)}${e.note ? " · " + esc(e.note) : ""}</span></span>
-        <span class="pill ${e.status === "open" ? "cyan" : "muted"}">${e.status}</span>
-      </div>`).join("") : `<p class="empty">No entries yet — use “Start receiving” on the Inventory page.</p>`;
+        <span class="pill ${e.status === "open" ? "cyan" : "muted"}">${e.status === "open" ? "draft" : e.status}</span>
+      </div>`).join("") : `<p class="empty">No entries yet — use “▶ Start entry” on the Inventory page.</p>`;
     el.querySelectorAll("[data-ent]").forEach((row: any) => row.addEventListener("click", () => openEntry(row.dataset.ent)));
   }
 
@@ -144,12 +144,30 @@ const pageData = {
             <span class="ed-price">${money(v.price_cents ?? 0)}</span>
           </div>`;
       }).join("");
+      const isDraft = e.status === "open";
       detail.innerHTML = `
-        <p class="muted" style="margin:0 0 0.6rem;font-size:0.84rem;">${when(e.created_at)} · ${esc(e.employee?.full_name ?? "—")} · ${esc(e.source)} · <span class="pill ${e.status === "open" ? "cyan" : "muted"}">${e.status}</span></p>
+        <p class="muted" style="margin:0 0 0.6rem;font-size:0.84rem;">${when(e.created_at)} · ${esc(e.employee?.full_name ?? "—")} · ${esc(e.source)} · <span class="pill ${isDraft ? "cyan" : "muted"}">${isDraft ? "draft" : e.status}</span></p>
+        ${isDraft ? `<p class="muted" style="margin:0 0 0.6rem;font-size:0.8rem;">Staged only — nothing is in stock or on the website until this draft is finished.</p>` : ""}
         <div>${lines || `<p class="empty">No lines on this entry.</p>`}</div>
         <div style="display:flex;gap:0.5rem;margin-top:0.9rem;">
-          <button id="ed-print" class="btn btn-primary btn-sm" type="button">🏷 Reprint labels</button>
+          ${isDraft
+            ? `<a class="btn btn-primary btn-sm" href="/inventory?entry=${e.id}">▶ Resume draft</a>
+               <button id="ed-del" class="btn btn-ghost btn-sm" type="button" style="color:var(--magenta);border-color:rgba(255,73,208,.4);">🗑 Delete draft</button>`
+            : `<button id="ed-print" class="btn btn-primary btn-sm" type="button">🏷 Reprint labels</button>`}
         </div>`;
+      document.getElementById("ed-del")?.addEventListener("click", async () => {
+        const n = (j.items || []).length;
+        if (!confirm(`Delete draft Entry #${e.human_id}?\n\n${n} staged line${n === 1 ? "" : "s"} will be discarded. Nothing was added to stock, so nothing else changes.`)) return;
+        try {
+          await api({ action: "deleteEntry", entryId: e.id });
+          const idx = entries.findIndex((x) => x.id === e.id);
+          if (idx >= 0) entries.splice(idx, 1);
+          selId = "";
+          renderList();
+          $("ed-title").textContent = "Select an entry";
+          detail.innerHTML = `<p class="empty">Draft deleted.</p>`;
+        } catch (err: any) { alert(err.message); }
+      });
       $("ed-print")?.addEventListener("click", () => {
         const printLines = (j.items || []).filter((it: any) => it.variant?.internal_code).map((it: any) => {
           const v = it.variant, p = v.product || {};

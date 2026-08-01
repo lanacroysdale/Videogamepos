@@ -569,6 +569,17 @@ const posData = { catalog, categories: categories ?? [], customer };
   // initial paint
   renderProducts();
   renderCart();
+  // Deep link from Inventory's "🛒 Sell" — drop that variant straight in the cart.
+  {
+    const ap = new URLSearchParams(location.search).get("add");
+    if (ap) {
+      const hit = catalog.find((v: any) =>
+        v.variantId === ap || (v.barcode && v.barcode === ap) || (v.labelCode && v.labelCode === ap) ||
+        (v.internalCode && v.internalCode === ap.toUpperCase()));
+      if (hit) addVariant(hit.variantId);
+      history.replaceState(null, "", location.pathname);
+    }
+  }
   loadHeld().then(() => {
     // Deep link from the dashboard "Resume →" link auto-resumes that held sale.
     const rp = new URLSearchParams(location.search).get("resume");
