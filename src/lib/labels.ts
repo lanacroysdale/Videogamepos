@@ -375,9 +375,11 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
   const sideRight = tpl.logoSide === "right";
   const nameF = 1.7 * fs * fsc, tagF = 1.6 * fs * fsc;
   const lgH = nsSide && tpl.show.logo && tpl.logoUrl ? Math.min(tpl.logoHeightMm, 9) : 0;
-  const lgW = lgH ? Math.min(contentW * 0.3, lgH * 2.6) : 0;
+  // Near-square box so the title isn't pushed away by empty reservation when
+  // the logo is square-ish (wide wordmarks scale via the Size mm setting).
+  const lgW = lgH ? Math.min(contentW * 0.3, lgH * 1.3) : 0;
   const lgName = nsSide && tpl.show.logo && !tpl.logoUrl ? (item.storeName || "").toUpperCase().slice(0, 10) : "";
-  const sideW = nsSide ? Math.min(contentW * 0.38, Math.max(lgW, lgName.length * nameF * 0.62, nsTagline.length * tagF * 0.56)) + 1.2 : 0;
+  const sideW = nsSide ? Math.min(contentW * 0.38, Math.max(lgW, lgName.length * nameF * 0.62, nsTagline.length * tagF * 0.56)) + 0.8 : 0;
   const colW = contentW - sideW;                            // title/meta column
   const colCx = fx + (sideRight ? colW / 2 : sideW + colW / 2);
   if (tpl.show.title) {
