@@ -96,6 +96,6 @@ export const CONDITIONS = [
 
 // Google Analytics 4 Measurement ID. This value is public (it ships in the
 // client JS). Override per-environment with the PUBLIC_GA_MEASUREMENT_ID env var.
-export const GA_MEASUREMENT_ID = 'G-0EW143Q1N6';
+export const GA_MEASUREMENT_ID = 'G-D2WEXN8Z4Q'; // TimeLag GA4 property (owner-created 2026-08-02)
 
 export const YEAR = new Date().getFullYear();
