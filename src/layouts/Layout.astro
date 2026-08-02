@@ -73,10 +73,21 @@ const jsonLd = {
     <meta name="theme-color" content="#df5e39" />
 
     {GA_ID && (
-      <Fragment>
-        <script async is:inline src={`https://www.googletagmanager.com/gtag/js?id=${GA_ID}`}></script>
-        <script is:inline set:html={`window.dataLayer=window.dataLayer||[];function gtag(){window.dataLayer.push(arguments);}gtag('js',new Date());gtag('config','${GA_ID}');`} />
-      </Fragment>
+      <script is:inline set:html={`
+        // GA fires on MARKETING hosts only. This static HTML is also what
+        // pos.timelag.co serves for an instant before the dashboard redirect
+        // above — an unconditional tag would log every staff visit as a
+        // storefront page view.
+        if (${JSON.stringify(MARKETING_HOSTS)}.includes(location.hostname)) {
+          var gs = document.createElement('script'); gs.async = true;
+          gs.src = 'https://www.googletagmanager.com/gtag/js?id=${GA_ID}';
+          document.head.appendChild(gs);
+          window.dataLayer = window.dataLayer || [];
+          window.gtag = function(){ window.dataLayer.push(arguments); };
+          window.gtag('js', new Date());
+          window.gtag('config', '${GA_ID}');
+        }
+      `} />
     )}
 
     <!-- Open Graph / social sharing -->
