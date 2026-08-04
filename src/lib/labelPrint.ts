@@ -9,38 +9,50 @@ import { renderLabelSvg, ensureLabelFont, DEFAULT_TEMPLATE, type LabelTemplate, 
 
 export type PrintJob = { item: LabelItem; copies: number };
 
-export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate): Promise<void> {
+export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: { rotate?: boolean }): Promise<void> {
   const real = jobs.filter((j) => j.copies > 0);
   if (!real.length) return;
   await ensureLabelFont(tpl); // font ready BEFORE print — no fallback-font tags
   document.getElementById("label-print")?.remove();
   document.getElementById("label-print-style")?.remove();
 
+  // ROTATE mode: compose the label sideways onto a PORTRAIT page (roll-native
+  // for most thermal drivers). Safari applies the Landscape toggle to the
+  // output but NOT to the CSS layout surface, so a wide label on a portrait-
+  // normalized roll shrinks — rotating in CSS sidesteps the driver entirely:
+  // print with Orientation: Portrait, scale 100%.
+  const rot = !!opts?.rotate;
+  const pw = rot ? tpl.heightMm : tpl.widthMm;  // page width
+  const ph = rot ? tpl.widthMm : tpl.heightMm;  // page height
+
   const style = document.createElement("style");
   style.id = "label-print-style";
   style.textContent = `
-    @page { size: ${tpl.widthMm}mm ${tpl.heightMm}mm; margin: 0; }
+    @page { size: ${pw}mm ${ph}mm; margin: 0; }
     #label-print { position: fixed; left: -9999px; top: 0; background: #fff; }
-    .label-page { width: ${tpl.widthMm}mm; height: ${tpl.heightMm}mm; overflow: hidden; break-after: page; page-break-after: always; }
+    .label-page { width: ${pw}mm; height: ${ph}mm; overflow: hidden; break-after: page; page-break-after: always; }
     .label-page:last-child { break-after: auto; page-break-after: auto; }
     .label-page svg { display: block; }
+    .label-rot { width: ${tpl.widthMm}mm; height: ${tpl.heightMm}mm; transform: rotate(90deg) translateY(-${tpl.heightMm}mm); transform-origin: top left; }
     @media print {
       /* display:none, NOT the visibility trick: hidden boxes keep their height,
          and the app shell in normal flow would feed a stack of BLANK labels
          before the real ones on a roll printer. */
       body > :not(#label-print) { display: none !important; }
       #label-print { position: static !important; left: 0 !important; }
-      /* Safari ignores @page size — pin the document to the label's exact
-         geometry so its shrink-to-fit math has nothing to shrink. Driver side:
-         paper 2.25×1.25", orientation LANDSCAPE, scale 100%, headers off. */
-      html, body { width: ${tpl.widthMm}mm !important; margin: 0 !important; padding: 0 !important; }
+      /* Safari ignores @page size — pin the document to the page's exact
+         geometry so its shrink-to-fit math has nothing to shrink. */
+      html, body { width: ${pw}mm !important; margin: 0 !important; padding: 0 !important; }
       .label-page { break-inside: avoid; page-break-inside: avoid; }
     }`;
 
   const wrap = document.createElement("div");
   wrap.id = "label-print";
   const pages: string[] = [];
-  for (const j of real) for (let i = 0; i < Math.min(500, j.copies); i++) pages.push(`<div class="label-page">${renderLabelSvg(tpl, j.item)}</div>`);
+  for (const j of real) for (let i = 0; i < Math.min(500, j.copies); i++) {
+    const svg = renderLabelSvg(tpl, j.item);
+    pages.push(`<div class="label-page">${rot ? `<div class="label-rot">${svg}</div>` : svg}</div>`);
+  }
   wrap.innerHTML = pages.join("");
 
   document.head.appendChild(style);
@@ -91,6 +103,10 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
             ${l.allCopies != null && l.allCopies > l.defaultCopies ? `<button data-lp-all="${i}" type="button" title="Re-tag every shelf copy" style="font:inherit;font-size:0.72rem;padding:0.25rem 0.5rem;background:transparent;color:var(--cyan,#2ce6e0);border:1px solid var(--cyan,#2ce6e0);cursor:pointer;">all ${l.allCopies}</button>` : ""}
           </div>`).join("")}
       </div>
+      <label style="display:flex;align-items:center;gap:0.45rem;font-size:0.78rem;color:var(--muted,#999);cursor:pointer;">
+        <input type="checkbox" id="lp-rot" style="accent-color:var(--cyan,#2ce6e0);width:1rem;height:1rem;">
+        ↻ Rotate 90° — for drivers that feed the roll tall/portrait (then print with Orientation: Portrait)
+      </label>
       <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;border-top:1px solid var(--border,#333);padding-top:0.7rem;">
         <button id="lp-print" type="button" style="font:inherit;font-weight:700;padding:0.45rem 0.9rem;background:var(--cyan,#2ce6e0);color:#04222a;border:1px solid var(--cyan,#2ce6e0);cursor:pointer;">🖨 Print</button>
         <button id="lp-test" type="button" title="Print a single label to check printer alignment" style="font:inherit;padding:0.45rem 0.7rem;background:transparent;color:var(--text,#eee);border:1px solid var(--border-strong,#444);cursor:pointer;">Print 1 test</button>
@@ -108,17 +124,22 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
       overlay.querySelector<HTMLInputElement>(`[data-lp-copies="${i}"]`)!.value = String(lines[i].allCopies);
     }));
   const chosenTpl = () => tpls[Number((overlay.querySelector("#lp-tpl") as HTMLSelectElement).value)] ?? tpls[0];
+  // Rotation preference sticks per station (it's a printer-driver trait).
+  const rotCb = overlay.querySelector<HTMLInputElement>("#lp-rot")!;
+  try { rotCb.checked = localStorage.getItem("tl-print-rot") === "1"; } catch { /* private mode */ }
+  rotCb.addEventListener("change", () => { try { localStorage.setItem("tl-print-rot", rotCb.checked ? "1" : "0"); } catch { /* private mode */ } });
   overlay.querySelector("#lp-print")!.addEventListener("click", () => {
     const jobs: PrintJob[] = lines.map((l, i) => ({
       item: l.item,
       copies: Math.max(0, Math.round(Number(overlay.querySelector<HTMLInputElement>(`[data-lp-copies="${i}"]`)!.value)) || 0),
     }));
     if (!jobs.some((j) => j.copies > 0)) { alert("Set at least one copy."); return; }
+    const rotate = rotCb.checked;
     close();
-    printLabels(jobs, chosenTpl());
+    printLabels(jobs, chosenTpl(), { rotate });
   });
   overlay.querySelector("#lp-test")!.addEventListener("click", () => {
-    printLabels([{ item: lines[0].item, copies: 1 }], chosenTpl());
+    printLabels([{ item: lines[0].item, copies: 1 }], chosenTpl(), { rotate: rotCb.checked });
   });
 
   document.body.appendChild(overlay);
