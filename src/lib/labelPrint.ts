@@ -23,12 +23,18 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate): Promise
     #label-print { position: fixed; left: -9999px; top: 0; background: #fff; }
     .label-page { width: ${tpl.widthMm}mm; height: ${tpl.heightMm}mm; overflow: hidden; break-after: page; page-break-after: always; }
     .label-page:last-child { break-after: auto; page-break-after: auto; }
+    .label-page svg { display: block; }
     @media print {
       /* display:none, NOT the visibility trick: hidden boxes keep their height,
          and the app shell in normal flow would feed a stack of BLANK labels
          before the real ones on a roll printer. */
       body > :not(#label-print) { display: none !important; }
       #label-print { position: static !important; left: 0 !important; }
+      /* Safari ignores @page size — pin the document to the label's exact
+         geometry so its shrink-to-fit math has nothing to shrink. Driver side:
+         paper 2.25×1.25", orientation LANDSCAPE, scale 100%, headers off. */
+      html, body { width: ${tpl.widthMm}mm !important; margin: 0 !important; padding: 0 !important; }
+      .label-page { break-inside: avoid; page-break-inside: avoid; }
     }`;
 
   const wrap = document.createElement("div");
