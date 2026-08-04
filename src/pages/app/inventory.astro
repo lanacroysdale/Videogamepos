@@ -104,6 +104,7 @@ const posData = {
     {isManager && <button id="ebay-bulk" class="btn btn-ghost btn-sm" title="Import your eBay store listings as draft products (skips ones already imported)">🛒 Import eBay store</button>}
     {isManager && <button id="ebay-sync" class="btn btn-ghost btn-sm" title="Check eBay for ended / out-of-stock listings and zero them on the website (never raises local stock)">🔁 Sync eBay stock</button>}
     {isManager && <button id="resync-img" class="btn btn-ghost btn-sm" title="Fetch covers for items with no image (only fills empties)">🔄 Resync images</button>}
+    <button id="phone-scan-btn" class="btn btn-ghost btn-sm" title="Pair your phone as a wireless scanner">📱 Phone</button>
     <a href="/entries" class="btn btn-ghost btn-sm" title="Past receiving entries + label reprints">📥 Entries</a>
     <button id="recv-toggle" class="btn btn-ghost btn-sm" title="Start a receiving session — new products and received stock get grouped for label printing">▶ Start receiving</button>
     <button id="toggle-add" class="btn btn-primary btn-sm">＋ Add product</button>
@@ -421,6 +422,7 @@ const posData = {
   import { buildPlatforms, parseQuery as _parseQuery, smartMatches as _smartMatches, matchScore } from "../../lib/smartSearch";
   import { resolveComp, compAbbrev } from "../../lib/conditionDisplay";
   import { openPrintDialog } from "../../lib/labelPrint";
+  import { initScanReceiver, openPairDialog } from "../../lib/scanReceive";
 
   const data = JSON.parse(document.getElementById("pos-data")!.textContent!);
   let items: any[] = data.items;
@@ -1258,6 +1260,11 @@ const posData = {
     if (!draftsReady) { alert("Run supabase/migrations/20260801000002_entry_drafts.sql in the Supabase SQL editor first, then refresh."); return; }
     try { await ensureEntry(); setEntryMode(true); } catch (e: any) { alert(e.message); }
   });
+  // Phone-as-scanner: in entry mode scans stage lines (ent-search auto-adds on
+  // exact code hits); otherwise they land in the grid search.
+  const scanTarget = { target: () => (entryMode ? $("ent-search") : $("inv-search")) as HTMLInputElement };
+  initScanReceiver(scanTarget);
+  document.getElementById("phone-scan-btn")?.addEventListener("click", () => openPairDialog(scanTarget));
   $("ent-exit")?.addEventListener("click", () => {
     const h = entryHuman;
     entryId = ""; entryHuman = 0; entRows = [];

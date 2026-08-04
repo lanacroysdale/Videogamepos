@@ -75,7 +75,8 @@ const posData = { catalog, categories: categories ?? [], customer };
       <div class="search" style="margin-bottom:0.8rem;">
         <span class="mag" aria-hidden="true">🔎</span>
         <input id="prod-search" type="search" placeholder="Search title, platform, or SKU — or scan a barcode" autocomplete="off" />
-        <button id="scan-btn" class="btn btn-ghost btn-sm" type="button" title="Scan a barcode" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);">📷 Scan</button>
+        <button id="scan-btn" class="btn btn-ghost btn-sm" type="button" title="Scan a barcode" style="position:absolute;right:74px;top:50%;transform:translateY(-50%);">📷 Scan</button>
+        <button id="phone-scan-btn" class="btn btn-ghost btn-sm" type="button" title="Pair your phone as a wireless scanner" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);">📱</button>
       </div>
 
       <div class="tiles" id="cat-tiles" data-gem-glow={gemGlow ? "on" : "off"}></div>
@@ -170,6 +171,7 @@ const posData = { catalog, categories: categories ?? [], customer };
 </style>
 
 <script>
+  import { initScanReceiver, openPairDialog } from "../../lib/scanReceive";
   type Item = { key: string; variantId: string | null; categoryId: string | null; kind: string; title: string; meta: string; unitPriceCents: number; qty: number; discountCents: number };
   const data = JSON.parse(document.getElementById("pos-data")!.textContent!);
   const catalog: any[] = data.catalog;
@@ -446,6 +448,10 @@ const posData = { catalog, categories: categories ?? [], customer };
     renderProducts();
   });
   $("scan-btn").addEventListener("click", () => { ($("prod-search") as HTMLInputElement).focus(); });
+  // Phone-as-scanner: scans stream into the search box like a wedge scanner.
+  const scanTarget = { target: () => $("prod-search") as HTMLInputElement };
+  initScanReceiver(scanTarget);
+  $("phone-scan-btn").addEventListener("click", () => openPairDialog(scanTarget));
   ($("cart-disc") as HTMLInputElement).addEventListener("input", recalc);
   ($("cash-in") as HTMLInputElement).addEventListener("input", recalc);
 
