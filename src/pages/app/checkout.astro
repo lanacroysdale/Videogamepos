@@ -439,11 +439,16 @@ const posData = { catalog, categories: categories ?? [], customer };
     // barcode, the printed internal label code (TL…, case-insensitive), or any
     // extra barcode on file — then add + clear.
     const code = search.trim();
-    const hit = code && catalog.find((v: any) =>
+    let hit = code && catalog.find((v: any) =>
       (v.barcode && v.barcode === code) ||
       (v.labelCode && v.labelCode === code) ||
       (v.internalCode && v.internalCode === code.toUpperCase()) ||
       (v.altBarcodes && v.altBarcodes.includes(code)));
+    if (!hit && code.length >= 3) {
+      // A UNIQUE exact-SKU match auto-adds too (ambiguous SKUs stay a search).
+      const skuHits = catalog.filter((v: any) => v.sku && v.sku.toUpperCase() === code.toUpperCase());
+      if (skuHits.length === 1) hit = skuHits[0];
+    }
     if (hit) { addVariant(hit.variantId); search = ""; (e.target as HTMLInputElement).value = ""; }
     renderProducts();
   });

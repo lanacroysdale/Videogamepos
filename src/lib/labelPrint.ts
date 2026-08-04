@@ -6,6 +6,7 @@
 // optional "all copies" toggle + a 1-label test print. Self-contained styling
 // (CSS vars from app.css only), so it drops into any POS page.
 import { renderLabelSvg, ensureLabelFont, DEFAULT_TEMPLATE, type LabelTemplate, type LabelItem } from "./labels";
+import { labelsToPdf } from "./labelPdf";
 
 export type PrintJob = { item: LabelItem; copies: number };
 
@@ -108,11 +109,12 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
         ↻ Rotate 90° — for drivers that feed the roll tall/portrait (then print with Orientation: Portrait)
       </label>
       <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;border-top:1px solid var(--border,#333);padding-top:0.7rem;">
-        <button id="lp-print" type="button" style="font:inherit;font-weight:700;padding:0.45rem 0.9rem;background:var(--cyan,#2ce6e0);color:#04222a;border:1px solid var(--cyan,#2ce6e0);cursor:pointer;">🖨 Print</button>
-        <button id="lp-test" type="button" title="Print a single label to check printer alignment" style="font:inherit;padding:0.45rem 0.7rem;background:transparent;color:var(--text,#eee);border:1px solid var(--border-strong,#444);cursor:pointer;">Print 1 test</button>
+        <button id="lp-print" type="button" style="font:inherit;font-weight:700;padding:0.45rem 0.9rem;background:var(--cyan,#2ce6e0);color:#04222a;border:1px solid var(--cyan,#2ce6e0);cursor:pointer;">🖨 Print (PDF)</button>
+        <button id="lp-test" type="button" title="Make a single-label PDF to check printer alignment" style="font:inherit;padding:0.45rem 0.7rem;background:transparent;color:var(--text,#eee);border:1px solid var(--border-strong,#444);cursor:pointer;">1 test label</button>
+        <button id="lp-browser" type="button" title="Legacy path: print the labels straight from this tab (works best in Chrome)" style="font:inherit;padding:0.45rem 0.7rem;background:transparent;color:var(--muted,#999);border:1px solid var(--border,#333);cursor:pointer;">Browser print</button>
         <button id="lp-cancel" type="button" style="font:inherit;padding:0.45rem 0.7rem;background:transparent;color:var(--muted,#999);border:1px solid var(--border,#333);cursor:pointer;margin-left:auto;">Cancel</button>
       </div>
-      <p style="margin:0;color:var(--muted-2,#888);font-size:0.72rem;">Set the printer driver to the same label size and print at 100% / Actual size.</p>
+      <p style="margin:0;color:var(--muted-2,#888);font-size:0.72rem;">The PDF's pages are exactly label-sized — open it and print at 100% / Actual Size. Same driver paper size; no orientation fiddling needed.</p>
     </div>`;
 
   const close = () => overlay.remove();
@@ -128,18 +130,41 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
   const rotCb = overlay.querySelector<HTMLInputElement>("#lp-rot")!;
   try { rotCb.checked = localStorage.getItem("tl-print-rot") === "1"; } catch { /* private mode */ }
   rotCb.addEventListener("change", () => { try { localStorage.setItem("tl-print-rot", rotCb.checked ? "1" : "0"); } catch { /* private mode */ } });
-  overlay.querySelector("#lp-print")!.addEventListener("click", () => {
+  const gatherJobs = (): PrintJob[] | null => {
     const jobs: PrintJob[] = lines.map((l, i) => ({
       item: l.item,
       copies: Math.max(0, Math.round(Number(overlay.querySelector<HTMLInputElement>(`[data-lp-copies="${i}"]`)!.value)) || 0),
     }));
-    if (!jobs.some((j) => j.copies > 0)) { alert("Set at least one copy."); return; }
+    if (!jobs.some((j) => j.copies > 0)) { alert("Set at least one copy."); return null; }
+    return jobs;
+  };
+  const openPdf = async (jobs: PrintJob[], btn: HTMLButtonElement) => {
+    const orig = btn.textContent;
+    btn.disabled = true; btn.textContent = "Rendering…";
+    try {
+      const blob = await labelsToPdf(jobs, chosenTpl(), { rotate: rotCb.checked });
+      const url = URL.createObjectURL(blob);
+      const w = window.open(url, "_blank");
+      if (!w) { const a = document.createElement("a"); a.href = url; a.download = "labels.pdf"; a.click(); }
+      setTimeout(() => URL.revokeObjectURL(url), 120_000);
+      return true;
+    } catch (e: any) { alert("Couldn't build the PDF: " + e.message); return false; }
+    finally { btn.disabled = false; btn.textContent = orig; }
+  };
+  overlay.querySelector("#lp-print")!.addEventListener("click", async (ev) => {
+    const jobs = gatherJobs();
+    if (!jobs) return;
+    if (await openPdf(jobs, ev.currentTarget as HTMLButtonElement)) close();
+  });
+  overlay.querySelector("#lp-test")!.addEventListener("click", (ev) => {
+    openPdf([{ item: lines[0].item, copies: 1 }], ev.currentTarget as HTMLButtonElement);
+  });
+  overlay.querySelector("#lp-browser")!.addEventListener("click", () => {
+    const jobs = gatherJobs();
+    if (!jobs) return;
     const rotate = rotCb.checked;
     close();
     printLabels(jobs, chosenTpl(), { rotate });
-  });
-  overlay.querySelector("#lp-test")!.addEventListener("click", () => {
-    printLabels([{ item: lines[0].item, copies: 1 }], chosenTpl(), { rotate: rotCb.checked });
   });
 
   document.body.appendChild(overlay);

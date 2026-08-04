@@ -615,6 +615,19 @@ const posData = {
   }
 
   function visible() {
+    // Code-first search: a query that hits a SKU (contains), UPC/alt barcode,
+    // label code, or internal code returns those items outright — scanning or
+    // pasting an identifier should never depend on fuzzy title matching.
+    const rawQ = (state.q || "").trim();
+    if (rawQ.length >= 2) {
+      const Q = rawQ.toUpperCase();
+      const codeHits = items.filter((p) => p.variants.some((v: any) =>
+        (v.sku && v.sku.toUpperCase().includes(Q)) ||
+        (v.internalCode && v.internalCode === Q) ||
+        (v.labelCode && v.labelCode === rawQ) ||
+        (v.barcodes || []).some((b: any) => b.barcode === rawQ)));
+      if (codeHits.length) return codeHits.sort((a, b) => a.title.localeCompare(b.title));
+    }
     let list = items.filter((p) => {
       if (state.cat && p.categoryId !== state.cat) return false;
       if (state.instock && totalQty(p) <= 0) return false;
@@ -1323,13 +1336,21 @@ const posData = {
     const hit = flat.find(({ v }: any) =>
       (v.barcodes || []).some((b: any) => b.barcode === q) || (v.labelCode && v.labelCode === q) || (v.internalCode && v.internalCode === q.toUpperCase()));
     if (hit) { entSearch.value = ""; box.hidden = true; stageVariant(hit.p, hit.v); return; }
+    // A unique exact-SKU hit stages instantly too (wedge scanners send SKUs).
+    const skuExact = flat.filter(({ v }: any) => v.sku && v.sku.toUpperCase() === q.toUpperCase());
+    if (skuExact.length === 1) { entSearch.value = ""; box.hidden = true; stageVariant(skuExact[0].p, skuExact[0].v); return; }
     const parsed = parseQuery(q);
     const matches = smartMatches(parsed).slice(0, 5);
-    const opts = matches.flatMap((m: any) => {
+    let opts = matches.flatMap((m: any) => {
       const vs = [...m.p.variants].sort((a: any, b: any) =>
         (b.completenessCode === parsed.completenessCode ? 1 : 0) - (a.completenessCode === parsed.completenessCode ? 1 : 0));
       return vs.map((v: any) => ({ p: m.p, v }));
     }).slice(0, 8);
+    // SKU-contains matches join the list (deduped) so partial SKUs find items.
+    if (q.length >= 3) {
+      const skuLike = flat.filter(({ p, v }: any) => v.sku && v.sku.toUpperCase().includes(q.toUpperCase()) && !opts.some((o: any) => o.v.id === v.id));
+      opts = [...skuLike, ...opts].slice(0, 8);
+    }
     box.innerHTML = opts.map((o: any, i: number) => `
       <div class="ti-sug" data-i="${i}">
         <span class="ti-sug-title">${esc(o.p.title)}</span>
