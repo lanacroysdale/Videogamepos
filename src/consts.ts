@@ -85,6 +85,19 @@ export const NAV: NavItem[] = [
 // Anchor target for the "Find Us" header pill (the Eat·Play·Connect section).
 export const FIND_US_HREF = '/#journey';
 
+// Social channels, rendered as icon links in the header nav and the footer
+// (see SocialLinks.astro, which maps `icon` to the matching SVG).
+export interface SocialLink {
+  label: string;
+  href: string;
+  icon: 'youtube' | 'instagram';
+}
+
+export const SOCIALS: SocialLink[] = [
+  { label: 'YouTube', href: 'https://www.youtube.com/@TimeLagGaming', icon: 'youtube' },
+  { label: 'Instagram', href: 'https://www.instagram.com/timelagstudio/', icon: 'instagram' },
+];
+
 // Used in the "condition" dropdown on the sell/trade form.
 export const CONDITIONS = [
   'Complete / Like new',
