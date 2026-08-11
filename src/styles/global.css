@@ -720,6 +720,16 @@ body:not(.app-body) .section::before {
 .nav-pin svg { width: 18px; height: 18px; flex: none; }
 .nav-toggle { display: none; }
 
+/* ---------- Social icon links (header nav + footer) ---------- */
+.social-links { display: flex; align-items: center; gap: 0.35rem; list-style: none; padding: 0; margin: 0; }
+.social-links a {
+  display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%;
+  transition: color 0.15s ease, opacity 0.15s ease, background 0.15s ease;
+}
+.social-links svg { width: 19px; height: 19px; display: block; }
+.nav-social a { color: var(--accent-ink); opacity: 0.82; }
+.nav-social a:hover { opacity: 1; background: rgba(0, 0, 0, 0.12); }
+
 @media (max-width: 960px) {
   .nav-toggle {
     display: flex; flex-direction: column; gap: 5px;
@@ -739,6 +749,9 @@ body:not(.app-body) .section::before {
   .nav ul a { color: var(--text); opacity: 1; font-size: 1.5rem; }
   .nav li a { display: block; padding: 0.7rem 0.25rem; border-bottom: 1px solid var(--border); }
   .nav-pin { margin-top: 0.85rem; align-self: flex-start; }
+  .nav-social { margin-top: 0.85rem; gap: 0.6rem; }
+  .nav-social a { color: var(--text); opacity: 1; background: rgba(255, 255, 255, 0.06); border: 1px solid var(--border); width: 44px; height: 44px; }
+  .nav-social svg { width: 22px; height: 22px; }
 }
 
 /* Small phones: shrink the brand lockup so it never collides with the menu button */
@@ -769,6 +782,9 @@ body:not(.app-body) .section::before {
 .foot-logo { height: 44px; width: auto; display: block; }
 .foot-brand-row { display: flex; align-items: center; gap: 0.7rem; margin-bottom: 0.7rem; }
 .foot-brand p { margin-top: 0.6rem; max-width: 38ch; color: rgba(37, 19, 10, 0.82); }
+.foot-social { margin-top: 1rem; gap: 0.5rem; }
+.foot-social a { color: rgba(37, 19, 10, 0.82); background: rgba(255, 255, 255, 0.22); }
+.foot-social a:hover { color: var(--accent-ink); background: rgba(255, 255, 255, 0.4); }
 .foot-brand .loc { color: rgba(37, 19, 10, 0.7); }
 .foot-col h3 { font-size: 1.05rem; text-transform: uppercase; letter-spacing: 0.06em; color: rgba(37, 19, 10, 0.62); margin-bottom: 0.9rem; font-family: var(--font-display); font-style: italic; font-weight: 400; }
 .foot-col ul { list-style: none; padding: 0; display: grid; gap: 0.6rem; }
