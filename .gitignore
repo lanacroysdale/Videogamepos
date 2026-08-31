@@ -28,3 +28,6 @@ pnpm-debug.log*
 # vercel
 .vercel
 .env*
+
+# local database backups (npm run db:export)
+backups/

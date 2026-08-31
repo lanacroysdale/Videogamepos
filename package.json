@@ -17,7 +17,9 @@
     "db:reset": "supabase db reset",
     "db:seed": "node --env-file=.env scripts/seed.mjs",
     "db:setup": "supabase db reset && node --env-file=.env scripts/seed.mjs",
-    "db:types": "supabase gen types typescript --local > src/lib/database.types.ts"
+    "db:types": "supabase gen types typescript --local > src/lib/database.types.ts",
+    "db:export": "node --env-file=.env scripts/export-backup.mjs",
+    "db:reset-inventory": "node --env-file=.env scripts/reset-inventory.mjs"
   },
   "dependencies": {
     "@astrojs/sitemap": "^3.2.1",
