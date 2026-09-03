@@ -143,6 +143,7 @@ const posData = {
 <script>
   import { buildPlatforms, parseQuery as parseQ, smartMatches } from "../../lib/smartSearch";
   import { initScanReceiver, openPairDialog } from "../../lib/scanReceive";
+  import { barcodeEq } from "../../lib/gtin";
 
   type Row = { key: string; description: string; categoryId: string | null; resaleCents: number };
   const data = JSON.parse(document.getElementById("pos-data")!.textContent!);
@@ -206,7 +207,8 @@ const posData = {
   function findByBarcode(raw: string): { p: any; v: any } | null {
     const q = raw.trim();
     if (q.length < 6) return null;
-    for (const p of catalog) for (const v of p.variants) if ((v.barcodes || []).includes(q)) return { p, v };
+    // GTIN-aware: a 12-digit camera read matches a 13-digit EAN on file.
+    for (const p of catalog) for (const v of p.variants) if ((v.barcodes || []).some((b: string) => barcodeEq(b, q))) return { p, v };
     return null;
   }
   // Typeahead: as the employee types, suggest catalog matches + a resale value.

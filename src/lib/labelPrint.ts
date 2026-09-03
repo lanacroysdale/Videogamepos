@@ -5,12 +5,17 @@
 // openPrintDialog() is the shared chooser: template picker + per-line copies +
 // optional "all copies" toggle + a 1-label test print. Self-contained styling
 // (CSS vars from app.css only), so it drops into any POS page.
-import { renderLabelSvg, ensureLabelFont, DEFAULT_TEMPLATE, LABEL_FONTS, type LabelTemplate, type LabelItem } from "./labels";
-import { labelsToPdf } from "./labelPdf";
+import { renderLabelSvg, ensureLabelFont, DEFAULT_TEMPLATE, type LabelTemplate, type LabelItem } from "./labels";
+import { labelsToPdf, fontStyleTag, inlineLogo, escAttr } from "./labelPdf";
 
 export type PrintJob = { item: LabelItem; copies: number };
 
-export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: { rotate?: boolean }): Promise<void> {
+// scalePct / nudge: per-station physical alignment — thermal drivers have
+// head offsets and hidden margins no web page can detect, so the user dials
+// these in once from a test label and they stick (localStorage).
+export type PrintTune = { rotate?: boolean; scalePct?: number; nudgeXMm?: number; nudgeYMm?: number };
+
+export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: PrintTune): Promise<void> {
   const real = jobs.filter((j) => j.copies > 0);
   if (!real.length) return;
   await ensureLabelFont(tpl); // warms the font cache the iframe will hit
@@ -21,33 +26,49 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: {
   const rot = !!opts?.rotate;
   const pw = rot ? tpl.heightMm : tpl.widthMm;  // page width
   const ph = rot ? tpl.widthMm : tpl.heightMm;  // page height
+  const scale = Math.min(100, Math.max(60, Math.round(Number(opts?.scalePct) || 100)));
+  const nx = Math.min(8, Math.max(-8, Number(opts?.nudgeXMm) || 0));
+  const ny = Math.min(8, Math.max(-8, Number(opts?.nudgeYMm) || 0));
 
+  // Rotation happens INSIDE the SVG (a natively-portrait image), and each
+  // label ships as an <img> — an ATOMIC replaced element that print
+  // pagination can move or scale but never split. Safari fragmented both
+  // CSS-transformed and inline-SVG labels across two pages.
+  const W = tpl.widthMm, H = tpl.heightMm;
+  const rotateSvg = (svg: string) => {
+    const inner = svg.replace(/^<svg[^>]*>/, "").replace(/<\/svg>\s*$/, "");
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${H}mm" height="${W}mm" viewBox="0 0 ${H} ${W}"><g transform="rotate(90) translate(0 -${H})">${inner}</g></svg>`;
+  };
+  // An <img>'s SVG is an isolated document: no external fetches — inline the
+  // web font and logo as data: URLs (same treatment the PDF path uses).
+  const styleTag = await fontStyleTag(tpl);
+  const logoData = tpl.logoUrl ? await inlineLogo(tpl.logoUrl) : "";
   const pages: string[] = [];
-  for (const j of real) for (let i = 0; i < Math.min(500, j.copies); i++) {
-    const svg = renderLabelSvg(tpl, j.item);
-    pages.push(`<div class="label-page">${rot ? `<div class="label-rot">${svg}</div>` : svg}</div>`);
+  for (const j of real) {
+    let svg = renderLabelSvg(tpl, j.item);
+    if (styleTag) svg = svg.replace(/(<svg[^>]*>)/, `$1${styleTag}`);
+    if (tpl.logoUrl && logoData) svg = svg.split(escAttr(tpl.logoUrl)).join(logoData).split(tpl.logoUrl).join(logoData);
+    if (rot) svg = rotateSvg(svg);
+    const src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+    for (let i = 0; i < Math.min(500, j.copies); i++) {
+      pages.push(`<div class="label-page"><img src="${src}" alt=""></div>`);
+    }
   }
-
-  // Label fonts for the isolated document (plain <link> — it's a real page).
-  const fontDef = LABEL_FONTS.find((f) => f.key === tpl.fontKey);
-  const fontHead = tpl.fontKey === "custom" && tpl.fontUrl
-    ? `<style>@font-face{font-family:'TLLabelCustom';src:url('${tpl.fontUrl.replace(/'/g, "%27")}')}</style>`
-    : fontDef?.css ? `<link rel="stylesheet" href="${fontDef.css}">` : "";
 
   // Print from an ISOLATED iframe document that contains nothing but the
   // labels. Printing from the app page itself (hide-the-shell-with-CSS) let
   // the shell's boxes bleed into pagination on Safari — phantom blank labels,
   // shrunk pages. A standalone document has nothing to interfere.
-  const html = `<!doctype html><html><head><meta charset="utf-8">${fontHead}<style>
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
     @page { size: ${pw}mm ${ph}mm; margin: 0; }
     html, body { margin: 0; padding: 0; width: ${pw}mm; background: #fff; }
     body { line-height: 0; font-size: 0; }
-    /* 0.4mm shy of the page: sub-mm rounding between CSS and the driver's
-       paper must never spill a label onto a phantom second page. */
-    .label-page { width: ${pw}mm; height: calc(${ph}mm - 0.4mm); overflow: hidden; break-after: page; page-break-after: always; break-inside: avoid; page-break-inside: avoid; }
+    /* Composed 1mm shy of the page and contain-fitted: if the driver's page
+       box is a hair smaller than the paper (hidden margins, mm rounding),
+       the label scales down a percent instead of spilling to a second page. */
+    .label-page { width: ${pw}mm; height: calc(${ph}mm - 1mm); overflow: hidden; display: grid; place-items: center; break-after: page; page-break-after: always; break-inside: avoid; page-break-inside: avoid; }
     .label-page:last-child { break-after: auto; page-break-after: auto; }
-    .label-page svg { display: block; }
-    .label-rot { width: ${tpl.widthMm}mm; height: ${tpl.heightMm}mm; transform: rotate(90deg) translateY(-${tpl.heightMm}mm); transform-origin: top left; }
+    .label-page img { display: block; width: ${scale}%; height: ${scale}%; object-fit: contain; position: relative; left: ${nx}mm; top: ${ny}mm; }
   </style></head><body>${pages.join("")}</body></html>`;
 
   document.getElementById("label-print-frame")?.remove();
@@ -58,9 +79,15 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: {
   frame.srcdoc = html;
   await new Promise<void>((res) => { frame.onload = () => res(); document.body.appendChild(frame); });
   const cw = frame.contentWindow!;
-  // Fonts + the logo <image> must be ready or the first tag prints wrong.
-  try { await Promise.race([(cw.document as any).fonts?.ready, new Promise((r) => setTimeout(r, 2500))]); } catch { /* fallback font ok */ }
-  await new Promise((r) => setTimeout(r, 50)); // one layout tick after fonts swap in
+  // Every label <img> must be decoded before print or pages come out empty.
+  try {
+    const imgs = [...cw.document.images];
+    await Promise.race([
+      Promise.all(imgs.map((im) => im.decode().catch(() => undefined))),
+      new Promise((r) => setTimeout(r, 3000)),
+    ]);
+  } catch { /* print what we have */ }
+  await new Promise((r) => setTimeout(r, 50)); // one layout tick
   const cleanup = () => frame.remove();
   cw.addEventListener("afterprint", () => setTimeout(cleanup, 500));
   setTimeout(cleanup, 120_000); // Safari can skip afterprint — sweep up either way
@@ -112,6 +139,20 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
         ↻ Rotate for roll feed — label printers feed narrow-edge first; leave ON for a label printer, turn off for a regular sheet printer
       </label>
       <p id="lp-paper" style="margin:0;padding:0.45rem 0.6rem;background:rgba(44,230,224,.08);border:1px solid rgba(44,230,224,.3);color:var(--text,#eee);font-size:0.76rem;"></p>
+      <details id="lp-tune-wrap" style="font-size:0.78rem;color:var(--muted,#999);">
+        <summary style="cursor:pointer;">🎛 Fine-tune alignment (if the printed label is clipped or off-center — saves on this station)</summary>
+        <div style="display:flex;gap:0.9rem;align-items:center;flex-wrap:wrap;margin-top:0.5rem;">
+          <label style="display:flex;align-items:center;gap:0.35rem;">Size
+            <input id="lp-scale" type="number" min="60" max="100" step="1" value="100" style="width:4.2rem;font:inherit;padding:0.25rem 0.35rem;background:var(--bg,#000);color:var(--text,#eee);border:1px solid var(--border-strong,#444);">%
+          </label>
+          <label style="display:flex;align-items:center;gap:0.35rem;" title="Positive moves the label right on the page">Nudge →
+            <input id="lp-nx" type="number" min="-8" max="8" step="0.5" value="0" style="width:4.2rem;font:inherit;padding:0.25rem 0.35rem;background:var(--bg,#000);color:var(--text,#eee);border:1px solid var(--border-strong,#444);">mm
+          </label>
+          <label style="display:flex;align-items:center;gap:0.35rem;" title="Positive moves the label down the page">Nudge ↓
+            <input id="lp-ny" type="number" min="-8" max="8" step="0.5" value="0" style="width:4.2rem;font:inherit;padding:0.25rem 0.35rem;background:var(--bg,#000);color:var(--text,#eee);border:1px solid var(--border-strong,#444);">mm
+          </label>
+        </div>
+      </details>
       <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;border-top:1px solid var(--border,#333);padding-top:0.7rem;">
         <button id="lp-browser" type="button" style="font:inherit;font-weight:700;padding:0.45rem 0.9rem;background:var(--cyan,#2ce6e0);color:#04222a;border:1px solid var(--cyan,#2ce6e0);cursor:pointer;">🖨 Print</button>
         <button id="lp-print" type="button" title="Build a PDF with exactly label-sized pages — prints identically from any device or viewer at 100%" style="font:inherit;padding:0.45rem 0.7rem;background:transparent;color:var(--text,#eee);border:1px solid var(--border-strong,#444);cursor:pointer;">📄 PDF</button>
@@ -139,6 +180,31 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
   try { stored = localStorage.getItem("tl-print-rot-v2"); } catch { /* private mode */ }
   rotCb.checked = stored == null ? chosenTpl().widthMm > chosenTpl().heightMm : stored === "1";
   rotCb.addEventListener("change", () => { try { localStorage.setItem("tl-print-rot-v2", rotCb.checked ? "1" : "0"); } catch { /* private mode */ } });
+
+  // Physical-alignment tune values persist per station; the details block
+  // opens automatically when a saved value is in play so it's never hidden.
+  const tuneEls = {
+    scale: overlay.querySelector<HTMLInputElement>("#lp-scale")!,
+    nx: overlay.querySelector<HTMLInputElement>("#lp-nx")!,
+    ny: overlay.querySelector<HTMLInputElement>("#lp-ny")!,
+  };
+  try {
+    tuneEls.scale.value = localStorage.getItem("tl-print-scale") || "100";
+    tuneEls.nx.value = localStorage.getItem("tl-print-nx") || "0";
+    tuneEls.ny.value = localStorage.getItem("tl-print-ny") || "0";
+  } catch { /* private mode */ }
+  if (tuneEls.scale.value !== "100" || tuneEls.nx.value !== "0" || tuneEls.ny.value !== "0") {
+    overlay.querySelector<HTMLDetailsElement>("#lp-tune-wrap")!.open = true;
+  }
+  const tune = (): { scalePct: number; nudgeXMm: number; nudgeYMm: number } => {
+    const t = { scalePct: Number(tuneEls.scale.value) || 100, nudgeXMm: Number(tuneEls.nx.value) || 0, nudgeYMm: Number(tuneEls.ny.value) || 0 };
+    try {
+      localStorage.setItem("tl-print-scale", String(t.scalePct));
+      localStorage.setItem("tl-print-nx", String(t.nudgeXMm));
+      localStorage.setItem("tl-print-ny", String(t.nudgeYMm));
+    } catch { /* private mode */ }
+    return t;
+  };
 
   // Live label count on the Print button + the driver paper size to match —
   // the "why did it print 8 pages" and "why is it tiny" answers, up front.
@@ -183,15 +249,17 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
     if (!jobs) return;
     if (await openPdf(jobs, ev.currentTarget as HTMLButtonElement)) close();
   });
-  overlay.querySelector("#lp-test")!.addEventListener("click", (ev) => {
-    openPdf([{ item: lines[0].item, copies: 1 }], ev.currentTarget as HTMLButtonElement);
+  // Test label goes through the SAME path as the real print so alignment
+  // tuning is verified on the pipeline it applies to. Dialog stays open.
+  overlay.querySelector("#lp-test")!.addEventListener("click", () => {
+    printLabels([{ item: lines[0].item, copies: 1 }], chosenTpl(), { rotate: rotCb.checked, ...tune() });
   });
   overlay.querySelector("#lp-browser")!.addEventListener("click", () => {
     const jobs = gatherJobs();
     if (!jobs) return;
-    const rotate = rotCb.checked;
+    const opts = { rotate: rotCb.checked, ...tune() };
     close();
-    printLabels(jobs, chosenTpl(), { rotate });
+    printLabels(jobs, chosenTpl(), opts);
   });
 
   document.body.appendChild(overlay);
