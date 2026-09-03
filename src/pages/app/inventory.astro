@@ -4,6 +4,7 @@ export const prerender = false;
 import AppLayout from "../../layouts/AppLayout.astro";
 import { labelTemplates } from "../../lib/labels";
 import { MARKETING_HOSTS } from "../../consts";
+import { createSupabaseAdminClient } from "../../lib/supabase";
 
 const supabase = Astro.locals.supabase;
 const [{ data: categories }, { data: settings }, { data: completeness }, { data: grades }] = await Promise.all([
@@ -34,16 +35,34 @@ if (!srcProbeErr) {
   ]);
   knownSuppliers = [...new Set([...(entSup ?? []).map((r: any) => r.supplier), ...(prodSup ?? []).map((r: any) => r.label)].filter(Boolean))].slice(0, 40);
 }
+// Soft-delete (migration 20260903000001): probe so pre-migration DBs keep
+// working, and purge anything past its 7-day "Recently deleted" window.
+const { error: delProbeErr } = await supabase.from("products").select("deleted_at").limit(1);
+const RD_DAYS = 7;
+if (!delProbeErr) {
+  const cutoff = new Date(Date.now() - RD_DAYS * 864e5).toISOString();
+  const { data: expired } = await supabase.from("products").select("id").not("deleted_at", "is", null).lt("deleted_at", cutoff).limit(200);
+  if (expired?.length) {
+    const admin = createSupabaseAdminClient();
+    const ids = expired.map((r: any) => r.id);
+    // transaction_items → variants has no cascade: unlink (receipts keep their
+    // name/price snapshots), then the product delete cascades everything else.
+    const { data: vars } = await admin.from("product_variants").select("id").in("product_id", ids);
+    if (vars?.length) await admin.from("transaction_items").update({ variant_id: null }).in("variant_id", vars.map((v: any) => v.id));
+    await admin.from("products").delete().in("id", ids);
+  }
+}
 const variantExtraCols = `${hasTypes ? ", inventory_type_id, location_id" : ""}${lcProbeErr ? "" : ", label_code"}`;
 const { data: products } = await supabase
   .from("products")
   .select(
-    `id, title, slug, platform, franchise, genre, description, image_url, alternative_names, tags, category_id, category:categories(name,color)${srcProbeErr ? "" : ", product_suppliers(id, label, url)"}, product_variants(id, condition, completeness, completeness_code, grade_code, sku, barcode, internal_code, price_cents, online_price_cents, cost_cents, quantity, online_visible${variantExtraCols}, product_barcodes(id, barcode, label))`,
+    `id, title, slug, platform, franchise, genre, description, image_url, alternative_names, tags, category_id${delProbeErr ? "" : ", deleted_at"}, category:categories(name,color)${srcProbeErr ? "" : ", product_suppliers(id, label, url)"}, product_variants(id, condition, completeness, completeness_code, grade_code, sku, barcode, internal_code, price_cents, online_price_cents, cost_cents, quantity, online_visible${variantExtraCols}, product_barcodes(id, barcode, label))`,
   )
   .order("title");
 
-const items = (products ?? []).map((p: any) => ({
+const allRows = (products ?? []).map((p: any) => ({
   id: p.id,
+  deletedAt: p.deleted_at ?? null,
   title: p.title,
   slug: p.slug ?? "",
   platform: p.platform ?? "",
@@ -80,6 +99,17 @@ const items = (products ?? []).map((p: any) => ({
   })),
 }));
 const isManager = ["owner", "manager"].includes(Astro.locals.profile?.role ?? "");
+const items = allRows.filter((i) => !i.deletedAt);
+// "Recently deleted" (managers only): restorable for RD_DAYS, then purged above.
+const deletedItems = isManager
+  ? allRows
+      .filter((i) => i.deletedAt)
+      .map((i) => ({
+        id: i.id, title: i.title, platform: i.platform,
+        daysLeft: Math.max(1, Math.ceil(RD_DAYS - (Date.now() - Date.parse(i.deletedAt)) / 864e5)),
+      }))
+      .sort((a, b) => a.daysLeft - b.daysLeft)
+  : [];
 const posData = {
   items,
   categories: categories ?? [],
@@ -209,9 +239,27 @@ const posData = {
       <button id="bulk-print" class="btn btn-ghost btn-sm" type="button">🏷 Print labels</button>
       <button id="bulk-offline" class="btn btn-ghost btn-sm" type="button">Unpublish</button>
       <button id="bulk-online" class="btn btn-primary btn-sm" type="button">🌐 Publish to web</button>
+      {isManager && !delProbeErr && <button id="bulk-delete" class="btn btn-ghost btn-sm bulk-del" type="button" title="Move to Recently deleted (kept 7 days, then purged)">🗑 Delete</button>}
       <button id="bulk-clear" class="btn btn-ghost btn-sm" type="button">✕ Clear</button>
     </div>
   </div>
+
+  {isManager && deletedItems.length > 0 && (
+    <div class="pos-panel rd-panel">
+      <h2 class="rd-head">🗑 Recently deleted</h2>
+      <p class="muted rd-note">Kept for 7 days, then removed for good. Restored items come back <strong>unpublished</strong> — review, then publish again.</p>
+      <ul class="rd-list">
+        {deletedItems.map((d) => (
+          <li>
+            <span class="rd-title">{d.title}</span>
+            {d.platform && <span class="muted">{d.platform}</span>}
+            <span class="rd-days">{d.daysLeft} day{d.daysLeft === 1 ? "" : "s"} left</span>
+            <button class="btn btn-ghost btn-sm rd-restore" data-id={d.id} type="button">↩ Restore</button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )}
 
   <div id="edit-modal" class="modal-wrap" hidden>
     <div class="modal-backdrop" data-close></div>
@@ -269,6 +317,16 @@ const posData = {
   .inv-card.selected { border-color:var(--cyan); box-shadow:inset 0 0 0 1px var(--cyan); }
   .inv-card .inv-actions, .inv-card .vchip, .inv-card .inv-warn { cursor:auto; }
   .inv-check { position:absolute; top:0.55rem; left:0.55rem; z-index:3; width:1.25rem; height:1.25rem; cursor:pointer; accent-color:var(--cyan); }
+
+  /* Recently deleted (soft-delete holding pen) */
+  .rd-panel { margin-top:1.5rem; border-color:rgba(208,66,110,.45); }
+  .rd-head { font-size:1rem; }
+  .rd-note { font-size:0.85rem; margin:0.3rem 0 0.8rem; }
+  .rd-list { list-style:none; padding:0; margin:0; display:grid; gap:0.4rem; }
+  .rd-list li { display:flex; align-items:center; gap:0.8rem; padding:0.5rem 0.2rem; border-top:1px solid var(--border); flex-wrap:wrap; }
+  .rd-title { font-weight:700; }
+  .rd-days { margin-left:auto; font-size:0.8rem; color:var(--magenta); font-family:var(--font-mono); }
+  .bulk-del { color:var(--magenta); }
 
   /* Bulk-edit action bar */
   .bulk-bar {
@@ -703,6 +761,37 @@ const posData = {
   }
   $("bulk-online").addEventListener("click", () => bulkSetOnline(true));
   $("bulk-offline").addEventListener("click", () => bulkSetOnline(false));
+
+  // Bulk delete (managers only; the button only renders for them — the API
+  // enforces the role server-side too). Soft-delete: 7 days in Recently
+  // deleted, restorable, then purged for good.
+  document.getElementById("bulk-delete")?.addEventListener("click", async () => {
+    const ids = [...selected];
+    if (!ids.length) return;
+    const n = ids.length;
+    if (!confirm(`Delete ${n} item${n === 1 ? "" : "s"}?\n\nThey come off the website immediately and sit in "Recently deleted" for 7 days (restorable), then are removed permanently.`)) return;
+    const btn = document.getElementById("bulk-delete") as HTMLButtonElement;
+    btn.disabled = true; btn.textContent = "Deleting…";
+    try {
+      await api({ action: "bulkDelete", productIds: ids });
+      location.reload();
+    } catch (e: any) {
+      toast("✗ " + e.message);
+      btn.disabled = false; btn.textContent = "🗑 Delete";
+    }
+  });
+  document.querySelectorAll<HTMLButtonElement>(".rd-restore").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      btn.disabled = true; btn.textContent = "Restoring…";
+      try {
+        await api({ action: "bulkRestore", productIds: [btn.dataset.id] });
+        location.reload();
+      } catch (e: any) {
+        toast("✗ " + e.message);
+        btn.disabled = false; btn.textContent = "↩ Restore";
+      }
+    });
+  });
   // Print labels for every condition of the selected items (1 each by default,
   // with the per-line "all N" escape hatch for full re-tags).
   $("bulk-print").addEventListener("click", () => {

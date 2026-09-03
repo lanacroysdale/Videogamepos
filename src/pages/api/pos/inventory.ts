@@ -359,6 +359,30 @@ export const POST: APIRoute = async ({ locals, request }) => {
       if (error) return json({ error: error.message }, 500);
       return json({ ok: true, updated: data?.length ?? 0 });
     }
+    case "bulkDelete": {
+      // Soft-delete: stamp deleted_at → items move to "Recently deleted" for
+      // 7 days (restorable), then the inventory page purges them permanently.
+      if (!["owner", "manager"].includes(locals.profile?.role ?? "")) return json({ error: "Managers only" }, 403);
+      const ids = Array.isArray(b.productIds) ? b.productIds.filter(Boolean) : [];
+      if (!ids.length) return json({ error: "No items selected" }, 400);
+      const { error } = await sb.from("products").update({ deleted_at: new Date().toISOString() }).in("id", ids);
+      if (error) {
+        return json({ error: /deleted_at/.test(error.message) ? "Database migration needed first (product_soft_delete) — run npx supabase db push." : error.message }, 500);
+      }
+      // A deleted item must never sell: pull it off the website immediately.
+      await sb.from("product_variants").update({ online_visible: false }).in("product_id", ids);
+      return json({ ok: true, deleted: ids.length });
+    }
+    case "bulkRestore": {
+      if (!["owner", "manager"].includes(locals.profile?.role ?? "")) return json({ error: "Managers only" }, 403);
+      const ids = Array.isArray(b.productIds) ? b.productIds.filter(Boolean) : [];
+      if (!ids.length) return json({ error: "No items selected" }, 400);
+      // Comes back unpublished (variants stayed online_visible=false) — staff
+      // republish deliberately after checking the listing over.
+      const { error } = await sb.from("products").update({ deleted_at: null }).in("id", ids);
+      if (error) return json({ error: error.message }, 500);
+      return json({ ok: true, restored: ids.length });
+    }
     case "repriceProduct": {
       // Condition-pricing engine: re-price the product's other conditions from
       // this one. Gated server-side by store_settings.condition_pricing_enabled.
