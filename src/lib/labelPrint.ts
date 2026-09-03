@@ -260,11 +260,13 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
   const refreshInfo = () => {
     const t = chosenTpl();
     const sideways = rotDeg() === 90 || rotDeg() === 270;
-    const pw = sideways ? t.heightMm : t.widthMm, ph = sideways ? t.widthMm : t.heightMm;
     const n = lines.reduce((a, _, i) => a + Math.max(0, Math.round(Number(overlay.querySelector<HTMLInputElement>(`[data-lp-copies="${i}"]`)!.value)) || 0), 0);
     overlay.querySelector("#lp-browser")!.textContent = `🖨 Print ${n} label${n === 1 ? "" : "s"}`;
+    // Talk in the LABEL's terms — the driver's paper picker lists it as
+    // W×H (e.g. "2.25x1.25") regardless of which way the page is composed.
     overlay.querySelector("#lp-paper")!.innerHTML =
-      `Printer setup: paper size <b>${pw.toFixed(1)} × ${ph.toFixed(1)} mm</b> (${inch(pw)} × ${inch(ph)}″), orientation <b>${pw > ph ? "Landscape" : "Portrait"}</b>, scale <b>100%</b>. One page = one label.`;
+      `Printer setup: paper size <b>${inch(t.widthMm)} × ${inch(t.heightMm)}″</b> (${t.widthMm}×${t.heightMm}mm — your label size), margins <b>none</b>, scale <b>100%</b>.` +
+      (sideways ? ` Pages are composed sideways to match the roll feed — one page = one label.` : ` One page = one label.`);
   };
   refreshInfo();
   rotSel.addEventListener("change", refreshInfo);
