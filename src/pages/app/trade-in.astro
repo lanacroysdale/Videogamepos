@@ -5,16 +5,19 @@ import AppLayout from "../../layouts/AppLayout.astro";
 import { fmt, fullName } from "../../lib/money";
 
 const supabase = Astro.locals.supabase;
-const [{ data: margins }, { data: categories }, { data: completeness }, { data: grades }, { data: products }] = await Promise.all([
+// Soft-deleted products (migration 20260903000001) shouldn't be offered for trade.
+const { error: delProbeErr } = await Astro.locals.supabase.from("products").select("deleted_at").limit(1);
+const [{ data: margins }, { data: categories }, { data: completeness }, { data: grades }, { data: productRows }] = await Promise.all([
   supabase.from("trade_margins").select("*").order("sort_order"),
   supabase.from("categories").select("id,name").order("sort_order"),
   supabase.from("completeness_levels").select("code,label,aliases").eq("is_active", true).order("sort_order"),
   supabase.from("condition_grades").select("code,label,aliases,icon").eq("is_active", true).order("rank"),
   supabase
     .from("products")
-    .select("id, title, platform, franchise, alternative_names, category_id, product_variants(price_cents, completeness_code, grade_code)")
+    .select(`id, title, platform, franchise, alternative_names, category_id${delProbeErr ? "" : ", deleted_at"}, product_variants(price_cents, completeness_code, grade_code)`)
     .order("title"),
 ]);
+const products = (productRows ?? []).filter((p: any) => !p.deleted_at);
 
 const customerId = Astro.url.searchParams.get("customer");
 let customer = null;

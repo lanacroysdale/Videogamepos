@@ -23,13 +23,19 @@ const allowedTypeIds = await syncableTypeIds(admin);
 const variantCols = `id, condition, completeness_code, grade_code, price_cents, online_price_cents, quantity, online_visible${allowedTypeIds ? ", inventory_type_id" : ""}, product_barcodes(barcode, label)`;
 // (Result cast to any: the dynamic select string defeats supabase-js's
 // literal-type parser, which would otherwise type every field access as error.)
-const { data: product } = (await admin
+// deleted_at column ships in migration 20260903000001 — retry without it so a
+// pre-migration DB still serves the page (nothing is soft-deleted there anyway).
+const productCols = `id, title, slug, platform, franchise, genre, description, image_url, trailer_url, release_year, brand, alternative_names, tags, category:categories(name), product_variants(${variantCols})`;
+let res = (await admin
   .from("products")
-  .select(
-    `id, title, slug, platform, franchise, genre, description, image_url, trailer_url, release_year, brand, alternative_names, tags, category:categories(name), product_variants(${variantCols})`,
-  )
+  .select(`deleted_at, ${productCols}`)
   .eq("slug", slug)
-  .maybeSingle()) as { data: any };
+  .maybeSingle()) as { data: any; error: any };
+if (res.error) {
+  res = (await admin.from("products").select(productCols).eq("slug", slug).maybeSingle()) as { data: any; error: any };
+}
+// A soft-deleted product's page is gone, same as one that never existed.
+const product: any = res.data && !res.data.deleted_at ? res.data : null;
 
 if (!product) Astro.response.status = 404;
 

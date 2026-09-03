@@ -578,6 +578,46 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       <span id="ai-status" class="muted"></span>
     </div>
   </div>
+
+  {isOwner && (
+    <div class="pos-panel set-panel danger-panel">
+      <h2>Danger zone</h2>
+      <p class="muted set-desc">
+        Owner-only maintenance. The backup downloads <strong>every table</strong> (inventory,
+        sales, customers, tasks, SOPs…) as a single JSON file to this device — do it regularly,
+        the free database plan keeps no automatic backups.
+      </p>
+
+      <div class="set-row" style="display:block;">
+        <strong>Download full backup</strong><br />
+        <span class="muted">Everything except product photos and login passwords. Safe to run anytime.</span>
+        <div class="set-actions">
+          <button id="dz-backup" class="btn btn-primary">⬇ Download backup</button>
+          <span id="dz-backup-status" class="muted"></span>
+        </div>
+      </div>
+
+      <div class="set-row" style="display:block;">
+        <strong>Reset inventory</strong><br />
+        <span class="muted">
+          Deletes all products, variants, SKUs, barcodes, price history, stock movements, and
+          intake entries for a fresh start. Employees, SOPs, tasks, menu, customers, and sales
+          history are kept (old receipts keep their item names and prices). Requires a backup
+          downloaded within the last 24 hours.
+        </span>
+        <label class="set-row set-toggle" style="border:0;padding:0.7rem 0 0;">
+          <input type="checkbox" id="dz-photos" />
+          <span>Also delete all product photos from storage (not part of the JSON backup!)</span>
+        </label>
+        <div class="set-actions" style="flex-wrap:wrap;">
+          <input id="dz-confirm" type="text" autocomplete="off" placeholder='Type WIPE to enable'
+            style="max-width:200px;text-transform:uppercase;" />
+          <button id="dz-wipe" class="btn" disabled>🧨 Wipe inventory</button>
+          <span id="dz-wipe-status" class="muted"></span>
+        </div>
+      </div>
+    </div>
+  )}
   <textarea id="lt-data" hidden set:text={JSON.stringify({ templates: lblTemplates, storeName })}></textarea>
 </AppLayout>
 
@@ -592,6 +632,10 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   .set-money { display: inline-flex; align-items: center; gap: 0.2rem; font-weight: 700; }
   .set-preview { margin: 1rem 0 0; padding: 0.7rem 0.9rem; background: rgba(255,255,255,.03); border: 1px solid var(--border); font-size: 0.9rem; }
   .set-actions { display: flex; align-items: center; gap: 1rem; margin-top: 1.3rem; }
+
+  .danger-panel { border-color: var(--magenta, #d0426e); }
+  .danger-panel h2 { color: var(--magenta, #d0426e); }
+  #dz-wipe:not(:disabled) { background: var(--magenta, #d0426e); color: #fff; border-color: transparent; }
 
   .theme-grid { display: flex; flex-wrap: wrap; gap: 0.7rem; }
   .theme-swatch {
@@ -1180,6 +1224,65 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     ltForm();
   }
 
+  // ---- Danger zone: full backup download + inventory reset (owners only) ----
+  const dzBackup = document.getElementById("dz-backup") as HTMLButtonElement | null;
+  if (dzBackup) {
+    const dzBackupStatus = document.getElementById("dz-backup-status")!;
+    const dzConfirm = document.getElementById("dz-confirm") as HTMLInputElement;
+    const dzWipe = document.getElementById("dz-wipe") as HTMLButtonElement;
+    const dzWipeStatus = document.getElementById("dz-wipe-status")!;
+
+    dzBackup.addEventListener("click", async () => {
+      dzBackup.disabled = true;
+      dzBackupStatus.textContent = "Exporting… (this can take a minute)";
+      try {
+        const res = await fetch("/api/pos/maintenance");
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `Export failed (${res.status})`);
+        const blob = await res.blob();
+        const name = /filename="([^"]+)"/.exec(res.headers.get("content-disposition") ?? "")?.[1]
+          ?? `timelag-backup-${new Date().toISOString().slice(0, 10)}.json`;
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = name;
+        a.click();
+        URL.revokeObjectURL(a.href);
+        dzBackupStatus.textContent = `✓ Downloaded ${name} — keep it somewhere safe`;
+      } catch (err: any) {
+        dzBackupStatus.textContent = `✗ ${err.message}`;
+      } finally {
+        dzBackup.disabled = false;
+      }
+    });
+
+    dzConfirm.addEventListener("input", () => {
+      dzWipe.disabled = dzConfirm.value.trim().toUpperCase() !== "WIPE";
+    });
+
+    dzWipe.addEventListener("click", async () => {
+      if (!confirm("Really wipe ALL inventory? This cannot be undone (your downloaded backup is the only copy).")) return;
+      dzWipe.disabled = true;
+      dzWipeStatus.textContent = "Wiping…";
+      try {
+        const res = await fetch("/api/pos/maintenance", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            confirm: "WIPE",
+            deletePhotos: (document.getElementById("dz-photos") as HTMLInputElement).checked,
+          }),
+        });
+        const j = await res.json();
+        if (!res.ok || !j.ok) throw new Error(j.error || "Wipe failed");
+        const photos = j.photosDeleted ? ` + ${j.photosDeleted} photos` : "";
+        dzWipeStatus.textContent = `✓ Fresh start — ${j.total} rows removed${photos}`;
+        dzConfirm.value = "";
+      } catch (err: any) {
+        dzWipeStatus.textContent = `✗ ${err.message}`;
+        dzWipe.disabled = false;
+      }
+    });
+  }
+
   // ---- Accordionize the settings sections ----
   // Runs LAST: every listener above is already attached, and moving nodes into
   // the .acc-body wrapper preserves them. All sections collapse by default;
@@ -1198,6 +1301,7 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     [/^Tasks/, "✅", "Completion notifications"],
     [/^Lead/, "📥", "Sell-form email alerts"],
     [/^AI/, "✨", "Provider · quality · brand voice"],
+    [/^Danger/, "🧨", "Full backup · inventory reset"],
   ];
   const accToday = new Date().toISOString().slice(0, 10);
   let accOpenMap: Record<string, number> = {};

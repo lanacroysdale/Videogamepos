@@ -20,13 +20,15 @@ const typeInfoById = new Map((invTypeRows ?? []).map((t: any) => [t.id, t]));
 // Numeric label codes ship in migration 20260801000001 — probe before selecting.
 const { error: lcProbeErr } = await supabase.from("product_variants").select("label_code").limit(1);
 const hasLabelCodes = !lcProbeErr;
+// Soft-deleted products (migration 20260903000001) must not be scannable/sellable.
+const { error: delProbeErr } = await supabase.from("products").select("deleted_at").limit(1);
 
 const { data: variantRows } = await supabase
   .from("product_variants")
-  .select(`id, condition, completeness, price_cents, quantity, sku, barcode, internal_code${hasLabelCodes ? ", label_code" : ""}${hasTypes ? ", inventory_type_id" : ""}, product_barcodes(barcode), product:products(title, platform, category:categories(id,name,color,is_trackable))`)
+  .select(`id, condition, completeness, price_cents, quantity, sku, barcode, internal_code${hasLabelCodes ? ", label_code" : ""}${hasTypes ? ", inventory_type_id" : ""}, product_barcodes(barcode), product:products(title, platform${delProbeErr ? "" : ", deleted_at"}, category:categories(id,name,color,is_trackable))`)
   .order("price_cents", { ascending: false });
 
-const catalog = (variantRows ?? []).map((v: any) => ({
+const catalog = (variantRows ?? []).filter((v: any) => !v.product?.deleted_at).map((v: any) => ({
   variantId: v.id,
   title: v.product?.title ?? "Item",
   platform: v.product?.platform ?? "",

@@ -8,12 +8,19 @@ const json = (d: unknown, s = 200) =>
 // variant condition) — powers the Inventory nav badge.
 export const GET: APIRoute = async ({ locals }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
-  const { data: products } = await locals.supabase
+  // Soft-deleted products don't need attention (fallback covers pre-migration DBs).
+  let res = await locals.supabase
     .from("products")
-    .select("id, image_url, description, product_variants(completeness_code)");
+    .select("id, image_url, description, product_variants(completeness_code)")
+    .is("deleted_at", null);
+  if (res.error) {
+    res = await locals.supabase
+      .from("products")
+      .select("id, image_url, description, product_variants(completeness_code)");
+  }
 
   let count = 0;
-  for (const p of products ?? []) {
+  for (const p of res.data ?? []) {
     const noImage = !p.image_url;
     const noDesc = !p.description;
     const noCond = (p.product_variants ?? []).some((v: any) => !v.completeness_code);
