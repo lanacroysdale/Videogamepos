@@ -42,7 +42,9 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: {
     @page { size: ${pw}mm ${ph}mm; margin: 0; }
     html, body { margin: 0; padding: 0; width: ${pw}mm; background: #fff; }
     body { line-height: 0; font-size: 0; }
-    .label-page { width: ${pw}mm; height: ${ph}mm; overflow: hidden; break-after: page; page-break-after: always; break-inside: avoid; page-break-inside: avoid; }
+    /* 0.4mm shy of the page: sub-mm rounding between CSS and the driver's
+       paper must never spill a label onto a phantom second page. */
+    .label-page { width: ${pw}mm; height: calc(${ph}mm - 0.4mm); overflow: hidden; break-after: page; page-break-after: always; break-inside: avoid; page-break-inside: avoid; }
     .label-page:last-child { break-after: auto; page-break-after: auto; }
     .label-page svg { display: block; }
     .label-rot { width: ${tpl.widthMm}mm; height: ${tpl.heightMm}mm; transform: rotate(90deg) translateY(-${tpl.heightMm}mm); transform-origin: top left; }
@@ -130,11 +132,13 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
   // Rotation preference sticks per station (it's a printer-driver trait).
   // Unset = ON for landscape labels: roll printers feed narrow-edge first, so
   // sideways-on-a-portrait-page is the shape that prints right by default.
+  // v2 key: the old key predates rotate-ON-by-default and pinned stale "off"
+  // values from early experiments onto stations that need rotation.
   const rotCb = overlay.querySelector<HTMLInputElement>("#lp-rot")!;
   let stored: string | null = null;
-  try { stored = localStorage.getItem("tl-print-rot"); } catch { /* private mode */ }
+  try { stored = localStorage.getItem("tl-print-rot-v2"); } catch { /* private mode */ }
   rotCb.checked = stored == null ? chosenTpl().widthMm > chosenTpl().heightMm : stored === "1";
-  rotCb.addEventListener("change", () => { try { localStorage.setItem("tl-print-rot", rotCb.checked ? "1" : "0"); } catch { /* private mode */ } });
+  rotCb.addEventListener("change", () => { try { localStorage.setItem("tl-print-rot-v2", rotCb.checked ? "1" : "0"); } catch { /* private mode */ } });
 
   // Live label count on the Print button + the driver paper size to match —
   // the "why did it print 8 pages" and "why is it tiny" answers, up front.
