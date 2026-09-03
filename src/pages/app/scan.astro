@@ -10,13 +10,20 @@ import AppLayout from "../../layouts/AppLayout.astro";
 
 <AppLayout title="Phone scanner" active="scan">
   <div id="sc-pair" class="pos-panel sc-panel">
-    <h2>📱 Pair with a station</h2>
-    <p class="muted" style="margin:0.4rem 0 1rem;">On the desktop, press the <strong>📱 Phone scanner</strong> button (Checkout or Inventory) and type the 6-digit code it shows:</p>
+    <h2>📱 On your phone?</h2>
+    <p class="muted" style="margin:0.4rem 0 1rem;">Type the 6-digit code shown on the register (it pops up there when you press <strong>📱 Phone</strong> — or its <strong>💻 Show a pairing code</strong> button below):</p>
     <div class="sc-code-row">
       <input id="sc-code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="123456" />
       <button id="sc-join" class="btn btn-primary" type="button">Pair →</button>
     </div>
     <p id="sc-pair-msg" class="sc-msg" hidden></p>
+    <hr style="border:0;border-top:1px solid var(--border);margin:1.3rem 0 1rem;" />
+    <h2 style="font-size:1rem;">💻 On the register?</h2>
+    <p class="muted" style="margin:0.4rem 0 0.9rem;">Show the code here for your phone to enter — same as pressing <strong>📱 Phone</strong> on the Inventory or Checkout toolbar:</p>
+    <button id="sc-host" class="btn btn-ghost" type="button">💻 Show a pairing code</button>
+    <p id="sc-host-hint" class="muted" style="margin:0.8rem 0 0;font-size:0.84rem;" hidden>
+      After the phone pairs you'll see a green <strong>📱 connected</strong> chip — then open Inventory or Checkout, and scans land in whatever field is active, just like a wired scanner.
+    </p>
   </div>
 
   <div id="sc-live" hidden>
@@ -63,6 +70,7 @@ import AppLayout from "../../layouts/AppLayout.astro";
 
 <script>
   import { joinPairing, resumeScanner, type ScanMsg, type ScannerSession } from "../../lib/scanChannel";
+  import { openPairDialog } from "../../lib/scanReceive";
 
   const $ = (id: string) => document.getElementById(id)!;
   let session: ScannerSession | null = null;
@@ -195,6 +203,12 @@ import AppLayout from "../../layouts/AppLayout.astro";
   $("sc-send").addEventListener("click", () => { const i = $("sc-manual-code") as HTMLInputElement; sendCode(i.value); i.value = ""; i.focus(); });
   ($("sc-manual-code") as HTMLInputElement).addEventListener("keydown", (e) => { if (e.key === "Enter") $("sc-send").click(); });
   $("sc-end").addEventListener("click", () => endSession(true));
+  // Register mode: host the pairing right from this page. The connection
+  // sticks (sessionStorage) — Inventory/Checkout resume it on load.
+  $("sc-host").addEventListener("click", () => {
+    openPairDialog({ target: () => null });
+    ($("sc-host-hint") as HTMLElement).hidden = false;
+  });
   window.addEventListener("pagehide", () => { stopCamera(); });
 
   // Reload with a live token → resume straight into the scanner.
