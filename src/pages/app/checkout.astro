@@ -452,30 +452,34 @@ const posData = { catalog, categories: categories ?? [], customer };
   // extra barcode on file. UPC/EAN compare as GTINs so a 12-digit camera read
   // still hits a barcode stored in 13-digit form. A UNIQUE exact-SKU match
   // counts too (ambiguous SKUs stay a search).
-  function codeHit(code: string): any | undefined {
-    if (!code) return undefined;
+  function findByCode(raw: string): any | null {
+    const code = raw.trim();
+    if (!code) return null;
     const hit = catalog.find((v: any) =>
       barcodeEq(v.barcode, code) ||
       (v.labelCode && v.labelCode === code) ||
       (v.internalCode && v.internalCode === code.toUpperCase()) ||
       (v.altBarcodes && v.altBarcodes.some((b: string) => barcodeEq(b, code))));
-    if (hit || code.length < 3) return hit;
-    const skuHits = catalog.filter((v: any) => v.sku && v.sku.toUpperCase() === code.toUpperCase());
-    return skuHits.length === 1 ? skuHits[0] : undefined;
+    if (hit) return hit;
+    if (code.length >= 3) {
+      const skuHits = catalog.filter((v: any) => v.sku && v.sku.toUpperCase() === code.toUpperCase());
+      if (skuHits.length === 1) return skuHits[0];
+    }
+    return null;
   }
   const looksScanned = (code: string) => /^[A-Za-z0-9-]{8,}$/.test(code);
   $("prod-search").addEventListener("input", (e) => {
     const input = e.target as HTMLInputElement;
     search = input.value;
     const code = search.trim();
-    const hit = codeHit(code);
+    const hit = findByCode(code);
     if (hit) { addVariant(hit.variantId); search = ""; input.value = ""; }
     else if (looksScanned(code)) {
       // A scan that misses may be an item added/edited since this station
       // loaded — re-pull the catalog once and retry (throttled inside).
       refreshCatalog().then((changed) => {
         if (!changed || input.value.trim() !== code) return;
-        const late = codeHit(code);
+        const late = findByCode(code);
         if (late) { addVariant(late.variantId); search = ""; input.value = ""; }
         renderProducts();
       });
@@ -483,8 +487,18 @@ const posData = { catalog, categories: categories ?? [], customer };
     renderProducts();
   });
   $("scan-btn").addEventListener("click", () => { ($("prod-search") as HTMLInputElement).focus(); });
-  // Phone-as-scanner: scans stream into the search box like a wedge scanner.
-  const scanTarget = { target: () => $("prod-search") as HTMLInputElement };
+  // Phone-as-scanner: scans stream into the search box like a wedge scanner;
+  // the phone is told what each one hit (or that nothing did).
+  const scanTarget = {
+    target: () => $("prod-search") as HTMLInputElement,
+    page: "Checkout",
+    describe: (code: string) => {
+      const v = findByCode(code);
+      if (!v) return null;
+      const cond = [v.completeness, v.condition].filter(Boolean).join(" ");
+      return `${v.title}${v.platform ? ` (${v.platform})` : ""}${cond ? ` · ${cond}` : ""} · ${money(v.priceCents)}${v.qty <= 0 ? " · OUT OF STOCK" : ""}`;
+    },
+  };
   initScanReceiver(scanTarget);
   $("phone-scan-btn").addEventListener("click", () => openPairDialog(scanTarget));
   ($("cart-disc") as HTMLInputElement).addEventListener("input", recalc);

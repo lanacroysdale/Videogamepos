@@ -1381,7 +1381,25 @@ const posData = {
   });
   // Phone-as-scanner: in entry mode scans stage lines (ent-search auto-adds on
   // exact code hits); otherwise they land in the grid search.
-  const scanTarget = { target: () => (entryMode ? $("ent-search") : $("inv-search")) as HTMLInputElement };
+  const scanTarget = {
+    target: () => (entryMode ? $("ent-search") : $("inv-search")) as HTMLInputElement,
+    page: "Inventory",
+    // Same exact-identifier rules as the entry typeahead / grid search, so the
+    // phone shows exactly what the station just staged or filtered to.
+    describe: (code: string) => {
+      const q = code.trim();
+      if (!q) return null;
+      const flat = items.flatMap((p) => p.variants.map((v: any) => ({ p, v })));
+      let hit = flat.find(({ v }: any) =>
+        (v.barcodes || []).some((b: any) => barcodeEq(b.barcode, q)) || (v.labelCode && v.labelCode === q) || (v.internalCode && v.internalCode === q.toUpperCase()));
+      if (!hit) {
+        const skuExact = flat.filter(({ v }: any) => v.sku && v.sku.toUpperCase() === q.toUpperCase());
+        if (skuExact.length === 1) hit = skuExact[0];
+      }
+      if (!hit) return null;
+      return `${hit.p.title}${hit.p.platform ? ` (${hit.p.platform})` : ""} · ${condLabel(hit.v)} · ${money(hit.v.priceCents)} · ${hit.v.quantity} in stock${entryMode ? " · staged" : ""}`;
+    },
+  };
   initScanReceiver(scanTarget);
   document.getElementById("phone-scan-btn")?.addEventListener("click", () => openPairDialog(scanTarget));
   $("ent-exit")?.addEventListener("click", () => {

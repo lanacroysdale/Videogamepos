@@ -30,6 +30,7 @@ infrastructure plan (Cloudflare registrar → Vercel hosting → Supabase for th
 - **Customers** — edit details/store credit/subscriptions; **merge** duplicate accounts (managers).
 - **Schedule** — weekly shifts (managers assign) + time clock for everyone.
 - **Reports** & **Pricing** (managers/owners only) — analytics charts; PriceCharting price-change review (approve/revert).
+- **Phone scanner** (`/scan`) — pair any phone to a register with a 6-digit code and use its camera as a wireless barcode scanner on Checkout, Inventory (stock entry), and Trade-In. Works on iPhone Safari and Android Chrome; the phone shows what each scan matched.
 - **Card / NFC quick login** plus email+password.
 - Backed by **Supabase** (Postgres + Auth) with Row Level Security and **per-employee** access control (cashiers see only their own transactions; reports/pricing are manager-only).
 
@@ -168,3 +169,9 @@ public/         favicon.svg, og-default.svg, robots.txt, logo + storefront asset
   workflow (approve/revert) is fully built.
 - **Card/NFC login** maps a card code → employee. Web NFC works on supported devices
   (Chrome/Android); elsewhere staff type/scan the code.
+- **Phone scanner** decoding uses the browser's native `BarcodeDetector` where it reads
+  retail codes (Chrome/Android) and otherwise a bundled ZXing WebAssembly decoder
+  (`barcode-detector` + `zxing-wasm`, ~1 MB, loaded only on first camera use) — so
+  iPhones work too. Pairing rides on Supabase Realtime broadcast (`src/lib/scanChannel.ts`);
+  register pages adopt it via `src/lib/scanReceive.ts` and can pass `describe()` so the
+  phone shows what each scan matched. The camera needs HTTPS (or `localhost`).
