@@ -30,8 +30,8 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: P
   const pw = sideways ? tpl.heightMm : tpl.widthMm;  // page width
   const ph = sideways ? tpl.widthMm : tpl.heightMm;  // page height
   const scale = Math.min(100, Math.max(60, Math.round(Number(opts?.scalePct) || 100)));
-  const nx = Math.min(8, Math.max(-8, Number(opts?.nudgeXMm) || 0));
-  const ny = Math.min(8, Math.max(-8, Number(opts?.nudgeYMm) || 0));
+  const nx = Math.min(30, Math.max(-30, Number(opts?.nudgeXMm) || 0));
+  const ny = Math.min(30, Math.max(-30, Number(opts?.nudgeYMm) || 0));
 
   // Rotation happens INSIDE the SVG (a natively-oriented image), and each
   // label ships as an <img> — an ATOMIC replaced element that print
@@ -184,10 +184,10 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
             <input id="lp-scale" type="number" min="60" max="100" step="1" value="100" style="width:4.2rem;font:inherit;padding:0.25rem 0.35rem;background:var(--bg,#000);color:var(--text,#eee);border:1px solid var(--border-strong,#444);">%
           </label>
           <label style="display:flex;align-items:center;gap:0.35rem;" title="Positive moves the label right on the page">Nudge →
-            <input id="lp-nx" type="number" min="-8" max="8" step="0.5" value="0" style="width:4.2rem;font:inherit;padding:0.25rem 0.35rem;background:var(--bg,#000);color:var(--text,#eee);border:1px solid var(--border-strong,#444);">mm
+            <input id="lp-nx" type="number" min="-30" max="30" step="0.5" value="0" style="width:4.2rem;font:inherit;padding:0.25rem 0.35rem;background:var(--bg,#000);color:var(--text,#eee);border:1px solid var(--border-strong,#444);">mm
           </label>
           <label style="display:flex;align-items:center;gap:0.35rem;" title="Positive moves the label down the page">Nudge ↓
-            <input id="lp-ny" type="number" min="-8" max="8" step="0.5" value="0" style="width:4.2rem;font:inherit;padding:0.25rem 0.35rem;background:var(--bg,#000);color:var(--text,#eee);border:1px solid var(--border-strong,#444);">mm
+            <input id="lp-ny" type="number" min="-30" max="30" step="0.5" value="0" style="width:4.2rem;font:inherit;padding:0.25rem 0.35rem;background:var(--bg,#000);color:var(--text,#eee);border:1px solid var(--border-strong,#444);">mm
           </label>
         </div>
       </details>
