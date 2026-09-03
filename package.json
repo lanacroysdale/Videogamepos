@@ -26,7 +26,8 @@
     "@astrojs/vercel": "^8.0.4",
     "@supabase/ssr": "^0.10.3",
     "@supabase/supabase-js": "^2.106.2",
-    "astro": "^5.2.5"
+    "astro": "^5.2.5",
+    "barcode-detector": "^3.2.2"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.4",

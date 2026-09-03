@@ -4,8 +4,9 @@ import AppLayout from "../../layouts/AppLayout.astro";
 // Phone-as-scanner: open this page ON YOUR PHONE (logged into the POS), enter
 // the 6-digit code from a desktop station's 📱 pair window, and every barcode
 // you scan lands in that station's active field — like a wireless wedge
-// scanner. Camera decoding uses the native BarcodeDetector API where the
-// browser has it (Chrome/Android); manual entry always works.
+// scanner. Camera decoding works on every phone: the native BarcodeDetector
+// where the browser has one (Chrome/Android), otherwise a bundled ZXing
+// WebAssembly decoder (iPhone Safari included). Manual entry always works.
 ---
 
 <AppLayout title="Phone scanner" active="scan">
@@ -19,10 +20,10 @@ import AppLayout from "../../layouts/AppLayout.astro";
     <p id="sc-pair-msg" class="sc-msg" hidden></p>
     <hr style="border:0;border-top:1px solid var(--border);margin:1.3rem 0 1rem;" />
     <h2 style="font-size:1rem;">💻 On the register?</h2>
-    <p class="muted" style="margin:0.4rem 0 0.9rem;">Show the code here for your phone to enter — same as pressing <strong>📱 Phone</strong> on the Inventory or Checkout toolbar:</p>
+    <p class="muted" style="margin:0.4rem 0 0.9rem;">Show the code here for your phone to enter — same as pressing <strong>📱 Phone</strong> on the Inventory, Checkout, or Trade-In toolbar:</p>
     <button id="sc-host" class="btn btn-ghost" type="button">💻 Show a pairing code</button>
     <p id="sc-host-hint" class="muted" style="margin:0.8rem 0 0;font-size:0.84rem;" hidden>
-      After the phone pairs you'll see a green <strong>📱 connected</strong> chip — then open Inventory or Checkout, and scans land in whatever field is active, just like a wired scanner.
+      After the phone pairs you'll see a green <strong>📱 connected</strong> chip — then open Inventory, Checkout, or Trade-In, and scans land in whatever field is active, just like a wired scanner.
     </p>
   </div>
 
@@ -30,14 +31,17 @@ import AppLayout from "../../layouts/AppLayout.astro";
     <div class="pos-panel sc-panel" style="border-color:var(--green);">
       <div class="sc-head">
         <h2 style="margin:0;">🟢 Paired</h2>
-        <span class="muted" style="font-size:0.84rem;">scans stream to the station's active field</span>
+        <span id="sc-link" class="sc-link" data-s="connecting">connecting…</span>
         <button id="sc-end" class="btn btn-ghost btn-sm" type="button" style="margin-left:auto;">End session</button>
       </div>
       <div id="sc-cam-wrap" class="sc-cam" hidden>
         <video id="sc-video" autoplay playsinline muted></video>
-        <div class="sc-reticle" aria-hidden="true"></div>
+        <div class="sc-reticle" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
         <div id="sc-flash" class="sc-flash" hidden></div>
-        <button id="sc-torch" class="btn btn-ghost btn-sm sc-torch" type="button" hidden>🔦</button>
+        <div class="sc-cam-bar">
+          <span id="sc-cam-status">Point at a barcode · hold steady</span>
+          <button id="sc-torch" class="btn btn-ghost btn-sm" type="button" hidden>🔦</button>
+        </div>
       </div>
       <p id="sc-cam-note" class="sc-msg" hidden></p>
       <div class="sc-manual">
@@ -55,35 +59,72 @@ import AppLayout from "../../layouts/AppLayout.astro";
   #sc-code { flex:1; font-size:1.6rem; letter-spacing:0.35em; text-align:center; font-family:var(--font-mono); padding:0.6rem; }
   .sc-msg { margin:0.8rem 0 0; font-size:0.86rem; color:var(--magenta); }
   .sc-head { display:flex; align-items:center; gap:0.7rem; flex-wrap:wrap; margin-bottom:0.9rem; }
+  .sc-link { font-size:0.78rem; font-weight:600; padding:0.15rem 0.5rem; border:1px solid var(--border-strong); color:var(--muted-2); }
+  .sc-link[data-s="live"] { color:var(--green); border-color:var(--green); }
+  .sc-link[data-s="error"] { color:var(--magenta); border-color:var(--magenta); }
   .sc-cam { position:relative; background:#000; border:1px solid var(--border-strong); overflow:hidden; margin-bottom:0.8rem; }
-  .sc-cam video { display:block; width:100%; max-height:52vh; object-fit:cover; }
-  .sc-reticle { position:absolute; inset:18% 12%; border:2px solid rgba(44,230,224,.75); box-shadow:0 0 0 2000px rgba(0,0,0,.25); pointer-events:none; }
+  .sc-cam video { display:block; width:100%; max-height:56vh; object-fit:cover; }
+  .sc-reticle { position:absolute; inset:22% 10%; pointer-events:none; box-shadow:0 0 0 2000px rgba(0,0,0,.28); }
+  .sc-reticle i { position:absolute; width:26px; height:26px; border:3px solid rgba(44,230,224,.9); }
+  .sc-reticle i:nth-child(1) { top:-2px; left:-2px; border-right:0; border-bottom:0; }
+  .sc-reticle i:nth-child(2) { top:-2px; right:-2px; border-left:0; border-bottom:0; }
+  .sc-reticle i:nth-child(3) { bottom:-2px; left:-2px; border-right:0; border-top:0; }
+  .sc-reticle i:nth-child(4) { bottom:-2px; right:-2px; border-left:0; border-top:0; }
   .sc-flash { position:absolute; inset:0; background:rgba(128,255,114,.4); }
-  .sc-torch { position:absolute; right:0.6rem; bottom:0.6rem; }
+  .sc-cam-bar { position:absolute; left:0; right:0; bottom:0; display:flex; align-items:center; gap:0.6rem; padding:0.45rem 0.6rem; background:linear-gradient(transparent, rgba(0,0,0,.7)); color:#eee; font-size:0.8rem; }
+  .sc-cam-bar button { margin-left:auto; }
   .sc-manual { display:flex; gap:0.5rem; margin-bottom:0.9rem; }
   .sc-manual input { flex:1; }
   .sc-history { display:grid; gap:0.3rem; }
-  .sc-hit { display:flex; align-items:center; gap:0.6rem; font-family:var(--font-mono); font-size:0.86rem; padding:0.35rem 0.5rem; border:1px solid var(--border); }
+  .sc-hit { display:grid; grid-template-columns:auto 1fr auto; align-items:center; column-gap:0.6rem; font-family:var(--font-mono); font-size:0.86rem; padding:0.35rem 0.5rem; border:1px solid var(--border); }
   .sc-hit .ok { color:var(--green); }
-  .sc-hit small { color:var(--muted-2); margin-left:auto; font-family:inherit; }
+  .sc-hit .miss { color:var(--magenta); }
+  .sc-hit .wait { color:var(--muted-2); }
+  .sc-hit small { color:var(--muted-2); font-family:inherit; }
+  .sc-hit .sc-res { grid-column:2 / span 2; font-family:var(--font-body, inherit); font-size:0.8rem; color:var(--muted); }
+  .sc-hit .sc-res.miss { color:var(--magenta); }
 </style>
 
 <script>
-  import { joinPairing, resumeScanner, type ScanMsg, type ScannerSession } from "../../lib/scanChannel";
+  import { joinPairing, resumeScanner, type LinkStatus, type ScanAck, type ScanMsg, type ScannerSession } from "../../lib/scanChannel";
   import { openPairDialog } from "../../lib/scanReceive";
+  import { loadBarcodeDecoder, type BarcodeDecoder } from "../../lib/barcodeDecoder";
 
   const $ = (id: string) => document.getElementById(id)!;
+  const esc = (s: string) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] as string));
   let session: ScannerSession | null = null;
   let sendFn: ((m: ScanMsg) => void) | null = null;
-  const history: { code: string; at: number }[] = [];
+  type Hit = { code: string; at: number; ack?: ScanAck };
+  const history: Hit[] = [];
   const lastSent = new Map<string, number>(); // dedupe: code → ts
 
   const showLive = (on: boolean) => { ($("sc-pair") as HTMLElement).hidden = on; ($("sc-live") as HTMLElement).hidden = !on; };
   const pairMsg = (m: string) => { const el = $("sc-pair-msg"); el.textContent = m; (el as HTMLElement).hidden = !m; };
+  const camNote = (m: string) => { const el = $("sc-cam-note"); el.textContent = m; (el as HTMLElement).hidden = !m; };
+  const camStatus = (m: string) => { $("sc-cam-status").textContent = m; };
+  function setLink(s: LinkStatus) {
+    const el = $("sc-link");
+    el.dataset.s = s;
+    el.textContent = s === "live" ? "● live" : s === "error" ? "link lost — retrying…" : s === "reconnecting" ? "reconnecting…" : "connecting…";
+  }
 
   function renderHistory() {
-    $("sc-history").innerHTML = history.slice(0, 12).map((h) =>
-      `<div class="sc-hit"><span class="ok">✓</span><span>${h.code.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] as string))}</span><small>${new Date(h.at).toLocaleTimeString()}</small></div>`).join("");
+    $("sc-history").innerHTML = history.slice(0, 12).map((h) => {
+      const a = h.ack;
+      const miss = !!a && a.hit === null && !!a.page;
+      const mark = !a ? `<span class="wait">…</span>` : miss ? `<span class="miss">✗</span>` : `<span class="ok">✓</span>`;
+      const res = !a ? "" : miss
+        ? `<span class="sc-res miss">No match on ${esc(a.page!)} — add it there first</span>`
+        : a.hit ? `<span class="sc-res">${esc(a.hit)}</span>` : `<span class="sc-res">Sent to the register</span>`;
+      return `<div class="sc-hit">${mark}<span>${esc(h.code)}</span><small>${new Date(h.at).toLocaleTimeString()}</small>${res}</div>`;
+    }).join("");
+  }
+  function onAck(a: ScanAck) {
+    const h = history.find((x) => x.at === a.at) ?? history.find((x) => x.code === a.code && !x.ack);
+    if (!h) return;
+    h.ack = a;
+    renderHistory();
+    if (a.hit === null && a.page) { try { navigator.vibrate?.([40, 60, 40]); } catch { /* unsupported */ } }
   }
 
   function beepAndBuzz() {
@@ -112,52 +153,76 @@ import AppLayout from "../../layouts/AppLayout.astro";
     f.hidden = false; setTimeout(() => (f.hidden = true), 140);
   }
 
-  // ---------- Camera + BarcodeDetector ----------
+  // ---------- Camera + decoder ----------
   let stream: MediaStream | null = null;
-  let detTimer: any = null;
+  let starting = false;
+  let loopId = 0; // bumping this stops the running detect loop
+  const cameraHelp = (e: any) => {
+    const n = e?.name || "";
+    if (n === "NotAllowedError" || n === "SecurityError") return "Camera permission was denied. Allow it for this site (Safari: tap ᴀA in the address bar → Website Settings → Camera) and try again — manual entry still works.";
+    if (n === "NotFoundError" || n === "OverconstrainedError") return "No camera found on this device — manual entry still works.";
+    if (n === "NotReadableError") return "The camera is busy in another app — close it and reopen this page.";
+    return "Camera unavailable (" + (n || "error") + ") — manual entry still works.";
+  };
   async function startCamera() {
-    const note = $("sc-cam-note") as HTMLElement;
-    if (!("BarcodeDetector" in window)) {
-      note.textContent = "This browser can't decode barcodes from the camera (iPhone Safari doesn't support it yet) — use manual entry below, or Chrome on Android for camera scanning.";
-      note.hidden = false;
-      return;
-    }
+    if (stream || starting) return; // Realtime re-subscribes must not start a second camera
+    starting = true;
+    camNote("");
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1280 } } });
+      if (!navigator.mediaDevices?.getUserMedia) throw { name: "NotFoundError" };
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } } });
       const video = $("sc-video") as HTMLVideoElement;
       video.srcObject = stream;
+      try { await video.play(); } catch { /* autoplay attr handles it */ }
       ($("sc-cam-wrap") as HTMLElement).hidden = false;
       // Torch, where the hardware offers it.
       const track = stream.getVideoTracks()[0];
       const caps: any = track.getCapabilities?.() ?? {};
+      const tb = $("sc-torch") as HTMLButtonElement;
       if (caps.torch) {
-        const tb = $("sc-torch") as HTMLButtonElement;
         tb.hidden = false;
         let on = false;
-        tb.addEventListener("click", async () => {
+        tb.onclick = async () => {
           on = !on;
           try { await track.applyConstraints({ advanced: [{ torch: on } as any] }); tb.textContent = on ? "🔦 on" : "🔦"; } catch { /* no torch after all */ }
-        });
+        };
+      } else tb.hidden = true;
+
+      camStatus("Loading decoder…");
+      let det: BarcodeDecoder;
+      try {
+        det = await loadBarcodeDecoder();
+      } catch {
+        camStatus("Decoder unavailable");
+        camNote("Couldn't load the barcode decoder (offline?) — reload to retry, or use manual entry below.");
+        return;
       }
-      const det = new (window as any).BarcodeDetector({
-        formats: ["code_128", "ean_13", "ean_8", "upc_a", "upc_e", "code_39", "qr_code"],
-      });
-      detTimer = setInterval(async () => {
-        if (video.readyState < 2) return;
-        try {
-          const found = await det.detect(video);
-          for (const b of found) if (b.rawValue) sendCode(b.rawValue, b.format);
-        } catch { /* transient decode errors are normal */ }
-      }, 250);
+      camStatus("Point at a barcode · hold steady");
+      const myLoop = ++loopId;
+      // Self-scheduling loop (never overlaps two decodes; WASM decode of a
+      // 720p frame is ~30–80 ms on a phone).
+      const tick = async () => {
+        if (myLoop !== loopId || !stream) return;
+        if (video.readyState >= 2 && !document.hidden) {
+          try {
+            const found = await det.detect(video);
+            for (const b of found) if (b.rawValue) sendCode(b.rawValue, b.format);
+          } catch { /* transient decode errors are normal */ }
+        }
+        if (myLoop === loopId) setTimeout(tick, 120);
+      };
+      tick();
     } catch (e: any) {
-      note.textContent = "Camera unavailable (" + (e?.name || "error") + ") — manual entry still works.";
-      note.hidden = false;
+      camNote(cameraHelp(e));
+    } finally {
+      starting = false;
     }
   }
   function stopCamera() {
-    clearInterval(detTimer);
+    loopId++;
     stream?.getTracks().forEach((t) => t.stop());
     stream = null;
+    ($("sc-cam-wrap") as HTMLElement).hidden = true;
   }
 
   // Keep the screen awake while scanning (re-acquire when the tab returns).
@@ -165,7 +230,12 @@ import AppLayout from "../../layouts/AppLayout.astro";
   async function keepAwake() {
     try { wakeLock = await (navigator as any).wakeLock?.request("screen"); } catch { /* unsupported */ }
   }
-  document.addEventListener("visibilitychange", () => { if (!document.hidden && session) keepAwake(); });
+  document.addEventListener("visibilitychange", () => {
+    if (!session) return;
+    if (document.hidden) { stopCamera(); return; } // iOS kills background camera anyway; release cleanly
+    keepAwake();
+    startCamera();
+  });
 
   // ---------- Session wiring ----------
   function onReady(send: (m: ScanMsg) => void, token: string) {
@@ -187,26 +257,24 @@ import AppLayout from "../../layouts/AppLayout.astro";
     try { wakeLock?.release(); } catch { /* already gone */ }
     showLive(false);
   }
+  const onFail = (m: string) => { endSession(false); pairMsg(m); ($("sc-join") as HTMLButtonElement).disabled = false; };
+  const callbacks = { onReady, onHostGone, onAck, onFail, onStatus: setLink };
 
   $("sc-join").addEventListener("click", () => {
     const code = ($("sc-code") as HTMLInputElement).value.replace(/\D/g, "");
     if (code.length !== 6) { pairMsg("Enter the 6-digit code from the desktop."); return; }
     pairMsg("");
     ($("sc-join") as HTMLButtonElement).disabled = true;
-    session = joinPairing(code, {
-      onReady,
-      onHostGone,
-      onFail: (m) => { pairMsg(m); ($("sc-join") as HTMLButtonElement).disabled = false; session = null; },
-    });
+    session = joinPairing(code, callbacks);
   });
   ($("sc-code") as HTMLInputElement).addEventListener("keydown", (e) => { if (e.key === "Enter") $("sc-join").click(); });
   $("sc-send").addEventListener("click", () => { const i = $("sc-manual-code") as HTMLInputElement; sendCode(i.value); i.value = ""; i.focus(); });
   ($("sc-manual-code") as HTMLInputElement).addEventListener("keydown", (e) => { if (e.key === "Enter") $("sc-send").click(); });
   $("sc-end").addEventListener("click", () => endSession(true));
   // Register mode: host the pairing right from this page. The connection
-  // sticks (sessionStorage) — Inventory/Checkout resume it on load.
+  // sticks (sessionStorage) — Inventory/Checkout/Trade-In resume it on load.
   $("sc-host").addEventListener("click", () => {
-    openPairDialog({ target: () => null });
+    openPairDialog({ target: () => null, page: "Scan page" });
     ($("sc-host-hint") as HTMLElement).hidden = false;
   });
   window.addEventListener("pagehide", () => { stopCamera(); });
@@ -214,6 +282,6 @@ import AppLayout from "../../layouts/AppLayout.astro";
   // Reload with a live token → resume straight into the scanner.
   try {
     const t = sessionStorage.getItem("tl-scan-phone");
-    if (t) session = resumeScanner(t, { onReady, onHostGone });
+    if (t) session = resumeScanner(t, callbacks);
   } catch { /* private mode */ }
 </script>

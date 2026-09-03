@@ -14,7 +14,7 @@ const [{ data: margins }, { data: categories }, { data: completeness }, { data: 
   supabase.from("condition_grades").select("code,label,aliases,icon").eq("is_active", true).order("rank"),
   supabase
     .from("products")
-    .select(`id, title, platform, franchise, alternative_names, category_id${delProbeErr ? "" : ", deleted_at"}, product_variants(price_cents, completeness_code, grade_code)`)
+    .select(`id, title, platform, franchise, alternative_names, category_id${delProbeErr ? "" : ", deleted_at"}, product_variants(price_cents, completeness_code, grade_code, barcode, product_barcodes(barcode))`)
     .order("title"),
 ]);
 const products = (productRows ?? []).filter((p: any) => !p.deleted_at);
@@ -27,7 +27,8 @@ if (customerId) {
 }
 
 // Flat catalog the smart entry matches against (title/platform/aliases + the
-// variant prices that suggest a resale value per condition).
+// variant prices that suggest a resale value per condition). Barcodes ride
+// along so scanning the UPC on a customer's box identifies the title.
 const catalog = (products ?? []).map((p: any) => ({
   id: p.id,
   title: p.title,
@@ -39,6 +40,7 @@ const catalog = (products ?? []).map((p: any) => ({
     priceCents: v.price_cents,
     completenessCode: v.completeness_code ?? "",
     gradeCode: v.grade_code ?? "",
+    barcodes: [v.barcode, ...(v.product_barcodes ?? []).map((b: any) => b.barcode)].filter(Boolean),
   })),
 }));
 
@@ -80,7 +82,10 @@ const posData = {
       </thead>
       <tbody id="ti-body"></tbody>
     </table>
-    <button id="add-row" class="btn btn-ghost btn-sm" style="margin-top:0.8rem;">＋ Add item</button>
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.8rem;">
+      <button id="add-row" class="btn btn-ghost btn-sm">＋ Add item</button>
+      <button id="phone-scan-btn" class="btn btn-ghost btn-sm" type="button" title="Pair your phone as a wireless scanner — scan the UPC on the customer's box to fill a row">📱 Phone scanner</button>
+    </div>
   </div>
 
   <div class="pos-grid two" style="margin-top:1rem;">
@@ -137,6 +142,7 @@ const posData = {
 
 <script>
   import { buildPlatforms, parseQuery as parseQ, smartMatches } from "../../lib/smartSearch";
+  import { initScanReceiver, openPairDialog } from "../../lib/scanReceive";
 
   type Row = { key: string; description: string; categoryId: string | null; resaleCents: number };
   const data = JSON.parse(document.getElementById("pos-data")!.textContent!);
@@ -195,12 +201,34 @@ const posData = {
     return base;
   }
 
+  // Scanned UPC / extra barcode → the catalog product it belongs to (and the
+  // variant carrying that code, for callers that want its price).
+  function findByBarcode(raw: string): { p: any; v: any } | null {
+    const q = raw.trim();
+    if (q.length < 6) return null;
+    for (const p of catalog) for (const v of p.variants) if ((v.barcodes || []).includes(q)) return { p, v };
+    return null;
+  }
   // Typeahead: as the employee types, suggest catalog matches + a resale value.
   function showSuggest(tr: HTMLElement, r: Row) {
     const inp = tr.querySelector<HTMLInputElement>("[data-desc]")!;
     const box = tr.querySelector<HTMLElement>("[data-suggest]")!;
     const q = inp.value.trim();
     if (q.length < 2) { box.hidden = true; return; }
+    // Exact barcode (wired or phone scanner) fills the row outright. A UPC is
+    // shared by every condition of a title, so the condition is left for the
+    // employee to append (" cib", " loose"…) and resale defaults to the top price.
+    const bc = findByBarcode(q);
+    if (bc) {
+      pickSuggestion(r, bc.p, {});
+      box.hidden = true;
+      render();
+      // Land the cursor at the end of the filled description so the employee
+      // can append " cib" etc. and keep the typeahead flowing.
+      const fresh = $("ti-body").querySelector<HTMLInputElement>(`tr[data-key="${r.key}"] [data-desc]`);
+      if (fresh) { fresh.focus(); fresh.setSelectionRange(fresh.value.length, fresh.value.length); }
+      return;
+    }
     const parsed = parseQuery(q);
     const matches = smartMatches(catalog, parsed).slice(0, 6);
     if (!matches.length) { box.hidden = true; return; }
@@ -280,6 +308,25 @@ const posData = {
   function addRow() { rows.push({ key: crypto.randomUUID(), description: "", categoryId: null, resaleCents: 0 }); }
   $("add-row").addEventListener("click", () => { addRow(); render(); });
   ($("target-cash") as HTMLInputElement).addEventListener("input", recalc);
+
+  // Phone-as-scanner: a scan goes to the focused item field, else the first
+  // empty row (adding one if every row is filled) — one box per scan.
+  const scanTarget = {
+    page: "Trade-In",
+    target: () => {
+      let r = rows.find((x) => !x.description.trim());
+      if (!r) { addRow(); render(); r = rows[rows.length - 1]; }
+      return $("ti-body").querySelector<HTMLInputElement>(`tr[data-key="${r.key}"] [data-desc]`);
+    },
+    describe: (code: string) => {
+      const bc = findByBarcode(code);
+      if (!bc) return null;
+      const top = bc.p.variants.length ? Math.max(...bc.p.variants.map((x: any) => x.priceCents)) : 0;
+      return `${bc.p.title}${bc.p.platform ? ` (${bc.p.platform})` : ""}${top ? ` · resale up to ${money(top)}` : ""}`;
+    },
+  };
+  initScanReceiver(scanTarget);
+  $("phone-scan-btn").addEventListener("click", () => openPairDialog(scanTarget));
 
   $("save-ti").addEventListener("click", async () => {
     const valid = rows.filter((r) => r.description.trim() && r.resaleCents > 0);
