@@ -70,7 +70,7 @@ export async function fontStyleTag(tpl: LabelTemplate): Promise<string> {
 // esc() in labels.ts entity-encodes the logo URL inside href="…"
 export const escAttr = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
 
-async function rasterize(svg: string, wMm: number, hMm: number, rotate: boolean): Promise<{ jpeg: Uint8Array; pw: number; ph: number }> {
+async function rasterize(svg: string, wMm: number, hMm: number, deg: 0 | 90 | 180 | 270): Promise<{ jpeg: Uint8Array; pw: number; ph: number }> {
   const img = new Image();
   await new Promise<void>((res, rej) => {
     img.onload = () => res();
@@ -78,13 +78,16 @@ async function rasterize(svg: string, wMm: number, hMm: number, rotate: boolean)
     img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
   });
   const w = Math.round(wMm * PX_PER_MM), h = Math.round(hMm * PX_PER_MM);
+  const sideways = deg === 90 || deg === 270;
   const canvas = document.createElement("canvas");
-  canvas.width = rotate ? h : w;
-  canvas.height = rotate ? w : h;
+  canvas.width = sideways ? h : w;
+  canvas.height = sideways ? w : h;
   const ctx = canvas.getContext("2d")!;
   ctx.fillStyle = "#fff";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  if (rotate) { ctx.translate(canvas.width, 0); ctx.rotate(Math.PI / 2); }
+  if (deg === 90) { ctx.translate(canvas.width, 0); ctx.rotate(Math.PI / 2); }
+  else if (deg === 180) { ctx.translate(canvas.width, canvas.height); ctx.rotate(Math.PI); }
+  else if (deg === 270) { ctx.translate(0, canvas.height); ctx.rotate(-Math.PI / 2); }
   ctx.drawImage(img, 0, 0, w, h);
   const dataUrl = canvas.toDataURL("image/jpeg", 0.93);
   const bin = atob(dataUrl.slice(dataUrl.indexOf(",") + 1));
@@ -136,13 +139,15 @@ function buildPdf(images: { jpeg: Uint8Array; pw: number; ph: number }[], pageOf
   return new Blob(parts as BlobPart[], { type: "application/pdf" });
 }
 
-// Render every job to a PDF blob. rotate=true composes each label sideways on
-// a portrait page (roll-native for portrait-fed drivers).
-export async function labelsToPdf(jobs: PdfJob[], tpl: LabelTemplate, opts?: { rotate?: boolean }): Promise<Blob> {
+// Render every job to a PDF blob. rotateDeg composes each label at the given
+// orientation (90/270 = sideways on a portrait page, roll-native for
+// portrait-fed drivers; 180 = flat upside down).
+export async function labelsToPdf(jobs: PdfJob[], tpl: LabelTemplate, opts?: { rotateDeg?: 0 | 90 | 180 | 270 }): Promise<Blob> {
   const real = jobs.filter((j) => j.copies > 0);
   if (!real.length) throw new Error("Nothing to print.");
   await ensureLabelFont(tpl);
-  const rot = !!opts?.rotate;
+  const deg = ([0, 90, 180, 270] as const).includes(opts?.rotateDeg as any) ? opts!.rotateDeg! : 0;
+  const sideways = deg === 90 || deg === 270;
   const styleTag = await fontStyleTag(tpl);
   const logoData = tpl.logoUrl ? await inlineLogo(tpl.logoUrl) : "";
 
@@ -152,11 +157,11 @@ export async function labelsToPdf(jobs: PdfJob[], tpl: LabelTemplate, opts?: { r
     let svg = renderLabelSvg(tpl, j.item);
     if (styleTag) svg = svg.replace(/(<svg[^>]*>)/, `$1${styleTag}`);
     if (tpl.logoUrl && logoData) svg = svg.split(escAttr(tpl.logoUrl)).join(logoData).split(tpl.logoUrl).join(logoData);
-    const im = await rasterize(svg, tpl.widthMm, tpl.heightMm, rot);
+    const im = await rasterize(svg, tpl.widthMm, tpl.heightMm, deg);
     const idx = images.push(im) - 1;
     for (let c = 0; c < Math.min(500, j.copies); c++) pageOfCopy.push(idx);
   }
-  const wPt = (rot ? tpl.heightMm : tpl.widthMm) * PT_PER_MM;
-  const hPt = (rot ? tpl.widthMm : tpl.heightMm) * PT_PER_MM;
+  const wPt = (sideways ? tpl.heightMm : tpl.widthMm) * PT_PER_MM;
+  const hPt = (sideways ? tpl.widthMm : tpl.heightMm) * PT_PER_MM;
   return buildPdf(images, pageOfCopy, wPt, hPt);
 }
