@@ -39,7 +39,7 @@ async function inlineFontCss(cssUrl: string): Promise<string> {
 }
 
 const logoCache = new Map<string, string>();
-async function inlineLogo(url: string): Promise<string> {
+export async function inlineLogo(url: string): Promise<string> {
   if (logoCache.has(url)) return logoCache.get(url)!;
   try {
     const blob = await (await fetch(url)).blob();
@@ -54,7 +54,7 @@ async function inlineLogo(url: string): Promise<string> {
   } catch { return url; } // leave as-is; the image slot renders empty
 }
 
-async function fontStyleTag(tpl: LabelTemplate): Promise<string> {
+export async function fontStyleTag(tpl: LabelTemplate): Promise<string> {
   if (tpl.fontKey === "custom" && tpl.fontUrl) {
     try {
       const buf = await (await fetch(tpl.fontUrl)).arrayBuffer();
@@ -68,7 +68,7 @@ async function fontStyleTag(tpl: LabelTemplate): Promise<string> {
 }
 
 // esc() in labels.ts entity-encodes the logo URL inside href="…"
-const escAttr = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
+export const escAttr = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
 
 async function rasterize(svg: string, wMm: number, hMm: number, rotate: boolean): Promise<{ jpeg: Uint8Array; pw: number; ph: number }> {
   const img = new Image();
