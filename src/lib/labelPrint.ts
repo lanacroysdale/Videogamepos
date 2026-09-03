@@ -22,10 +22,18 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: {
   const pw = rot ? tpl.heightMm : tpl.widthMm;  // page width
   const ph = rot ? tpl.widthMm : tpl.heightMm;  // page height
 
+  // Rotation happens INSIDE the SVG (a natively-portrait image), not via CSS
+  // transform: Safari fragments transformed content across page boundaries —
+  // half the label printed on page 1, the rest on page 2.
+  const W = tpl.widthMm, H = tpl.heightMm;
+  const rotateSvg = (svg: string) => {
+    const inner = svg.replace(/^<svg[^>]*>/, "").replace(/<\/svg>\s*$/, "");
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${H}mm" height="${W}mm" viewBox="0 0 ${H} ${W}"><g transform="rotate(90) translate(0 -${H})">${inner}</g></svg>`;
+  };
   const pages: string[] = [];
   for (const j of real) for (let i = 0; i < Math.min(500, j.copies); i++) {
     const svg = renderLabelSvg(tpl, j.item);
-    pages.push(`<div class="label-page">${rot ? `<div class="label-rot">${svg}</div>` : svg}</div>`);
+    pages.push(`<div class="label-page">${rot ? rotateSvg(svg) : svg}</div>`);
   }
 
   // Label fonts for the isolated document (plain <link> — it's a real page).
@@ -47,7 +55,6 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: {
     .label-page { width: ${pw}mm; height: calc(${ph}mm - 0.4mm); overflow: hidden; break-after: page; page-break-after: always; break-inside: avoid; page-break-inside: avoid; }
     .label-page:last-child { break-after: auto; page-break-after: auto; }
     .label-page svg { display: block; }
-    .label-rot { width: ${tpl.widthMm}mm; height: ${tpl.heightMm}mm; transform: rotate(90deg) translateY(-${tpl.heightMm}mm); transform-origin: top left; }
   </style></head><body>${pages.join("")}</body></html>`;
 
   document.getElementById("label-print-frame")?.remove();
