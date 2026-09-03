@@ -55,9 +55,14 @@ async function recentBackupExists() {
 async function main() {
   console.log(`Database: ${url}\n`);
   let total = 0;
+  const present = [];
   for (const t of INVENTORY_TABLES) {
     const { count, error } = await sb.from(t).select("*", { count: "exact", head: true });
-    if (error) throw new Error(`${t}: ${error.message}`);
+    if (error) {
+      if (/could not find the table/i.test(error.message)) { console.log(`  ${t.padEnd(24)} (not in this database, skipped)`); continue; }
+      throw new Error(`${t}: ${error.message}`);
+    }
+    present.push(t);
     total += count ?? 0;
     console.log(`  ${t.padEnd(24)} ${count} rows`);
   }
@@ -82,7 +87,7 @@ async function main() {
   if (unlinkErr) throw new Error(`unlink transaction_items: ${unlinkErr.message}`);
   console.log("✓ transaction_items unlinked from variants");
 
-  for (const t of INVENTORY_TABLES) {
+  for (const t of present) {
     const { error } = await sb.from(t).delete().neq("id", NIL);
     if (error) throw new Error(`delete ${t}: ${error.message}`);
     console.log(`✓ cleared ${t}`);
