@@ -31,12 +31,20 @@ const INVENTORY_TABLES = [
 
 const NIL = "00000000-0000-0000-0000-000000000000";
 
+// A live database can lag the migration folder (tables added after its last
+// schema push). Missing tables hold nothing to back up or wipe — skip them.
+const isMissingTable = (msg: string) => /could not find the table/i.test(msg);
+
+// Returns null when the table doesn't exist in this database.
 async function fetchAll(admin: ReturnType<typeof createSupabaseAdminClient>, table: string) {
   const rows: unknown[] = [];
   const PAGE = 1000;
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await admin.from(table).select("*").range(from, from + PAGE - 1);
-    if (error) throw new Error(`${table}: ${error.message}`);
+    if (error) {
+      if (isMissingTable(error.message)) return null;
+      throw new Error(`${table}: ${error.message}`);
+    }
     rows.push(...data);
     if (data.length < PAGE) break;
   }
@@ -52,7 +60,12 @@ export const GET: APIRoute = async ({ locals }) => {
   const admin = createSupabaseAdminClient();
   try {
     const tables: Record<string, unknown[]> = {};
-    for (const t of ALL_TABLES) tables[t] = await fetchAll(admin, t);
+    const skippedTables: string[] = [];
+    for (const t of ALL_TABLES) {
+      const rows = await fetchAll(admin, t);
+      if (rows === null) skippedTables.push(t);
+      else tables[t] = rows;
+    }
 
     const { data: cur } = await admin.from("store_settings").select("settings").eq("id", 1).maybeSingle();
     await admin.from("store_settings")
@@ -60,7 +73,7 @@ export const GET: APIRoute = async ({ locals }) => {
       .eq("id", 1);
 
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:]/g, "-");
-    const body = JSON.stringify({ exportedAt: new Date().toISOString(), tables }, null, 1);
+    const body = JSON.stringify({ exportedAt: new Date().toISOString(), skippedTables, tables }, null, 1);
     return new Response(body, {
       headers: {
         "content-type": "application/json",
@@ -93,8 +106,14 @@ export const POST: APIRoute = async ({ locals, request }) => {
     }
 
     const counts: Record<string, number> = {};
+    const present: string[] = [];
     for (const t of INVENTORY_TABLES) {
-      const { count } = await admin.from(t).select("*", { count: "exact", head: true });
+      const { count, error } = await admin.from(t).select("*", { count: "exact", head: true });
+      if (error) {
+        if (isMissingTable(error.message)) continue;
+        throw new Error(`count ${t}: ${error.message}`);
+      }
+      present.push(t);
       counts[t] = count ?? 0;
     }
 
@@ -102,7 +121,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
       .update({ variant_id: null }).not("variant_id", "is", null);
     if (unlinkErr) throw new Error(`unlink transaction_items: ${unlinkErr.message}`);
 
-    for (const t of INVENTORY_TABLES) {
+    for (const t of present) {
       const { error } = await admin.from(t).delete().neq("id", NIL);
       if (error) throw new Error(`delete ${t}: ${error.message}`);
     }

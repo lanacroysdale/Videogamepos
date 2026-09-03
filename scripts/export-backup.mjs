@@ -40,12 +40,17 @@ const TABLES = [
 const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
 const outDir = path.join(process.cwd(), "backups", stamp);
 
+// Returns null for tables the live database doesn't have (schema behind the
+// migrations folder) — nothing there to back up.
 async function fetchAll(table) {
   const rows = [];
   const PAGE = 1000;
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await sb.from(table).select("*").range(from, from + PAGE - 1);
-    if (error) throw new Error(`${table}: ${error.message}`);
+    if (error) {
+      if (/could not find the table/i.test(error.message)) return null;
+      throw new Error(`${table}: ${error.message}`);
+    }
     rows.push(...data);
     if (data.length < PAGE) break;
   }
@@ -69,6 +74,7 @@ async function main() {
 
   for (const table of TABLES) {
     const rows = await fetchAll(table);
+    if (rows === null) { console.log(`– ${table.padEnd(28)} (not in this database, skipped)`); continue; }
     await writeFile(path.join(outDir, `${table}.json`), JSON.stringify(rows, null, 2));
     await writeFile(path.join(outDir, `${table}.csv`), toCsv(rows));
     total += rows.length;
