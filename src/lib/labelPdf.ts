@@ -95,8 +95,8 @@ async function rasterize(svg: string, wMm: number, hMm: number, deg: 0 | 90 | 18
   // …then apply the per-station physical alignment (size % + mm nudges) in
   // plain page coordinates.
   const s = Math.min(100, Math.max(60, Math.round(Number(tune?.scalePct) || 100))) / 100;
-  const nx = Math.min(8, Math.max(-8, Number(tune?.nudgeXMm) || 0)) * PX_PER_MM;
-  const ny = Math.min(8, Math.max(-8, Number(tune?.nudgeYMm) || 0)) * PX_PER_MM;
+  const nx = Math.min(30, Math.max(-30, Number(tune?.nudgeXMm) || 0)) * PX_PER_MM;
+  const ny = Math.min(30, Math.max(-30, Number(tune?.nudgeYMm) || 0)) * PX_PER_MM;
   const canvas = document.createElement("canvas");
   canvas.width = rotated.width;
   canvas.height = rotated.height;
