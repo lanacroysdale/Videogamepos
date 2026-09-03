@@ -5,8 +5,8 @@
 // openPrintDialog() is the shared chooser: template picker + per-line copies +
 // optional "all copies" toggle + a 1-label test print. Self-contained styling
 // (CSS vars from app.css only), so it drops into any POS page.
-import { renderLabelSvg, ensureLabelFont, DEFAULT_TEMPLATE, LABEL_FONTS, type LabelTemplate, type LabelItem } from "./labels";
-import { labelsToPdf } from "./labelPdf";
+import { renderLabelSvg, ensureLabelFont, DEFAULT_TEMPLATE, type LabelTemplate, type LabelItem } from "./labels";
+import { labelsToPdf, fontStyleTag, inlineLogo, escAttr } from "./labelPdf";
 
 export type PrintJob = { item: LabelItem; copies: number };
 
@@ -22,39 +22,45 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: {
   const pw = rot ? tpl.heightMm : tpl.widthMm;  // page width
   const ph = rot ? tpl.widthMm : tpl.heightMm;  // page height
 
-  // Rotation happens INSIDE the SVG (a natively-portrait image), not via CSS
-  // transform: Safari fragments transformed content across page boundaries —
-  // half the label printed on page 1, the rest on page 2.
+  // Rotation happens INSIDE the SVG (a natively-portrait image), and each
+  // label ships as an <img> — an ATOMIC replaced element that print
+  // pagination can move or scale but never split. Safari fragmented both
+  // CSS-transformed and inline-SVG labels across two pages.
   const W = tpl.widthMm, H = tpl.heightMm;
   const rotateSvg = (svg: string) => {
     const inner = svg.replace(/^<svg[^>]*>/, "").replace(/<\/svg>\s*$/, "");
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${H}mm" height="${W}mm" viewBox="0 0 ${H} ${W}"><g transform="rotate(90) translate(0 -${H})">${inner}</g></svg>`;
   };
+  // An <img>'s SVG is an isolated document: no external fetches — inline the
+  // web font and logo as data: URLs (same treatment the PDF path uses).
+  const styleTag = await fontStyleTag(tpl);
+  const logoData = tpl.logoUrl ? await inlineLogo(tpl.logoUrl) : "";
   const pages: string[] = [];
-  for (const j of real) for (let i = 0; i < Math.min(500, j.copies); i++) {
-    const svg = renderLabelSvg(tpl, j.item);
-    pages.push(`<div class="label-page">${rot ? rotateSvg(svg) : svg}</div>`);
+  for (const j of real) {
+    let svg = renderLabelSvg(tpl, j.item);
+    if (styleTag) svg = svg.replace(/(<svg[^>]*>)/, `$1${styleTag}`);
+    if (tpl.logoUrl && logoData) svg = svg.split(escAttr(tpl.logoUrl)).join(logoData).split(tpl.logoUrl).join(logoData);
+    if (rot) svg = rotateSvg(svg);
+    const src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+    for (let i = 0; i < Math.min(500, j.copies); i++) {
+      pages.push(`<div class="label-page"><img src="${src}" alt=""></div>`);
+    }
   }
-
-  // Label fonts for the isolated document (plain <link> — it's a real page).
-  const fontDef = LABEL_FONTS.find((f) => f.key === tpl.fontKey);
-  const fontHead = tpl.fontKey === "custom" && tpl.fontUrl
-    ? `<style>@font-face{font-family:'TLLabelCustom';src:url('${tpl.fontUrl.replace(/'/g, "%27")}')}</style>`
-    : fontDef?.css ? `<link rel="stylesheet" href="${fontDef.css}">` : "";
 
   // Print from an ISOLATED iframe document that contains nothing but the
   // labels. Printing from the app page itself (hide-the-shell-with-CSS) let
   // the shell's boxes bleed into pagination on Safari — phantom blank labels,
   // shrunk pages. A standalone document has nothing to interfere.
-  const html = `<!doctype html><html><head><meta charset="utf-8">${fontHead}<style>
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
     @page { size: ${pw}mm ${ph}mm; margin: 0; }
     html, body { margin: 0; padding: 0; width: ${pw}mm; background: #fff; }
     body { line-height: 0; font-size: 0; }
-    /* 0.4mm shy of the page: sub-mm rounding between CSS and the driver's
-       paper must never spill a label onto a phantom second page. */
-    .label-page { width: ${pw}mm; height: calc(${ph}mm - 0.4mm); overflow: hidden; break-after: page; page-break-after: always; break-inside: avoid; page-break-inside: avoid; }
+    /* Composed 1mm shy of the page and contain-fitted: if the driver's page
+       box is a hair smaller than the paper (hidden margins, mm rounding),
+       the label scales down a percent instead of spilling to a second page. */
+    .label-page { width: ${pw}mm; height: calc(${ph}mm - 1mm); overflow: hidden; display: grid; place-items: center; break-after: page; page-break-after: always; break-inside: avoid; page-break-inside: avoid; }
     .label-page:last-child { break-after: auto; page-break-after: auto; }
-    .label-page svg { display: block; }
+    .label-page img { display: block; width: 100%; height: 100%; object-fit: contain; }
   </style></head><body>${pages.join("")}</body></html>`;
 
   document.getElementById("label-print-frame")?.remove();
@@ -65,9 +71,15 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: {
   frame.srcdoc = html;
   await new Promise<void>((res) => { frame.onload = () => res(); document.body.appendChild(frame); });
   const cw = frame.contentWindow!;
-  // Fonts + the logo <image> must be ready or the first tag prints wrong.
-  try { await Promise.race([(cw.document as any).fonts?.ready, new Promise((r) => setTimeout(r, 2500))]); } catch { /* fallback font ok */ }
-  await new Promise((r) => setTimeout(r, 50)); // one layout tick after fonts swap in
+  // Every label <img> must be decoded before print or pages come out empty.
+  try {
+    const imgs = [...cw.document.images];
+    await Promise.race([
+      Promise.all(imgs.map((im) => im.decode().catch(() => undefined))),
+      new Promise((r) => setTimeout(r, 3000)),
+    ]);
+  } catch { /* print what we have */ }
+  await new Promise((r) => setTimeout(r, 50)); // one layout tick
   const cleanup = () => frame.remove();
   cw.addEventListener("afterprint", () => setTimeout(cleanup, 500));
   setTimeout(cleanup, 120_000); // Safari can skip afterprint — sweep up either way
