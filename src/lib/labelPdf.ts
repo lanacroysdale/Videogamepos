@@ -70,7 +70,9 @@ export async function fontStyleTag(tpl: LabelTemplate): Promise<string> {
 // esc() in labels.ts entity-encodes the logo URL inside href="…"
 export const escAttr = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
 
-async function rasterize(svg: string, wMm: number, hMm: number, deg: 0 | 90 | 180 | 270): Promise<{ jpeg: Uint8Array; pw: number; ph: number }> {
+export type PdfTune = { scalePct?: number; nudgeXMm?: number; nudgeYMm?: number };
+
+async function rasterize(svg: string, wMm: number, hMm: number, deg: 0 | 90 | 180 | 270, tune?: PdfTune): Promise<{ jpeg: Uint8Array; pw: number; ph: number }> {
   const img = new Image();
   await new Promise<void>((res, rej) => {
     img.onload = () => res();
@@ -79,16 +81,30 @@ async function rasterize(svg: string, wMm: number, hMm: number, deg: 0 | 90 | 18
   });
   const w = Math.round(wMm * PX_PER_MM), h = Math.round(hMm * PX_PER_MM);
   const sideways = deg === 90 || deg === 270;
+  // Rotate onto a page-size scratch canvas first…
+  const rotated = document.createElement("canvas");
+  rotated.width = sideways ? h : w;
+  rotated.height = sideways ? w : h;
+  const rctx = rotated.getContext("2d")!;
+  rctx.fillStyle = "#fff";
+  rctx.fillRect(0, 0, rotated.width, rotated.height);
+  if (deg === 90) { rctx.translate(rotated.width, 0); rctx.rotate(Math.PI / 2); }
+  else if (deg === 180) { rctx.translate(rotated.width, rotated.height); rctx.rotate(Math.PI); }
+  else if (deg === 270) { rctx.translate(0, rotated.height); rctx.rotate(-Math.PI / 2); }
+  rctx.drawImage(img, 0, 0, w, h);
+  // …then apply the per-station physical alignment (size % + mm nudges) in
+  // plain page coordinates.
+  const s = Math.min(100, Math.max(60, Math.round(Number(tune?.scalePct) || 100))) / 100;
+  const nx = Math.min(8, Math.max(-8, Number(tune?.nudgeXMm) || 0)) * PX_PER_MM;
+  const ny = Math.min(8, Math.max(-8, Number(tune?.nudgeYMm) || 0)) * PX_PER_MM;
   const canvas = document.createElement("canvas");
-  canvas.width = sideways ? h : w;
-  canvas.height = sideways ? w : h;
+  canvas.width = rotated.width;
+  canvas.height = rotated.height;
   const ctx = canvas.getContext("2d")!;
   ctx.fillStyle = "#fff";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  if (deg === 90) { ctx.translate(canvas.width, 0); ctx.rotate(Math.PI / 2); }
-  else if (deg === 180) { ctx.translate(canvas.width, canvas.height); ctx.rotate(Math.PI); }
-  else if (deg === 270) { ctx.translate(0, canvas.height); ctx.rotate(-Math.PI / 2); }
-  ctx.drawImage(img, 0, 0, w, h);
+  const dw = rotated.width * s, dh = rotated.height * s;
+  ctx.drawImage(rotated, (canvas.width - dw) / 2 + nx, (canvas.height - dh) / 2 + ny, dw, dh);
   const dataUrl = canvas.toDataURL("image/jpeg", 0.93);
   const bin = atob(dataUrl.slice(dataUrl.indexOf(",") + 1));
   const bytes = new Uint8Array(bin.length);
@@ -142,7 +158,7 @@ function buildPdf(images: { jpeg: Uint8Array; pw: number; ph: number }[], pageOf
 // Render every job to a PDF blob. rotateDeg composes each label at the given
 // orientation (90/270 = sideways on a portrait page, roll-native for
 // portrait-fed drivers; 180 = flat upside down).
-export async function labelsToPdf(jobs: PdfJob[], tpl: LabelTemplate, opts?: { rotateDeg?: 0 | 90 | 180 | 270 }): Promise<Blob> {
+export async function labelsToPdf(jobs: PdfJob[], tpl: LabelTemplate, opts?: { rotateDeg?: 0 | 90 | 180 | 270 } & PdfTune): Promise<Blob> {
   const real = jobs.filter((j) => j.copies > 0);
   if (!real.length) throw new Error("Nothing to print.");
   await ensureLabelFont(tpl);
@@ -157,7 +173,7 @@ export async function labelsToPdf(jobs: PdfJob[], tpl: LabelTemplate, opts?: { r
     let svg = renderLabelSvg(tpl, j.item);
     if (styleTag) svg = svg.replace(/(<svg[^>]*>)/, `$1${styleTag}`);
     if (tpl.logoUrl && logoData) svg = svg.split(escAttr(tpl.logoUrl)).join(logoData).split(tpl.logoUrl).join(logoData);
-    const im = await rasterize(svg, tpl.widthMm, tpl.heightMm, deg);
+    const im = await rasterize(svg, tpl.widthMm, tpl.heightMm, deg, opts);
     const idx = images.push(im) - 1;
     for (let c = 0; c < Math.min(500, j.copies); c++) pageOfCopy.push(idx);
   }
