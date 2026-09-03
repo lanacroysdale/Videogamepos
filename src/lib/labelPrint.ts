@@ -5,7 +5,7 @@
 // openPrintDialog() is the shared chooser: template picker + per-line copies +
 // optional "all copies" toggle + a 1-label test print. Self-contained styling
 // (CSS vars from app.css only), so it drops into any POS page.
-import { renderLabelSvg, ensureLabelFont, DEFAULT_TEMPLATE, type LabelTemplate, type LabelItem } from "./labels";
+import { renderLabelSvg, ensureLabelFont, DEFAULT_TEMPLATE, LABEL_FONTS, type LabelTemplate, type LabelItem } from "./labels";
 import { labelsToPdf } from "./labelPdf";
 
 export type PrintJob = { item: LabelItem; copies: number };
@@ -13,56 +13,57 @@ export type PrintJob = { item: LabelItem; copies: number };
 export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: { rotate?: boolean }): Promise<void> {
   const real = jobs.filter((j) => j.copies > 0);
   if (!real.length) return;
-  await ensureLabelFont(tpl); // font ready BEFORE print — no fallback-font tags
-  document.getElementById("label-print")?.remove();
-  document.getElementById("label-print-style")?.remove();
+  await ensureLabelFont(tpl); // warms the font cache the iframe will hit
 
-  // ROTATE mode: compose the label sideways onto a PORTRAIT page (roll-native
-  // for most thermal drivers). Safari applies the Landscape toggle to the
-  // output but NOT to the CSS layout surface, so a wide label on a portrait-
-  // normalized roll shrinks — rotating in CSS sidesteps the driver entirely:
-  // print with Orientation: Portrait, scale 100%.
+  // ROTATE mode: compose the label sideways onto a PORTRAIT page — roll-native
+  // for thermal drivers, which feed labels narrow-edge first and normalize the
+  // page portrait. Print with Orientation: Portrait, scale 100%.
   const rot = !!opts?.rotate;
   const pw = rot ? tpl.heightMm : tpl.widthMm;  // page width
   const ph = rot ? tpl.widthMm : tpl.heightMm;  // page height
 
-  const style = document.createElement("style");
-  style.id = "label-print-style";
-  style.textContent = `
-    @page { size: ${pw}mm ${ph}mm; margin: 0; }
-    #label-print { position: fixed; left: -9999px; top: 0; background: #fff; }
-    .label-page { width: ${pw}mm; height: ${ph}mm; overflow: hidden; break-after: page; page-break-after: always; }
-    .label-page:last-child { break-after: auto; page-break-after: auto; }
-    .label-page svg { display: block; }
-    .label-rot { width: ${tpl.widthMm}mm; height: ${tpl.heightMm}mm; transform: rotate(90deg) translateY(-${tpl.heightMm}mm); transform-origin: top left; }
-    @media print {
-      /* display:none, NOT the visibility trick: hidden boxes keep their height,
-         and the app shell in normal flow would feed a stack of BLANK labels
-         before the real ones on a roll printer. */
-      body > :not(#label-print) { display: none !important; }
-      #label-print { position: static !important; left: 0 !important; }
-      /* Safari ignores @page size — pin the document to the page's exact
-         geometry so its shrink-to-fit math has nothing to shrink. */
-      html, body { width: ${pw}mm !important; margin: 0 !important; padding: 0 !important; }
-      .label-page { break-inside: avoid; page-break-inside: avoid; }
-    }`;
-
-  const wrap = document.createElement("div");
-  wrap.id = "label-print";
   const pages: string[] = [];
   for (const j of real) for (let i = 0; i < Math.min(500, j.copies); i++) {
     const svg = renderLabelSvg(tpl, j.item);
     pages.push(`<div class="label-page">${rot ? `<div class="label-rot">${svg}</div>` : svg}</div>`);
   }
-  wrap.innerHTML = pages.join("");
 
-  document.head.appendChild(style);
-  document.body.appendChild(wrap);
-  const cleanup = () => { wrap.remove(); style.remove(); window.removeEventListener("afterprint", cleanup); };
-  window.addEventListener("afterprint", cleanup);
-  window.print();
-  // Safari can skip afterprint — sweep up eventually either way.
-  setTimeout(cleanup, 60_000);
+  // Label fonts for the isolated document (plain <link> — it's a real page).
+  const fontDef = LABEL_FONTS.find((f) => f.key === tpl.fontKey);
+  const fontHead = tpl.fontKey === "custom" && tpl.fontUrl
+    ? `<style>@font-face{font-family:'TLLabelCustom';src:url('${tpl.fontUrl.replace(/'/g, "%27")}')}</style>`
+    : fontDef?.css ? `<link rel="stylesheet" href="${fontDef.css}">` : "";
+
+  // Print from an ISOLATED iframe document that contains nothing but the
+  // labels. Printing from the app page itself (hide-the-shell-with-CSS) let
+  // the shell's boxes bleed into pagination on Safari — phantom blank labels,
+  // shrunk pages. A standalone document has nothing to interfere.
+  const html = `<!doctype html><html><head><meta charset="utf-8">${fontHead}<style>
+    @page { size: ${pw}mm ${ph}mm; margin: 0; }
+    html, body { margin: 0; padding: 0; width: ${pw}mm; background: #fff; }
+    body { line-height: 0; font-size: 0; }
+    .label-page { width: ${pw}mm; height: ${ph}mm; overflow: hidden; break-after: page; page-break-after: always; break-inside: avoid; page-break-inside: avoid; }
+    .label-page:last-child { break-after: auto; page-break-after: auto; }
+    .label-page svg { display: block; }
+    .label-rot { width: ${tpl.widthMm}mm; height: ${tpl.heightMm}mm; transform: rotate(90deg) translateY(-${tpl.heightMm}mm); transform-origin: top left; }
+  </style></head><body>${pages.join("")}</body></html>`;
+
+  document.getElementById("label-print-frame")?.remove();
+  const frame = document.createElement("iframe");
+  frame.id = "label-print-frame";
+  // Not display:none — some engines skip printing invisible frames entirely.
+  frame.style.cssText = "position:fixed;right:0;bottom:0;width:1px;height:1px;border:0;visibility:hidden;";
+  frame.srcdoc = html;
+  await new Promise<void>((res) => { frame.onload = () => res(); document.body.appendChild(frame); });
+  const cw = frame.contentWindow!;
+  // Fonts + the logo <image> must be ready or the first tag prints wrong.
+  try { await Promise.race([(cw.document as any).fonts?.ready, new Promise((r) => setTimeout(r, 2500))]); } catch { /* fallback font ok */ }
+  await new Promise((r) => setTimeout(r, 50)); // one layout tick after fonts swap in
+  const cleanup = () => frame.remove();
+  cw.addEventListener("afterprint", () => setTimeout(cleanup, 500));
+  setTimeout(cleanup, 120_000); // Safari can skip afterprint — sweep up either way
+  cw.focus();
+  cw.print();
 }
 
 export type PrintLine = {
@@ -106,15 +107,15 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
       </div>
       <label style="display:flex;align-items:center;gap:0.45rem;font-size:0.78rem;color:var(--muted,#999);cursor:pointer;">
         <input type="checkbox" id="lp-rot" style="accent-color:var(--cyan,#2ce6e0);width:1rem;height:1rem;">
-        ↻ Rotate 90° — for drivers that feed the roll tall/portrait (then print with Orientation: Portrait)
+        ↻ Rotate for roll feed — label printers feed narrow-edge first; leave ON for a label printer, turn off for a regular sheet printer
       </label>
+      <p id="lp-paper" style="margin:0;padding:0.45rem 0.6rem;background:rgba(44,230,224,.08);border:1px solid rgba(44,230,224,.3);color:var(--text,#eee);font-size:0.76rem;"></p>
       <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;border-top:1px solid var(--border,#333);padding-top:0.7rem;">
-        <button id="lp-print" type="button" style="font:inherit;font-weight:700;padding:0.45rem 0.9rem;background:var(--cyan,#2ce6e0);color:#04222a;border:1px solid var(--cyan,#2ce6e0);cursor:pointer;">🖨 Print (PDF)</button>
-        <button id="lp-test" type="button" title="Make a single-label PDF to check printer alignment" style="font:inherit;padding:0.45rem 0.7rem;background:transparent;color:var(--text,#eee);border:1px solid var(--border-strong,#444);cursor:pointer;">1 test label</button>
-        <button id="lp-browser" type="button" title="Legacy path: print the labels straight from this tab (works best in Chrome)" style="font:inherit;padding:0.45rem 0.7rem;background:transparent;color:var(--muted,#999);border:1px solid var(--border,#333);cursor:pointer;">Browser print</button>
+        <button id="lp-browser" type="button" style="font:inherit;font-weight:700;padding:0.45rem 0.9rem;background:var(--cyan,#2ce6e0);color:#04222a;border:1px solid var(--cyan,#2ce6e0);cursor:pointer;">🖨 Print</button>
+        <button id="lp-print" type="button" title="Build a PDF with exactly label-sized pages — prints identically from any device or viewer at 100%" style="font:inherit;padding:0.45rem 0.7rem;background:transparent;color:var(--text,#eee);border:1px solid var(--border-strong,#444);cursor:pointer;">📄 PDF</button>
+        <button id="lp-test" type="button" title="Print a single label to check printer alignment" style="font:inherit;padding:0.45rem 0.7rem;background:transparent;color:var(--muted,#999);border:1px solid var(--border,#333);cursor:pointer;">1 test label</button>
         <button id="lp-cancel" type="button" style="font:inherit;padding:0.45rem 0.7rem;background:transparent;color:var(--muted,#999);border:1px solid var(--border,#333);cursor:pointer;margin-left:auto;">Cancel</button>
       </div>
-      <p style="margin:0;color:var(--muted-2,#888);font-size:0.72rem;">The PDF's pages are exactly label-sized — open it and print at 100% / Actual Size. Same driver paper size; no orientation fiddling needed.</p>
     </div>`;
 
   const close = () => overlay.remove();
@@ -127,9 +128,31 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
     }));
   const chosenTpl = () => tpls[Number((overlay.querySelector("#lp-tpl") as HTMLSelectElement).value)] ?? tpls[0];
   // Rotation preference sticks per station (it's a printer-driver trait).
+  // Unset = ON for landscape labels: roll printers feed narrow-edge first, so
+  // sideways-on-a-portrait-page is the shape that prints right by default.
   const rotCb = overlay.querySelector<HTMLInputElement>("#lp-rot")!;
-  try { rotCb.checked = localStorage.getItem("tl-print-rot") === "1"; } catch { /* private mode */ }
+  let stored: string | null = null;
+  try { stored = localStorage.getItem("tl-print-rot"); } catch { /* private mode */ }
+  rotCb.checked = stored == null ? chosenTpl().widthMm > chosenTpl().heightMm : stored === "1";
   rotCb.addEventListener("change", () => { try { localStorage.setItem("tl-print-rot", rotCb.checked ? "1" : "0"); } catch { /* private mode */ } });
+
+  // Live label count on the Print button + the driver paper size to match —
+  // the "why did it print 8 pages" and "why is it tiny" answers, up front.
+  const inch = (mm: number) => (mm / 25.4).toFixed(2).replace(/0$/, "");
+  const refreshInfo = () => {
+    const t = chosenTpl();
+    const rot = rotCb.checked;
+    const pw = rot ? t.heightMm : t.widthMm, ph = rot ? t.widthMm : t.heightMm;
+    const n = lines.reduce((a, _, i) => a + Math.max(0, Math.round(Number(overlay.querySelector<HTMLInputElement>(`[data-lp-copies="${i}"]`)!.value)) || 0), 0);
+    overlay.querySelector("#lp-browser")!.textContent = `🖨 Print ${n} label${n === 1 ? "" : "s"}`;
+    overlay.querySelector("#lp-paper")!.innerHTML =
+      `Printer setup: paper size <b>${pw.toFixed(1)} × ${ph.toFixed(1)} mm</b> (${inch(pw)} × ${inch(ph)}″), orientation <b>${pw > ph ? "Landscape" : "Portrait"}</b>, scale <b>100%</b>. One page = one label.`;
+  };
+  refreshInfo();
+  rotCb.addEventListener("change", refreshInfo);
+  overlay.querySelector("#lp-tpl")!.addEventListener("change", refreshInfo);
+  overlay.querySelectorAll<HTMLInputElement>("[data-lp-copies]").forEach((inp) => inp.addEventListener("input", refreshInfo));
+  overlay.querySelectorAll<HTMLButtonElement>("[data-lp-all]").forEach((b) => b.addEventListener("click", refreshInfo));
   const gatherJobs = (): PrintJob[] | null => {
     const jobs: PrintJob[] = lines.map((l, i) => ({
       item: l.item,
