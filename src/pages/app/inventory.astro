@@ -380,7 +380,9 @@ const posData = {
   .modal-wrap[hidden] { display:none; }
   .modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,.6); backdrop-filter:blur(2px); }
   .modal-card {
-    position:relative; width:min(740px, 100%); max-height:92vh; display:flex; flex-direction:column;
+    /* Wide enough that the per-condition table breathes on desktop; never
+       wider than the viewport minus the wrapper padding. */
+    position:relative; width:min(1060px, 100%); max-height:92vh; display:flex; flex-direction:column;
     background:var(--panel, #14101d); border:1px solid var(--border-strong); border-radius:16px; overflow:hidden;
     box-shadow:0 24px 60px rgba(0,0,0,.5);
   }
@@ -400,11 +402,20 @@ const posData = {
   .m-field { margin-top:0.6rem; }
   .modal-card input, .modal-card select, .modal-card textarea { padding:0.45rem 0.6rem; width:100%; }
 
-  .cond-table { width:100%; border-collapse:collapse; font-size:0.82rem; }
+  /* The row has up to 9 columns — give each a workable minimum and let the
+     whole table scroll sideways instead of crushing inputs into each other. */
+  .cond-scroll { overflow-x:auto; }
+  .cond-table { width:100%; min-width:880px; border-collapse:collapse; font-size:0.82rem; }
   .cond-table th { text-align:left; color:var(--muted-2); font-weight:600; font-size:0.72rem; padding:0 0.4rem 0.4rem; white-space:nowrap; }
   .cond-table td { padding:0.3rem 0.4rem; border-top:1px solid var(--border); vertical-align:middle; }
   .cond-table input { padding:0.35rem 0.45rem; }
   .cond-table .c-cond { width:7rem; }
+  .cond-table [data-vf="comp"] { min-width:8.5rem; }
+  .cond-table [data-vf="grade"] { min-width:4.5rem; }
+  .cond-table [data-vf="sku"] { min-width:6.5rem; }
+  .cond-table [data-vf="instore"], .cond-table [data-vf="online"] { min-width:5rem; }
+  .cond-table [data-vf="qty"] { min-width:3.6rem; }
+  .cond-table [data-vf="invtype"], .cond-table [data-vf="loc"] { min-width:6.5rem; }
   .cond-table .c-num input { text-align:right; }
   .cond-table .c-web { text-align:center; }
   .cond-table .c-web input { width:auto; }
@@ -414,7 +425,10 @@ const posData = {
   .reprice-btn:hover { filter:brightness(1.12); }
   .cp-on { font-size:0.68rem; color:var(--cyan); font-weight:800; }
   .img-field { display:flex; gap:0.4rem; align-items:stretch; }
-  .img-field input { flex:1; }
+  .img-field input { flex:1; min-width:0; }
+  /* The image URL + upload pair needs real width — span two grid tracks
+     whenever the grid is wide enough to have them. */
+  @media (min-width: 640px) { .m-grid .m-span2 { grid-column:span 2; } }
   .img-up { flex:none; white-space:nowrap; cursor:pointer; display:inline-flex; align-items:center; }
   .img-prev { margin-top:0.5rem; }
   .img-prev img { max-height:130px; border-radius:8px; border:1px solid var(--border); display:block; }
@@ -832,7 +846,7 @@ const posData = {
           <label>Genre / set<input id="m-genre" value="${esc(p.genre)}"></label>
           <label>Franchise<input id="m-franchise" value="${esc(p.franchise)}"></label>
           <label>Category<select id="m-category">${catOpts}</select></label>
-          <label>Image<div class="img-field"><input id="m-image" value="${esc(p.imageUrl)}" placeholder="https://… or upload →"><label class="btn btn-ghost btn-sm img-up">📷 Upload<input type="file" id="m-imgfile" accept="image/*" hidden></label></div></label>
+          <label class="m-span2">Image<div class="img-field"><input id="m-image" value="${esc(p.imageUrl)}" placeholder="https://… or upload →"><label class="btn btn-ghost btn-sm img-up">📷 Upload<input type="file" id="m-imgfile" accept="image/*" hidden></label></div></label>
         </div>
         <div id="m-imgprev" class="img-prev"${p.imageUrl ? "" : " hidden"}>${p.imageUrl ? `<img src="${esc(p.imageUrl)}" alt="">` : ""}</div>
         <div class="m-field"><label style="display:flex;align-items:center;gap:0.5rem;justify-content:space-between;">Description (web) <button type="button" class="btn btn-ghost btn-sm" id="m-ai-desc" data-pid="${p.id}">✨ Write with AI</button></label><textarea id="m-desc" rows="3" placeholder="Shown on the website listing">${esc(p.description)}</textarea></div>
@@ -840,10 +854,12 @@ const posData = {
 
       <div class="m-section">
         <div class="m-label">Pricing &amp; web — per condition${conditionPricing ? ` <span class="cp-on">↻ condition pricing on</span>` : ""}</div>
-        <table class="cond-table">
-          <thead><tr><th>Completeness</th><th>Grade</th><th>SKU</th><th>In‑store $</th><th>Online $</th><th>Qty</th><th>Web</th>${invTypes.length ? "<th>Type</th><th>Loc</th>" : ""}</tr></thead>
-          <tbody id="cond-body">${condRows}</tbody>
-        </table>
+        <div class="cond-scroll">
+          <table class="cond-table"${invTypes.length ? "" : ` style="min-width:660px;"`}>
+            <thead><tr><th>Completeness</th><th>Grade</th><th>SKU</th><th>In‑store $</th><th>Online $</th><th>Qty</th><th>Web</th>${invTypes.length ? "<th>Type</th><th>Loc</th>" : ""}</tr></thead>
+            <tbody id="cond-body">${condRows}</tbody>
+          </table>
+        </div>
         <button type="button" class="btn btn-ghost btn-sm" id="add-cond" style="margin-top:0.5rem;">＋ Add condition</button>
         <p class="web-hint">${conditionPricing ? "Set one condition's price and tap ↻ to re‑price the others by your rule. " : ""}Leave “Online $” blank to use the in‑store price; “Web” publishes that condition to the shop.</p>
       </div>
