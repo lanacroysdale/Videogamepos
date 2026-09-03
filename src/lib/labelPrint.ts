@@ -10,34 +10,43 @@ import { labelsToPdf, fontStyleTag, inlineLogo, escAttr } from "./labelPdf";
 
 export type PrintJob = { item: LabelItem; copies: number };
 
-// scalePct / nudge: per-station physical alignment — thermal drivers have
-// head offsets and hidden margins no web page can detect, so the user dials
+// Per-station physical alignment — thermal drivers have head offsets, hidden
+// margins, and feed directions no web page can detect, so the user dials
 // these in once from a test label and they stick (localStorage).
-export type PrintTune = { rotate?: boolean; scalePct?: number; nudgeXMm?: number; nudgeYMm?: number };
+export type RotateDeg = 0 | 90 | 180 | 270;
+export type PrintTune = { rotateDeg?: RotateDeg; scalePct?: number; nudgeXMm?: number; nudgeYMm?: number };
 
 export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: PrintTune): Promise<void> {
   const real = jobs.filter((j) => j.copies > 0);
   if (!real.length) return;
   await ensureLabelFont(tpl); // warms the font cache the iframe will hit
 
-  // ROTATE mode: compose the label sideways onto a PORTRAIT page — roll-native
-  // for thermal drivers, which feed labels narrow-edge first and normalize the
-  // page portrait. Print with Orientation: Portrait, scale 100%.
-  const rot = !!opts?.rotate;
-  const pw = rot ? tpl.heightMm : tpl.widthMm;  // page width
-  const ph = rot ? tpl.widthMm : tpl.heightMm;  // page height
+  // Orientation: 90/270 compose the label sideways onto a PORTRAIT page —
+  // roll-native for thermal drivers, which feed narrow-edge first. Which of
+  // the four is right depends on the driver's feed direction; the picker in
+  // the dialog remembers the answer per station.
+  const deg = ([0, 90, 180, 270] as const).includes(opts?.rotateDeg as any) ? (opts!.rotateDeg as RotateDeg) : 0;
+  const sideways = deg === 90 || deg === 270;
+  const pw = sideways ? tpl.heightMm : tpl.widthMm;  // page width
+  const ph = sideways ? tpl.widthMm : tpl.heightMm;  // page height
   const scale = Math.min(100, Math.max(60, Math.round(Number(opts?.scalePct) || 100)));
   const nx = Math.min(8, Math.max(-8, Number(opts?.nudgeXMm) || 0));
   const ny = Math.min(8, Math.max(-8, Number(opts?.nudgeYMm) || 0));
 
-  // Rotation happens INSIDE the SVG (a natively-portrait image), and each
+  // Rotation happens INSIDE the SVG (a natively-oriented image), and each
   // label ships as an <img> — an ATOMIC replaced element that print
   // pagination can move or scale but never split. Safari fragmented both
   // CSS-transformed and inline-SVG labels across two pages.
   const W = tpl.widthMm, H = tpl.heightMm;
   const rotateSvg = (svg: string) => {
+    if (!deg) return svg;
     const inner = svg.replace(/^<svg[^>]*>/, "").replace(/<\/svg>\s*$/, "");
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="${H}mm" height="${W}mm" viewBox="0 0 ${H} ${W}"><g transform="rotate(90) translate(0 -${H})">${inner}</g></svg>`;
+    const g =
+      deg === 90 ? `rotate(90) translate(0 -${H})` :
+      deg === 180 ? `rotate(180) translate(-${W} -${H})` :
+      `rotate(-90) translate(-${W} 0)`;
+    const ow = sideways ? H : W, oh = sideways ? W : H;
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${ow}mm" height="${oh}mm" viewBox="0 0 ${ow} ${oh}"><g transform="${g}">${inner}</g></svg>`;
   };
   // An <img>'s SVG is an isolated document: no external fetches — inline the
   // web font and logo as data: URLs (same treatment the PDF path uses).
@@ -48,7 +57,7 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: P
     let svg = renderLabelSvg(tpl, j.item);
     if (styleTag) svg = svg.replace(/(<svg[^>]*>)/, `$1${styleTag}`);
     if (tpl.logoUrl && logoData) svg = svg.split(escAttr(tpl.logoUrl)).join(logoData).split(tpl.logoUrl).join(logoData);
-    if (rot) svg = rotateSvg(svg);
+    svg = rotateSvg(svg);
     const src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
     for (let i = 0; i < Math.min(500, j.copies); i++) {
       pages.push(`<div class="label-page"><img src="${src}" alt=""></div>`);
@@ -134,9 +143,15 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
             ${l.allCopies != null && l.allCopies > l.defaultCopies ? `<button data-lp-all="${i}" type="button" title="Re-tag every shelf copy" style="font:inherit;font-size:0.72rem;padding:0.25rem 0.5rem;background:transparent;color:var(--cyan,#2ce6e0);border:1px solid var(--cyan,#2ce6e0);cursor:pointer;">all ${l.allCopies}</button>` : ""}
           </div>`).join("")}
       </div>
-      <label style="display:flex;align-items:center;gap:0.45rem;font-size:0.78rem;color:var(--muted,#999);cursor:pointer;">
-        <input type="checkbox" id="lp-rot" style="accent-color:var(--cyan,#2ce6e0);width:1rem;height:1rem;">
-        ↻ Rotate for roll feed — label printers feed narrow-edge first; leave ON for a label printer, turn off for a regular sheet printer
+      <label style="display:flex;align-items:center;gap:0.55rem;font-size:0.78rem;color:var(--muted,#999);flex-wrap:wrap;">
+        <span>↻ Orientation on the roll</span>
+        <select id="lp-rotdeg" style="font:inherit;padding:0.3rem 0.4rem;background:var(--bg,#000);color:var(--text,#eee);border:1px solid var(--border-strong,#444);">
+          <option value="90">Sideways 90° — most label printers</option>
+          <option value="270">Sideways 270° — roll feed, other direction</option>
+          <option value="0">Flat 0° — sheet printers</option>
+          <option value="180">Flat 180° — upside down</option>
+        </select>
+        <span style="font-size:0.72rem;">wrong way on the sticker? try the next option — saves on this station</span>
       </label>
       <p id="lp-paper" style="margin:0;padding:0.45rem 0.6rem;background:rgba(44,230,224,.08);border:1px solid rgba(44,230,224,.3);color:var(--text,#eee);font-size:0.76rem;"></p>
       <details id="lp-tune-wrap" style="font-size:0.78rem;color:var(--muted,#999);">
@@ -173,13 +188,22 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
   // Rotation preference sticks per station (it's a printer-driver trait).
   // Unset = ON for landscape labels: roll printers feed narrow-edge first, so
   // sideways-on-a-portrait-page is the shape that prints right by default.
-  // v2 key: the old key predates rotate-ON-by-default and pinned stale "off"
-  // values from early experiments onto stations that need rotation.
-  const rotCb = overlay.querySelector<HTMLInputElement>("#lp-rot")!;
-  let stored: string | null = null;
-  try { stored = localStorage.getItem("tl-print-rot-v2"); } catch { /* private mode */ }
-  rotCb.checked = stored == null ? chosenTpl().widthMm > chosenTpl().heightMm : stored === "1";
-  rotCb.addEventListener("change", () => { try { localStorage.setItem("tl-print-rot-v2", rotCb.checked ? "1" : "0"); } catch { /* private mode */ } });
+  // Which of the four orientations is correct is a per-station driver trait;
+  // migrate the old boolean keys forward, then remember the choice.
+  const rotSel = overlay.querySelector<HTMLSelectElement>("#lp-rotdeg")!;
+  let storedDeg: string | null = null;
+  try {
+    storedDeg = localStorage.getItem("tl-print-rotdeg");
+    if (storedDeg == null) {
+      const oldRot = localStorage.getItem("tl-print-rot-v2");
+      if (oldRot != null) storedDeg = oldRot === "1" ? "90" : "0";
+    }
+  } catch { /* private mode */ }
+  rotSel.value = ["0", "90", "180", "270"].includes(storedDeg ?? "")
+    ? storedDeg!
+    : chosenTpl().widthMm > chosenTpl().heightMm ? "90" : "0";
+  const rotDeg = () => (Number(rotSel.value) || 0) as 0 | 90 | 180 | 270;
+  rotSel.addEventListener("change", () => { try { localStorage.setItem("tl-print-rotdeg", rotSel.value); } catch { /* private mode */ } });
 
   // Physical-alignment tune values persist per station; the details block
   // opens automatically when a saved value is in play so it's never hidden.
@@ -211,15 +235,15 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
   const inch = (mm: number) => (mm / 25.4).toFixed(2).replace(/0$/, "");
   const refreshInfo = () => {
     const t = chosenTpl();
-    const rot = rotCb.checked;
-    const pw = rot ? t.heightMm : t.widthMm, ph = rot ? t.widthMm : t.heightMm;
+    const sideways = rotDeg() === 90 || rotDeg() === 270;
+    const pw = sideways ? t.heightMm : t.widthMm, ph = sideways ? t.widthMm : t.heightMm;
     const n = lines.reduce((a, _, i) => a + Math.max(0, Math.round(Number(overlay.querySelector<HTMLInputElement>(`[data-lp-copies="${i}"]`)!.value)) || 0), 0);
     overlay.querySelector("#lp-browser")!.textContent = `🖨 Print ${n} label${n === 1 ? "" : "s"}`;
     overlay.querySelector("#lp-paper")!.innerHTML =
       `Printer setup: paper size <b>${pw.toFixed(1)} × ${ph.toFixed(1)} mm</b> (${inch(pw)} × ${inch(ph)}″), orientation <b>${pw > ph ? "Landscape" : "Portrait"}</b>, scale <b>100%</b>. One page = one label.`;
   };
   refreshInfo();
-  rotCb.addEventListener("change", refreshInfo);
+  rotSel.addEventListener("change", refreshInfo);
   overlay.querySelector("#lp-tpl")!.addEventListener("change", refreshInfo);
   overlay.querySelectorAll<HTMLInputElement>("[data-lp-copies]").forEach((inp) => inp.addEventListener("input", refreshInfo));
   overlay.querySelectorAll<HTMLButtonElement>("[data-lp-all]").forEach((b) => b.addEventListener("click", refreshInfo));
@@ -235,7 +259,7 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
     const orig = btn.textContent;
     btn.disabled = true; btn.textContent = "Rendering…";
     try {
-      const blob = await labelsToPdf(jobs, chosenTpl(), { rotate: rotCb.checked });
+      const blob = await labelsToPdf(jobs, chosenTpl(), { rotateDeg: rotDeg() });
       const url = URL.createObjectURL(blob);
       const w = window.open(url, "_blank");
       if (!w) { const a = document.createElement("a"); a.href = url; a.download = "labels.pdf"; a.click(); }
@@ -252,12 +276,12 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
   // Test label goes through the SAME path as the real print so alignment
   // tuning is verified on the pipeline it applies to. Dialog stays open.
   overlay.querySelector("#lp-test")!.addEventListener("click", () => {
-    printLabels([{ item: lines[0].item, copies: 1 }], chosenTpl(), { rotate: rotCb.checked, ...tune() });
+    printLabels([{ item: lines[0].item, copies: 1 }], chosenTpl(), { rotateDeg: rotDeg(), ...tune() });
   });
   overlay.querySelector("#lp-browser")!.addEventListener("click", () => {
     const jobs = gatherJobs();
     if (!jobs) return;
-    const opts = { rotate: rotCb.checked, ...tune() };
+    const opts = { rotateDeg: rotDeg(), ...tune() };
     close();
     printLabels(jobs, chosenTpl(), opts);
   });
