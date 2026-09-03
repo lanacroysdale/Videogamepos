@@ -16,7 +16,7 @@ const slugify = (s: string) =>
 
 export const GET: APIRoute = async ({ locals }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
-  if (locals.profile?.role !== "owner") return json({ error: "Owners only" }, 403);
+  if (!locals.can("departments.manage")) return json({ error: "You don't have permission to manage departments" }, 403);
   const admin = createSupabaseAdminClient();
   const { data: depts } = await admin.from("store_departments").select("*").order("sort_order").order("name");
   const { data: ss } = await admin.from("store_settings").select("settings").eq("id", 1).maybeSingle();
@@ -25,7 +25,7 @@ export const GET: APIRoute = async ({ locals }) => {
 
 export const POST: APIRoute = async ({ locals, request }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
-  if (locals.profile?.role !== "owner") return json({ error: "Owners only" }, 403);
+  if (!locals.can("departments.manage")) return json({ error: "You don't have permission to manage departments" }, 403);
 
   const admin = createSupabaseAdminClient();
   const b = await request.json().catch(() => ({} as any));

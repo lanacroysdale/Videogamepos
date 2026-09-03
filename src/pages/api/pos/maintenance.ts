@@ -55,7 +55,7 @@ async function fetchAll(admin: ReturnType<typeof createSupabaseAdminClient>, tab
 // settings.lastBackupAt, which the reset below requires to be <24h old.
 export const GET: APIRoute = async ({ locals }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
-  if (locals.profile?.role !== "owner") return json({ error: "Owners only" }, 403);
+  if (!locals.can("maintenance.manage")) return json({ error: "You don't have permission for the danger zone" }, 403);
 
   const admin = createSupabaseAdminClient();
   try {
@@ -92,7 +92,7 @@ export const GET: APIRoute = async ({ locals }) => {
 // the deleted variants first (that FK has no cascade).
 export const POST: APIRoute = async ({ locals, request }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
-  if (locals.profile?.role !== "owner") return json({ error: "Owners only" }, 403);
+  if (!locals.can("maintenance.manage")) return json({ error: "You don't have permission for the danger zone" }, 403);
 
   const b = await request.json().catch(() => ({}));
   if (b.confirm !== "WIPE") return json({ error: 'Type WIPE to confirm.' }, 400);

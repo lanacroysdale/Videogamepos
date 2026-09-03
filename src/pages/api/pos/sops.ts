@@ -14,8 +14,8 @@ export const POST: APIRoute = async ({ locals, request }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
   const role = locals.profile?.role; // a staff profile only exists for employees
   if (!role) return json({ error: "Staff only" }, 403);
-  const isManager = ["owner", "manager"].includes(role);
-  const isOwner = role === "owner";
+  const isManager = locals.can("sops.manage");   // author / edit / delete, see drafts
+  const isOwner = locals.can("sops.approve");    // publish drafts (edits self-approve)
   const uid = locals.user.id;
   const now = new Date().toISOString();
   // Tolerate running before the approval/links migrations are applied: if a write
@@ -132,7 +132,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
   }
 
   // ---- Mutations: managers/owners only ----
-  if (!isManager) return json({ error: "Managers only" }, 403);
+  if (!isManager) return json({ error: "You don't have permission to edit SOPs" }, 403);
 
   if (action === "create") {
     const title = String(b.title ?? "").trim();
@@ -159,7 +159,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
   }
 
   if (action === "approve") {
-    if (!isOwner) return json({ error: "Only the owner can approve SOPs." }, 403);
+    if (!isOwner) return json({ error: "You don't have permission to approve SOPs." }, 403);
     if (!b.id) return json({ error: "id required" }, 400);
     const { error } = await admin.from("sops").update({ status: "approved", approved_by: uid, approved_at: now }).eq("id", b.id);
     if (error) return json({ error: optionalColMissing(error.message) ? "Run the SOP approval migration first." : error.message }, 500);

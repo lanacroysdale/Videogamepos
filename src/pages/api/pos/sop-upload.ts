@@ -30,7 +30,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
   const role = locals.profile?.role; // a staff profile only exists for employees
   if (!role) return json({ error: "Staff only" }, 403);
-  if (!["owner", "manager"].includes(role)) return json({ error: "Managers only" }, 403);
+  if (!locals.can("sops.manage")) return json({ error: "You don't have permission to edit SOPs" }, 403);
 
   const form = await request.formData();
   const sopId = String(form.get("sopId") ?? "").trim();

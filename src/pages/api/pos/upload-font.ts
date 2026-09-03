@@ -12,7 +12,7 @@ const MAX_BYTES = 3 * 1024 * 1024;
 
 export const POST: APIRoute = async ({ locals, request }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
-  if (!["owner", "manager"].includes(locals.profile?.role ?? "")) return json({ error: "Managers only" }, 403);
+  if (!locals.can("settings.manage")) return json({ error: "You don't have permission to change settings" }, 403);
 
   const form = await request.formData().catch(() => null);
   const file = form?.get("file");

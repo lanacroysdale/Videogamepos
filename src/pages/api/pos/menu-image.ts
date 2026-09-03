@@ -10,7 +10,7 @@ const MAX_BYTES = 6 * 1024 * 1024;
 // menu_items.image_url via the item-save action.
 export const POST: APIRoute = async ({ locals, request }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
-  if (!["owner", "manager"].includes(locals.profile?.role ?? "")) return json({ error: "Managers only" }, 403);
+  if (!locals.can("menu.manage")) return json({ error: "You don't have permission to edit the menu" }, 403);
 
   const form = await request.formData();
   const file = form.get("file");

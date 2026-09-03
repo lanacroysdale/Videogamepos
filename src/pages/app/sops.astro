@@ -8,8 +8,8 @@ import { renderMarkdown } from "../../lib/markdown";
 // without a profile) get bounced so they can never read internal SOPs.
 const profile = Astro.locals.profile;
 if (!profile) return Astro.redirect("/login");
-const isManager = ["owner", "manager"].includes(profile.role);
-const isOwner = profile.role === "owner";
+const isManager = Astro.locals.can("sops.manage");
+const isOwner = Astro.locals.can("sops.approve");
 
 const admin = createSupabaseAdminClient();
 const BUCKET = "documents";

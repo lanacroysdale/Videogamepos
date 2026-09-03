@@ -9,15 +9,28 @@ import { barSettings } from "../../lib/barSettings";
 import { labelTemplates, LABEL_FONTS } from "../../lib/labels";
 import type { StoreDepartment, StoreInventoryType, StoreLocation } from "../../lib/types";
 import { createSupabaseAdminClient } from "../../lib/supabase";
+import { PERMISSIONS, PERMISSION_GROUPS, loadRoles, roleName } from "../../lib/permissions";
 
 const supabase = Astro.locals.supabase;
-const isOwner = Astro.locals.profile?.role === "owner";
+// Every panel is gated by a permission (Settings → Roles & permissions); the
+// page itself needs settings.manage (middleware).
+const can = Astro.locals.can;
+const roles = Astro.locals.roles;
+const canTeam = can("team.manage");
+const canRemove = can("team.remove");
+const canRoles = can("roles.manage");
+const canDepts = can("departments.manage");
+const canInvConfig = can("inventory_config.manage");
+const canMaint = can("maintenance.manage");
+const { fromDb: rolesFromDb } = await loadRoles(createSupabaseAdminClient());
 
-// Team list (owner-only) — emails come from auth via the admin client.
-let team: { id: string; full_name: string; role: string; email: string; isYou: boolean }[] = [];
-if (isOwner) {
+// Team list — emails come from auth via the admin client.
+type TeamRow = { id: string; full_name: string; role: string; email: string; isYou: boolean; removed_at: string | null };
+let team: TeamRow[] = [];
+let removed: TeamRow[] = [];
+if (canTeam) {
   const admin = createSupabaseAdminClient();
-  const { data: profs } = await admin.from("profiles").select("id, full_name, role").order("full_name");
+  const { data: profs } = await admin.from("profiles").select("*").order("full_name");
   // Per-id email lookup — bulk listUsers fails wholesale if any one auth row
   // can't be scanned; this degrades just that user's email to blank instead.
   const emailById = new Map<string, string>(
@@ -28,7 +41,9 @@ if (isOwner) {
       }),
     ),
   );
-  team = (profs ?? []).map((p: any) => ({ id: p.id, full_name: p.full_name, role: p.role, email: emailById.get(p.id) ?? "", isYou: p.id === Astro.locals.user!.id }));
+  const all: TeamRow[] = (profs ?? []).map((p: any) => ({ id: p.id, full_name: p.full_name, role: p.role, removed_at: p.removed_at ?? null, email: emailById.get(p.id) ?? "", isYou: p.id === Astro.locals.user!.id }));
+  team = all.filter((u) => !u.removed_at);
+  removed = all.filter((u) => !!u.removed_at);
 }
 const { data: row } = await supabase.from("store_settings").select("store_name, settings").eq("id", 1).maybeSingle();
 const storeName = (row as any)?.store_name || "TimeLag";
@@ -45,15 +60,15 @@ const bar = barSettings(row?.settings);
 const deptLocked = (row?.settings as any)?.departmentsLocked === true;
 const KIND_LABEL: Record<string, string> = { retail: "Retail", food_bev: "Food & Beverage", arcade: "Arcade", service: "Service", other: "Other" };
 let departments: StoreDepartment[] = [];
-if (isOwner) {
+if (canDepts) {
   const { data: depts } = await supabase.from("store_departments").select("*").order("sort_order").order("name");
   departments = (depts as StoreDepartment[]) ?? [];
 }
-const isManager = ["owner", "manager"].includes(Astro.locals.profile?.role ?? "");
+const isManager = can("settings.manage");
 // Inventory types + locations (empty pre-migration → panel shows a setup note).
 let invTypes: StoreInventoryType[] = [];
 let locations: StoreLocation[] = [];
-if (isManager) {
+if (canInvConfig) {
   const [{ data: itRows }, { data: locRows }] = await Promise.all([
     supabase.from("store_inventory_types").select("*").order("sort_order").order("name"),
     supabase.from("store_locations").select("*").order("sort_order").order("name"),
@@ -76,41 +91,63 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     </button>
   </div>
 
-  {isOwner && (
+  {canTeam && (
     <div class="pos-panel set-panel" style="margin-bottom:1.25rem;">
-      <h2>Team & permissions</h2>
+      <h2>Team</h2>
       <p class="muted set-desc">
-        Invite employees and set access. <strong>Cashier</strong> = checkout, inventory, trade-ins ·
-        <strong>Manager</strong> = + reports, pricing, settings · <strong>Owner</strong> = full access + team.
+        Invite employees and set each person's role. What a role can do is defined under
+        <strong>Roles &amp; permissions</strong>{canRoles ? " below" : " (owner)"}.
+        {canRemove ? " Removing someone disables their login but keeps their sales history; you can restore them later." : ""}
       </p>
       <table class="tbl team-tbl">
-        <thead><tr><th>Name</th><th>Email</th><th>Role</th></tr></thead>
+        <thead><tr><th>Name</th><th>Email</th><th>Role</th>{canRemove && <th class="team-act-col"></th>}</tr></thead>
         <tbody>
           {team.map((u) => (
             <tr>
               <td><strong>{u.full_name}</strong>{u.isYou && <span class="muted"> (you)</span>}</td>
               <td class="muted">{u.email}</td>
               <td>
-                <select class="team-role" data-uid={u.id} disabled={u.isYou}>
-                  <option value="cashier" selected={u.role === "cashier"}>Cashier</option>
-                  <option value="manager" selected={u.role === "manager"}>Manager</option>
-                  <option value="owner" selected={u.role === "owner"}>Owner</option>
+                <select class="team-role" data-uid={u.id} disabled={u.isYou} title={u.isYou ? "You can't change your own role" : undefined}>
+                  {roles.map((r) => <option value={r.key} selected={u.role === r.key}>{r.name}</option>)}
+                  {!roles.some((r) => r.key === u.role) && <option value={u.role} selected>{u.role}</option>}
                 </select>
               </td>
+              {canRemove && (
+                <td class="team-act-col">
+                  {!u.isYou && <button class="link-btn team-remove" type="button" data-uid={u.id} data-name={u.full_name}>Remove</button>}
+                </td>
+              )}
             </tr>
           ))}
+          {team.length === 0 && <tr><td colspan="4" class="muted">No employees yet.</td></tr>}
         </tbody>
       </table>
       <span id="team-status" class="muted"></span>
+
+      {canRemove && removed.length > 0 && (
+        <details class="team-removed">
+          <summary>Removed employees ({removed.length})</summary>
+          <table class="tbl team-tbl">
+            <tbody>
+              {removed.map((u) => (
+                <tr>
+                  <td><strong>{u.full_name}</strong> <span class="muted">· {roleName(roles, u.role)}</span></td>
+                  <td class="muted">{u.email}</td>
+                  <td class="muted">removed {new Date(u.removed_at!).toLocaleDateString()}</td>
+                  <td class="team-act-col"><button class="link-btn team-restore" type="button" data-uid={u.id} data-name={u.full_name}>Restore</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </details>
+      )}
 
       <h3 class="set-subh">Invite an employee</h3>
       <div class="inv-grid">
         <input id="inv-name" placeholder="Full name" autocomplete="off" />
         <input id="inv-email" type="email" placeholder="email@example.com" autocomplete="off" />
         <select id="inv-role">
-          <option value="cashier">Cashier</option>
-          <option value="manager">Manager</option>
-          <option value="owner">Owner</option>
+          {roles.map((r) => <option value={r.key} selected={r.key === "cashier"}>{r.name}</option>)}
         </select>
         <button id="inv-send" class="btn btn-primary btn-sm">Invite</button>
       </div>
@@ -118,7 +155,74 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     </div>
   )}
 
-  {isOwner && (
+  {canRoles && (
+    <div class="pos-panel set-panel" id="roles-panel" style="margin-bottom:1.25rem;">
+      <h2>Roles &amp; permissions</h2>
+      <p class="muted set-desc">
+        Each column is a role; tick what it may do. <strong>{roleName(roles, "owner")}</strong> always has everything.
+        Changes save instantly and take effect on each person's next page load. Click a role's name to rename it, and add
+        custom roles for anything the built-ins don't cover.
+      </p>
+      {!rolesFromDb && (
+        <p class="notice">Roles are running on the built-in defaults. Apply migration <code>20260903000001_roles_and_permissions.sql</code> in Supabase to edit them here.</p>
+      )}
+      <div class="perm-wrap">
+        <table class="tbl perm-tbl">
+          <thead>
+            <tr>
+              <th class="perm-name-col">Permission</th>
+              {roles.map((r) => (
+                <th class="perm-role-col">
+                  <button class="perm-role-name" type="button" data-rename={r.key} data-name={r.name} data-desc={r.description} title={r.description || "Rename"} disabled={!rolesFromDb}>{r.name}</button>
+                  <div class="perm-role-meta">
+                    {r.is_system
+                      ? <span class="perm-sys">built-in</span>
+                      : <button class="link-btn" type="button" data-delrole={r.key} data-name={r.name}>delete</button>}
+                    {r.is_system && r.key !== "owner" && <button class="link-btn" type="button" data-resetrole={r.key} data-name={r.name}>reset</button>}
+                  </div>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {PERMISSION_GROUPS.map((g) => (
+              <>
+                <tr class="perm-group"><td colspan={roles.length + 1}>{g}</td></tr>
+                {PERMISSIONS.filter((p) => p.group === g).map((p) => (
+                  <tr>
+                    <td class="perm-name-col">
+                      <div class="perm-label">{p.label}{p.sensitive && <span class="perm-sens" title="High-privilege — grant carefully">⚠</span>}</div>
+                      <div class="perm-desc muted">{p.description}</div>
+                    </td>
+                    {roles.map((r) => (
+                      <td class="perm-cell">
+                        {r.key === "owner"
+                          ? <span class="perm-always" title="The owner always has this">✓</span>
+                          : <input type="checkbox" class="perm-chk" data-role={r.key} data-perm={p.key} checked={r.permissions.includes(p.key)} disabled={!rolesFromDb} aria-label={`${r.name}: ${p.label}`} />}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div class="perm-actions">
+        <div class="perm-new">
+          <input id="role-new-name" placeholder="New role name (e.g. Shift lead)" autocomplete="off" maxlength="40" disabled={!rolesFromDb} />
+          <select id="role-new-copy" disabled={!rolesFromDb}>
+            <option value="">Start with no permissions</option>
+            {roles.filter((r) => r.key !== "owner").map((r) => <option value={r.key}>Copy from {r.name}</option>)}
+          </select>
+          <button id="role-new-add" class="btn btn-primary btn-sm" type="button" disabled={!rolesFromDb}>+ Add role</button>
+        </div>
+        <span id="roles-status" class="muted"></span>
+      </div>
+    </div>
+  )}
+
+  {canDepts && (
     <div class="pos-panel set-panel dept-panel" data-locked={deptLocked ? "1" : "0"} style="margin-bottom:1.25rem;">
       <h2>Departments <span class="dept-lock-pill" id="dept-lock-pill" hidden>🔒 Locked</span></h2>
       <p class="muted set-desc">
@@ -158,7 +262,7 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     </div>
   )}
 
-  {isOwner && (
+  {canDepts && (
     <div class="dept-modal" id="dept-modal" hidden>
       <div class="dept-modal-card">
         <h3 id="dm-title">New department</h3>
@@ -185,7 +289,7 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     </div>
   )}
 
-  {isManager && (
+  {canInvConfig && (
     <div class="pos-panel set-panel" id="invtypes-panel" style="margin-bottom:1.25rem;">
       <h2>Inventory types</h2>
       <p class="muted set-desc">
@@ -579,7 +683,7 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     </div>
   </div>
 
-  {isOwner && (
+  {canMaint && (
     <div class="pos-panel set-panel danger-panel">
       <h2>Danger zone</h2>
       <p class="muted set-desc">
@@ -653,6 +757,40 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   .inv-grid { display: grid; grid-template-columns: 1fr 1fr auto auto; gap: 0.5rem; margin-top: 0.5rem; }
   @media (max-width: 640px) { .inv-grid { grid-template-columns: 1fr; } }
   #inv-result code { color: var(--cyan); font-weight: 700; }
+  .team-act-col { text-align: right; white-space: nowrap; }
+  .team-removed { margin-top: 0.9rem; }
+  .team-removed summary { cursor: pointer; font-size: 0.85rem; color: var(--muted); }
+  .team-removed .team-tbl { opacity: 0.75; }
+
+  /* Roles & permissions matrix */
+  .perm-wrap { overflow-x: auto; margin: 0.6rem 0 0.4rem; }
+  .perm-tbl { min-width: 620px; }
+  .perm-tbl th, .perm-tbl td { vertical-align: middle; }
+  .perm-tbl thead th { position: sticky; top: 0; background: var(--panel); z-index: 1; }
+  .perm-name-col { min-width: 240px; }
+  .perm-role-col { text-align: center; min-width: 6.5rem; }
+  .perm-role-name {
+    font: inherit; font-weight: 800; font-size: 0.9rem; text-transform: none; letter-spacing: 0; color: var(--text);
+    background: transparent; border: 1px dashed transparent; padding: 0.1rem 0.4rem; cursor: text; max-width: 11rem;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .perm-role-name:hover:not(:disabled) { border-color: var(--border-strong); }
+  .perm-role-name:disabled { cursor: default; }
+  .perm-role-meta { display: flex; justify-content: center; gap: 0.6rem; margin-top: 0.25rem; font-size: 0.7rem; text-transform: none; letter-spacing: 0; }
+  .perm-role-meta .link-btn { font-size: 0.7rem; }
+  .perm-sys { color: var(--muted-2); }
+  .perm-group td { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--cyan); font-weight: 800; padding-top: 1rem; background: rgba(255,255,255,.02); }
+  .perm-label { font-weight: 700; font-size: 0.9rem; }
+  .perm-sens { color: var(--magenta); margin-left: 0.35rem; font-size: 0.8rem; }
+  .perm-desc { font-size: 0.78rem; line-height: 1.35; margin-top: 0.15rem; max-width: 34rem; }
+  .perm-cell { text-align: center; }
+  .perm-chk { width: 1.15rem; height: 1.15rem; accent-color: var(--cyan); cursor: pointer; margin: 0; }
+  .perm-chk:disabled { cursor: not-allowed; opacity: 0.5; }
+  .perm-always { color: var(--green); font-weight: 800; font-size: 1.05rem; }
+  .perm-actions { display: flex; align-items: center; gap: 1rem; margin-top: 1rem; flex-wrap: wrap; }
+  .perm-new { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+  .perm-new input { min-width: 15rem; }
+  #roles-panel .notice { border-radius: 0; }
 
   /* Departments */
   .dept-tbl { margin: 0.4rem 0 0.2rem; }
@@ -811,6 +949,76 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       ($("inv-name") as HTMLInputElement).value = ""; ($("inv-email") as HTMLInputElement).value = "";
     } catch (e: any) { alert(e.message); }
     finally { btn.disabled = false; }
+  });
+
+  // ---- Team: remove / restore (team.remove — owner by default) ----
+  const teamCall = async (body: any) => {
+    const res = await fetch("/api/pos/users", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const j = await res.json();
+    if (!res.ok || !j.ok) throw new Error(j.error || "Failed");
+    return j;
+  };
+  document.querySelectorAll<HTMLButtonElement>(".team-remove").forEach((btn) => btn.addEventListener("click", async () => {
+    const name = btn.dataset.name || "this employee";
+    if (!confirm(`Remove ${name} from the team?\n\nThey'll be signed out and can no longer log in. Their sales and history stay on record, and you can restore them later from "Removed employees".`)) return;
+    btn.disabled = true;
+    try { await teamCall({ action: "remove", userId: btn.dataset.uid }); location.reload(); }
+    catch (e: any) { alert(e.message); btn.disabled = false; }
+  }));
+  document.querySelectorAll<HTMLButtonElement>(".team-restore").forEach((btn) => btn.addEventListener("click", async () => {
+    if (!confirm(`Restore ${btn.dataset.name || "this employee"}? They'll be able to log in again with their previous role.`)) return;
+    btn.disabled = true;
+    try { await teamCall({ action: "restore", userId: btn.dataset.uid }); location.reload(); }
+    catch (e: any) { alert(e.message); btn.disabled = false; }
+  }));
+
+  // ---- Roles & permissions matrix (roles.manage) ----
+  const rolesStatus = document.getElementById("roles-status");
+  const rolesCall = async (body: any) => {
+    const res = await fetch("/api/pos/roles", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const j = await res.json();
+    if (!res.ok || !j.ok) throw new Error(j.error || "Failed");
+    return j;
+  };
+  const rolesSetStatus = (t: string) => { if (rolesStatus) rolesStatus.textContent = t; };
+  document.querySelectorAll<HTMLInputElement>(".perm-chk").forEach((chk) => chk.addEventListener("change", async () => {
+    const role = chk.dataset.role!;
+    const permissions = Array.from(document.querySelectorAll<HTMLInputElement>(`.perm-chk[data-role="${role}"]`))
+      .filter((c) => c.checked).map((c) => c.dataset.perm);
+    rolesSetStatus("Saving…");
+    try { await rolesCall({ action: "set-permissions", key: role, permissions }); rolesSetStatus("✓ Saved — applies on next page load"); }
+    catch (e: any) { chk.checked = !chk.checked; rolesSetStatus(""); alert(e.message); }
+  }));
+  document.querySelectorAll<HTMLButtonElement>("[data-rename]").forEach((btn) => btn.addEventListener("click", async () => {
+    const name = prompt("Role name:", btn.dataset.name || "");
+    if (name === null) return;
+    if (!name.trim()) { alert("Name can't be empty."); return; }
+    const description = prompt("Short description (shown to the team):", btn.dataset.desc || "");
+    if (description === null) return;
+    rolesSetStatus("Saving…");
+    try { await rolesCall({ action: "rename", key: btn.dataset.rename, name, description }); location.reload(); }
+    catch (e: any) { rolesSetStatus(""); alert(e.message); }
+  }));
+  document.querySelectorAll<HTMLButtonElement>("[data-delrole]").forEach((btn) => btn.addEventListener("click", async () => {
+    if (!confirm(`Delete the "${btn.dataset.name}" role? Anyone still assigned to it must be moved first.`)) return;
+    rolesSetStatus("Deleting…");
+    try { await rolesCall({ action: "delete", key: btn.dataset.delrole }); location.reload(); }
+    catch (e: any) { rolesSetStatus(""); alert(e.message); }
+  }));
+  document.querySelectorAll<HTMLButtonElement>("[data-resetrole]").forEach((btn) => btn.addEventListener("click", async () => {
+    if (!confirm(`Reset "${btn.dataset.name}" to its built-in name and default permissions?`)) return;
+    rolesSetStatus("Resetting…");
+    try { await rolesCall({ action: "reset", key: btn.dataset.resetrole }); location.reload(); }
+    catch (e: any) { rolesSetStatus(""); alert(e.message); }
+  }));
+  document.getElementById("role-new-add")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget as HTMLButtonElement;
+    const name = ($("role-new-name") as HTMLInputElement).value.trim();
+    const copyFrom = (document.getElementById("role-new-copy") as HTMLSelectElement).value;
+    if (!name) { alert("Give the new role a name."); return; }
+    btn.disabled = true; rolesSetStatus("Adding…");
+    try { await rolesCall({ action: "create", name, copyFrom }); location.reload(); }
+    catch (err: any) { rolesSetStatus(""); alert(err.message); btn.disabled = false; }
   });
 
   document.getElementById("notify-save")!.addEventListener("click", (e) => save({
@@ -1290,7 +1498,8 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   // morning); the collapsed header shows an emoji + one-line summary; the
   // "Expand all / Collapse all" button at the top flips everything.
   const ACC_META: [RegExp, string, string][] = [
-    [/^Team/, "👥", "Invite staff · set roles"],
+    [/^Team/, "👥", "Invite · roles · remove"],
+    [/^Roles/, "🔐", "Who can do what — per-role matrix"],
     [/^Departments/, "🏢", "Retail / F&B / Arcade — governed"],
     [/^Inventory types/, "📦", "Stock pools · locations · expo block"],
     [/^Label templates/, "🏷️", "Barcode price-tag designer"],

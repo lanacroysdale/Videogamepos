@@ -27,7 +27,7 @@ export const GET: APIRoute = async ({ locals, url }) => {
 export const POST: APIRoute = async ({ locals, request }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
   const b = await request.json().catch(() => ({}));
-  const isManager = !!locals.profile && ["owner", "manager"].includes(locals.profile.role);
+  const isManager = locals.can("returns.override");
 
   const admin = createSupabaseAdminClient();
   const { data: orig } = await admin.from("transactions").select("id, completed_at, customer_id, human_id").eq("id", b.originalId).maybeSingle();

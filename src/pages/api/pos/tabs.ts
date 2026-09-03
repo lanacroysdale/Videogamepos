@@ -262,7 +262,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
 
   // ---- Close out ALL open tabs (end of night) — managers/owners only ----
   if (a === "close-all") {
-    if (!["owner", "manager"].includes(locals.profile?.role ?? "")) return json({ error: "Managers only" }, 403);
+    if (!locals.can("tabs.close_all")) return json({ error: "You don't have permission to close all tabs" }, 403);
     const admin = createSupabaseAdminClient();
     const { data: row } = await admin.from("store_settings").select("settings").eq("id", 1).maybeSingle();
     const bs = barSettings(row?.settings);

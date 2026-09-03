@@ -1,7 +1,7 @@
 ---
 export const prerender = false;
 import AppLayout from "../../layouts/AppLayout.astro";
-const isManager = !!Astro.locals.profile && ["owner", "manager"].includes(Astro.locals.profile.role);
+const isManager = Astro.locals.can("returns.override");
 ---
 
 <AppLayout title="Returns / Refunds" active="returns">

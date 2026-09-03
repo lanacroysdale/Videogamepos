@@ -64,16 +64,16 @@
 
   async function init() {
     let role: string | null = null;
+    let elevated = false;
     try {
       const r = await fetch("/api/whoami", { headers: { "x-requested-with": "fetch" } });
-      if (r.ok) role = (await r.json())?.role ?? null;
+      if (r.ok) { const j = await r.json(); role = j?.role ?? null; elevated = !!j?.elevated; }
     } catch { /* offline — stay hidden */ }
-    if (role !== "owner" && role !== "manager") return; // non-owners: nothing renders
+    if (!role || !elevated) return; // only staff who may open Settings get the toolbar
 
     const tb = document.getElementById("owner-tb")!;
     const fab = document.getElementById("owner-fab")!;
     const menu = document.getElementById("owner-menu")!;
-    const isManager = role === "owner" || role === "manager";
     // The POS runs on its own host now; the marketing site on another. Detect by
     // host, and cross-link with absolute URLs so "Open POS" / "Main site" jump hosts.
     const inPos = !MARKETING_HOSTS.includes(location.hostname);
@@ -83,7 +83,7 @@
           { ico: "🏠", label: "Main site", href: SITE.url },
           { ico: "🛒", label: "Shop", href: "/shop" },
           { ico: "🎨", label: "Theme", act: "theme" },
-          ...(isManager ? [{ ico: "⚙️", label: "Settings", href: "/settings" } as Item] : []),
+          { ico: "⚙️", label: "Settings", href: "/settings" },
           { ico: "🚪", label: "Log out", act: "logout" },
         ]
       : [

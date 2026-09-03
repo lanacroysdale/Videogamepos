@@ -8,9 +8,9 @@ import {
   summarize, pctChange, bucketSeries, granularityFor, rollupBy, departmentOf, inventoryTypeOf, type Txn, type Item,
 } from "../../lib/reports";
 
-// Manager-gated (middleware already enforces it; explicit guard for defense-in-depth).
+// Permission-gated (middleware already enforces it; explicit guard for defense-in-depth).
 const profile = Astro.locals.profile;
-if (!profile || !["owner", "manager"].includes(profile.role)) return Astro.redirect("/dashboard");
+if (!profile || !Astro.locals.can("reports.view")) return Astro.redirect("/dashboard");
 const admin = createSupabaseAdminClient();
 
 const RANGES = [

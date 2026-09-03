@@ -4,7 +4,7 @@ import AppLayout from "../../layouts/AppLayout.astro";
 
 const supabase = Astro.locals.supabase;
 const profile = Astro.locals.profile;
-const isManager = !!profile && ["owner", "manager"].includes(profile.role);
+const isManager = Astro.locals.can("customers.merge");
 const { data: customers } = await supabase
   .from("customers").select("*").is("merged_into", null).order("last_name").order("first_name");
 const posData = { customers: customers ?? [], isManager };

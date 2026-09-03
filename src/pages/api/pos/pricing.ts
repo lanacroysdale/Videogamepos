@@ -8,7 +8,7 @@ const json = (d: unknown, s = 200) => new Response(JSON.stringify(d), { status: 
 // review workflow (approve/revert) can be exercised.
 export const POST: APIRoute = async ({ locals, request }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
-  if (!locals.profile || !["owner", "manager"].includes(locals.profile.role)) return json({ error: "Managers only" }, 403);
+  if (!locals.can("pricing.manage")) return json({ error: "You don't have permission to use pricing tools" }, 403);
   const b = await request.json().catch(() => ({}));
   const sb = locals.supabase;
 

@@ -1,5 +1,6 @@
 import type { APIRoute } from "astro";
-import { createSupabaseServerClient } from "../../lib/supabase";
+import { createSupabaseServerClient, createSupabaseAdminClient } from "../../lib/supabase";
+import { can, loadRoles } from "../../lib/permissions";
 
 export const prerender = false;
 
@@ -17,10 +18,13 @@ export const GET: APIRoute = async (context) => {
     if (!user) return json({ role: null });
     const { data: profile } = await supabase
       .from("profiles")
-      .select("role, full_name")
+      .select("*") // "*" so this still works before the removed_at migration is applied
       .eq("id", user.id)
       .maybeSingle();
-    return json({ role: profile?.role ?? null, name: profile?.full_name ?? null });
+    if (!profile || profile.removed_at) return json({ role: null });
+    const { roles } = await loadRoles(createSupabaseAdminClient());
+    // `elevated` = may open Settings; that is what the toolbar keys off.
+    return json({ role: profile.role, name: profile.full_name, elevated: can(profile, roles, "settings.manage") });
   } catch {
     return json({ role: null });
   }

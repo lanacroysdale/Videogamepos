@@ -13,7 +13,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
   const sb = locals.supabase;
   const uid = locals.user.id;
-  const isManager = ["owner", "manager"].includes(locals.profile?.role ?? "");
+  const isManager = locals.can("tasks.manage");
   const b = await request.json().catch(() => ({} as any));
   const action = b.action;
 
@@ -116,7 +116,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
 
   // ---- Daily checklist templates (managers) --------------------------------
   if (action === "template-create" || action === "template-update" || action === "template-delete") {
-    if (!isManager) return json({ error: "Managers only" }, 403);
+    if (!isManager) return json({ error: "You don't have permission to edit the daily checklist" }, 403);
 
     if (action === "template-create") {
       const title = String(b.title ?? "").trim();

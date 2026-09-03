@@ -102,10 +102,12 @@
 <script>
   // Animated lavender pixel field (hero backdrop)
   (function () {
-    const canvas = document.querySelector<HTMLCanvasElement>(".hero-pixels");
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    const canvasEl = document.querySelector<HTMLCanvasElement>(".hero-pixels");
+    const ctxEl = canvasEl?.getContext("2d");
+    if (!canvasEl || !ctxEl) return;
+    // Explicitly non-null types so the nested build()/draw() closures see them as such.
+    const canvas: HTMLCanvasElement = canvasEl;
+    const ctx: CanvasRenderingContext2D = ctxEl;
     const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const palette = ["#b9a4e8", "#cdbcf0", "#a98fe0", "#c77fd6", "#d4a9e8", "#f39ccd", "#ef85c6", "#9a6fd0", "#e7d9f7", "#df9bd8"];
     const dpr = Math.min(window.devicePixelRatio || 1, 2);

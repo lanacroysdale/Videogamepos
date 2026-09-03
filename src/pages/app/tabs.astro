@@ -8,7 +8,7 @@ import { barSettings } from "../../lib/barSettings";
 // long-lived is_tab=true, status='open' transaction on the existing ledger.
 const supabase = Astro.locals.supabase;
 const profile = Astro.locals.profile;
-const isManager = ["owner", "manager"].includes(profile?.role ?? "");
+const isManager = Astro.locals.can("tabs.close_all");
 
 // Tabs require the Food & Beverage department to be enabled.
 let fnbEnabled = false;

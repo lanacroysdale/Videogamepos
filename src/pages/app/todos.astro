@@ -5,7 +5,7 @@ import { PRIORITIES, priorityRank, storeToday } from "../../lib/todos";
 
 const supabase = Astro.locals.supabase;
 const uid = Astro.locals.user!.id;
-const isManager = ["owner", "manager"].includes(Astro.locals.profile?.role ?? "");
+const isManager = Astro.locals.can("tasks.manage");
 const myName = Astro.locals.profile?.full_name ?? "You";
 const today = storeToday();
 

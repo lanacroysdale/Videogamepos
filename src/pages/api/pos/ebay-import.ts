@@ -86,7 +86,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
 
   const b = await request.json().catch(() => ({}));
   const mode = b.mode || "preview";
-  const isManager = cronAuthed || ["owner", "manager"].includes(locals.profile?.role ?? "");
+  const isManager = cronAuthed || locals.can("inventory.manage");
   const admin = createSupabaseAdminClient();
 
   try {

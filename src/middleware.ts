@@ -1,6 +1,7 @@
 import { defineMiddleware } from "astro:middleware";
-import { createSupabaseServerClient } from "./lib/supabase";
+import { createSupabaseServerClient, createSupabaseAdminClient } from "./lib/supabase";
 import type { Profile } from "./lib/types";
+import { can, loadRoles, type PermissionKey } from "./lib/permissions";
 import { MARKETING_HOSTS, POS_HOST } from "./consts";
 
 // The POS is served on its OWN host (pos.timelag.co — or any non-marketing host,
@@ -57,7 +58,20 @@ export const onRequest = defineMiddleware(async (context, next) => {
     const { data } = await supabase.from("profiles").select("*").eq("id", user.id).maybeSingle();
     profile = (data as Profile) ?? null;
   }
+  // A REMOVED employee is signed out on their next request: no profile, no
+  // session. (The API also bans their auth user; this covers a live cookie.)
+  if (profile?.removed_at) {
+    await supabase.auth.signOut();
+    profile = null;
+    context.locals.user = null;
+    if (isApp) return context.redirect(isMarketing ? "/app/login" : "/login");
+  }
   context.locals.profile = profile;
+
+  // Permissions: roles are data (store_roles); one cached load per instance.
+  const { roles } = await loadRoles(createSupabaseAdminClient());
+  context.locals.roles = roles;
+  context.locals.can = (key: PermissionKey) => can(profile, roles, key);
 
   // API routes enforce their own auth (return 401); let them through.
   if (isPosApi) return go();
@@ -71,13 +85,16 @@ export const onRequest = defineMiddleware(async (context, next) => {
   }
   if (isLogin) return context.redirect(homePath);
 
-  // RBAC: reporting + pricing + settings + menu are for managers and owners only.
-  const managerOnly =
-    pathname.startsWith("/app/reports") || pathname.startsWith("/app/pricing") ||
-    pathname.startsWith("/app/settings") || pathname.startsWith("/app/menu");
-  if (managerOnly && profile && !["owner", "manager"].includes(profile.role)) {
-    const denied = pathname.startsWith("/app/pricing") ? "pricing" : pathname.startsWith("/app/settings") ? "settings" : "reports";
-    return context.redirect(`${homePath}?denied=${denied}`);
+  // RBAC: page-level gates come from the permission matrix (Settings → Roles).
+  const PAGE_GATES: [prefix: string, key: PermissionKey, denied: string][] = [
+    ["/app/reports", "reports.view", "reports"],
+    ["/app/pricing", "pricing.manage", "pricing"],
+    ["/app/settings", "settings.manage", "settings"],
+    ["/app/menu", "menu.manage", "menu"],
+  ];
+  const gate = PAGE_GATES.find(([prefix]) => pathname.startsWith(prefix));
+  if (gate && !context.locals.can(gate[1])) {
+    return context.redirect(`${homePath}?denied=${gate[2]}`);
   }
 
   return go();

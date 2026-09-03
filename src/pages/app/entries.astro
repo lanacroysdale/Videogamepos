@@ -40,7 +40,7 @@ const pageData = {
   grades: grades ?? [],
   lblTemplates: labelTemplates((settingsRow as any)?.settings),
   storeName: (settingsRow as any)?.store_name || "TimeLag",
-  isManager: ["owner", "manager"].includes(Astro.locals.profile?.role ?? ""),
+  isManager: Astro.locals.can("inventory.manage"),
 };
 ---
 

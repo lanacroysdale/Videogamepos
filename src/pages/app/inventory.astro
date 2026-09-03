@@ -98,7 +98,7 @@ const allRows = (products ?? []).map((p: any) => ({
     ],
   })),
 }));
-const isManager = ["owner", "manager"].includes(Astro.locals.profile?.role ?? "");
+const isManager = Astro.locals.can("inventory.manage");
 const items = allRows.filter((i) => !i.deletedAt);
 // "Recently deleted" (managers only): restorable for RD_DAYS, then purged above.
 const deletedItems = isManager

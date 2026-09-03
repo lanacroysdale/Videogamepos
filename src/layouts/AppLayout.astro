@@ -14,7 +14,7 @@ interface Props {
 const { title, active } = Astro.props;
 
 const profile = Astro.locals.profile;
-const isManager = !!profile && ["owner", "manager"].includes(profile.role);
+const can = Astro.locals.can;
 
 // F&B features (Menu builder + Tabs) gate on the Food & Beverage *department*
 // being enabled (Settings → Departments) — the department list is the spine.
@@ -30,7 +30,7 @@ let menuSections: { id: string; name: string }[] = [];
     const { data: ss } = await Astro.locals.supabase.from("store_settings").select("settings").eq("id", 1).maybeSingle();
     fnbEnabled = (ss?.settings as any)?.menuEnabled === true;
   }
-  if (isManager && fnbEnabled) {
+  if (can("menu.manage") && fnbEnabled) {
     const { data: secs } = await Astro.locals.supabase.from("menu_sections").select("id, name").eq("is_active", true).order("sort_order").order("name");
     menuSections = secs ?? [];
   }
@@ -50,12 +50,8 @@ const nav = [
   { key: "todos", label: "To-dos", href: "/todos", icon: "✅" },
   { key: "sops", label: "SOPs", href: "/sops", icon: "📋" },
   { key: "scan", label: "Scan", href: "/scan", icon: "📱" },
-  ...(isManager
-    ? [
-        { key: "reports", label: "Reports", href: "/reports", icon: "📊" },
-        { key: "pricing", label: "Pricing", href: "/pricing", icon: "🏷️" },
-      ]
-    : []),
+  ...(can("reports.view") ? [{ key: "reports", label: "Reports", href: "/reports", icon: "📊" }] : []),
+  ...(can("pricing.manage") ? [{ key: "pricing", label: "Pricing", href: "/pricing", icon: "🏷️" }] : []),
 ];
 ---
 
@@ -76,7 +72,7 @@ const nav = [
       <aside class="app-side">
         <a href="/dashboard" class="app-brand"><span class="app-brand-ico">🎮</span> Time&nbsp;Lag <span>POS</span></a>
         <nav class="app-nav">
-          {isManager && fnbEnabled && (
+          {can("menu.manage") && fnbEnabled && (
             <div class="nav-menu" id="nav-menu">
               <div class="nav-menu-head">
                 <a href="/menu" class:list={["nav-menu-link", { active: active === "menu" }]}>
@@ -126,13 +122,13 @@ const nav = [
         </script>
         <div class="app-user">
           <div class="who">{profile?.full_name ?? "—"}</div>
-          <div class="role">{profile?.role ?? ""}</div>
+          <div class="role">{Astro.locals.roles.find((r) => r.key === profile?.role)?.name ?? profile?.role ?? ""}</div>
           <button id="alerts-btn" class="btn btn-ghost btn-sm" type="button" style="display:none">🔔 Enable alerts</button>
           <div class="app-user-actions">
             <form method="POST" action="/logout" class="logout-form">
               <button class="btn btn-ghost btn-sm" type="submit">Log out</button>
             </form>
-            {isManager && (
+            {can("settings.manage") && (
               <a href="/settings" class:list={["btn", "btn-ghost", "btn-sm", "settings-icon", { active: active === "settings" }]} title="Settings" aria-label="Settings">⚙️</a>
             )}
           </div>

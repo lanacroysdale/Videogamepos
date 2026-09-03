@@ -14,7 +14,7 @@ export const GET: APIRoute = async ({ locals, url }) => {
   const openCount = cRes.error ? 0 : cRes.count ?? 0;
 
   let fresh: any[] = [];
-  const isManager = ["owner", "manager"].includes(locals.profile?.role ?? "");
+  const isManager = locals.can("tasks.manage");
   const since = url.searchParams.get("since");
   if (isManager && since && !cRes.error) {
     const { data: row } = await sb.from("store_settings").select("settings").eq("id", 1).maybeSingle();

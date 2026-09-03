@@ -1,11 +1,15 @@
 // Hand-written types matching the POS schema (see supabase/migrations).
-export type Role = "owner" | "manager" | "cashier";
+// Roles are DATA (public.store_roles) — owner/developer/manager/cashier are the
+// built-ins, the owner can add custom ones. See src/lib/permissions.ts.
+export type Role = string;
 
 export interface Profile {
   id: string;
   full_name: string;
   role: Role;
   pin: string | null;
+  card_code?: string | null;
+  removed_at?: string | null;
   created_at: string;
 }
 

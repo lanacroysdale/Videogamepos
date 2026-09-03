@@ -6,7 +6,7 @@ import { clockActivities } from "../../lib/clockActivities";
 const supabase = Astro.locals.supabase;
 const user = Astro.locals.user!;
 const profile = Astro.locals.profile;
-const isManager = !!profile && ["owner", "manager"].includes(profile.role);
+const isManager = Astro.locals.can("shifts.manage");
 
 const { data: roster } = await supabase.from("profiles").select("id, full_name, role").order("full_name");
 

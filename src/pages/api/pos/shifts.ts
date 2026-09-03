@@ -6,9 +6,7 @@ const json = (d: unknown, s = 200) => new Response(JSON.stringify(d), { status: 
 // Managers create/remove scheduled shifts (enforced by RLS too).
 export const POST: APIRoute = async ({ locals, request }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
-  if (!locals.profile || !["owner", "manager"].includes(locals.profile.role)) {
-    return json({ error: "Managers only" }, 403);
-  }
+  if (!locals.can("shifts.manage")) return json({ error: "You don't have permission to edit the schedule" }, 403);
   const b = await request.json().catch(() => ({}));
 
   if (b.action === "delete") {

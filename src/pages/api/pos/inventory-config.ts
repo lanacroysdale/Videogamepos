@@ -13,7 +13,7 @@ const slugify = (s: string) =>
 
 export const GET: APIRoute = async ({ locals }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
-  if (!["owner", "manager"].includes(locals.profile?.role ?? "")) return json({ error: "Managers only" }, 403);
+  if (!locals.can("inventory_config.manage")) return json({ error: "You don't have permission to edit inventory types or locations" }, 403);
   const admin = createSupabaseAdminClient();
   const [{ data: types }, { data: locations }] = await Promise.all([
     admin.from("store_inventory_types").select("*").order("sort_order").order("name"),
@@ -24,7 +24,7 @@ export const GET: APIRoute = async ({ locals }) => {
 
 export const POST: APIRoute = async ({ locals, request }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
-  if (!["owner", "manager"].includes(locals.profile?.role ?? "")) return json({ error: "Managers only" }, 403);
+  if (!locals.can("inventory_config.manage")) return json({ error: "You don't have permission to edit inventory types or locations" }, 403);
 
   const admin = createSupabaseAdminClient();
   const b = await request.json().catch(() => ({} as any));

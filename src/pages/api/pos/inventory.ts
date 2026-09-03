@@ -123,7 +123,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
       // Delete a COMMITTED entry = reverse the stock it applied. Managers
       // only, ≤24h — the RPC re-enforces both; typed-DELETE UX is client-side.
       if (!b.entryId) return json({ error: "entryId required" }, 400);
-      if (!["owner", "manager"].includes(locals.profile?.role ?? "")) return json({ error: "Managers only." }, 403);
+      if (!locals.can("inventory.manage")) return json({ error: "You don't have permission for this inventory action." }, 403);
       const { data: reversed, error } = await sb.rpc("revert_entry", { p_entry_id: b.entryId });
       if (error) {
         const missing = (error as any).code === "PGRST202" || /could not find the function/i.test(error.message);
@@ -132,7 +132,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
       return json({ ok: true, reversed: Number(reversed ?? 0) });
     }
     case "addSupplierLink": {
-      if (!["owner", "manager"].includes(locals.profile?.role ?? "")) return json({ error: "Managers only." }, 403);
+      if (!locals.can("inventory.manage")) return json({ error: "You don't have permission for this inventory action." }, 403);
       if (!b.productId || !String(b.label ?? "").trim()) return json({ error: "Product and label required" }, 400);
       const url = b.url ? String(b.url).trim().slice(0, 500) : null;
       if (url && !/^https?:\/\//i.test(url)) return json({ error: "Links must start with http(s)://" }, 400);
@@ -143,7 +143,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
       return json({ ok: true, link: data });
     }
     case "deleteSupplierLink": {
-      if (!["owner", "manager"].includes(locals.profile?.role ?? "")) return json({ error: "Managers only." }, 403);
+      if (!locals.can("inventory.manage")) return json({ error: "You don't have permission for this inventory action." }, 403);
       if (!b.id) return json({ error: "id required" }, 400);
       const { error } = await sb.from("product_suppliers").delete().eq("id", b.id);
       if (error) return json({ error: error.message }, 500);
@@ -362,7 +362,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
     case "bulkDelete": {
       // Soft-delete: stamp deleted_at → items move to "Recently deleted" for
       // 7 days (restorable), then the inventory page purges them permanently.
-      if (!["owner", "manager"].includes(locals.profile?.role ?? "")) return json({ error: "Managers only" }, 403);
+      if (!locals.can("inventory.manage")) return json({ error: "You don't have permission for this inventory action." }, 403);
       const ids = Array.isArray(b.productIds) ? b.productIds.filter(Boolean) : [];
       if (!ids.length) return json({ error: "No items selected" }, 400);
       const { error } = await sb.from("products").update({ deleted_at: new Date().toISOString() }).in("id", ids);
@@ -374,7 +374,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
       return json({ ok: true, deleted: ids.length });
     }
     case "bulkRestore": {
-      if (!["owner", "manager"].includes(locals.profile?.role ?? "")) return json({ error: "Managers only" }, 403);
+      if (!locals.can("inventory.manage")) return json({ error: "You don't have permission for this inventory action." }, 403);
       const ids = Array.isArray(b.productIds) ? b.productIds.filter(Boolean) : [];
       if (!ids.length) return json({ error: "No items selected" }, 400);
       // Comes back unpublished (variants stayed online_visible=false) — staff

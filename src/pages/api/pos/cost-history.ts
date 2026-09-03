@@ -10,7 +10,7 @@ const json = (d: unknown, s = 200) => new Response(JSON.stringify(d), { status: 
 // caller's (RLS would otherwise scope a cashier to their own).
 export const POST: APIRoute = async ({ locals, request }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
-  if (!["owner", "manager"].includes(locals.profile?.role ?? "")) return json({ error: "Managers only" }, 403);
+  if (!locals.can("inventory.manage")) return json({ error: "You don't have permission to view cost history" }, 403);
 
   const b = await request.json().catch(() => ({} as any));
   if (!b.productId) return json({ error: "productId required" }, 400);

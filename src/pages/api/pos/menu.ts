@@ -13,7 +13,7 @@ const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n
 // save so an item carries its sizes + attached modifier groups in one call.
 export const POST: APIRoute = async ({ locals, request }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
-  if (!["owner", "manager"].includes(locals.profile?.role ?? "")) return json({ error: "Managers only" }, 403);
+  if (!locals.can("menu.manage")) return json({ error: "You don't have permission to edit the menu" }, 403);
 
   const admin = createSupabaseAdminClient();
   const b = await request.json().catch(() => ({} as any));

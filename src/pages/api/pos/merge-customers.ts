@@ -7,7 +7,7 @@ const json = (d: unknown, s = 200) => new Response(JSON.stringify(d), { status: 
 // The SQL function also enforces manager-only.
 export const POST: APIRoute = async ({ locals, request }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
-  if (!locals.profile || !["owner", "manager"].includes(locals.profile.role)) return json({ error: "Managers only" }, 403);
+  if (!locals.can("customers.merge")) return json({ error: "You don't have permission to merge customers" }, 403);
   const b = await request.json().catch(() => ({}));
   if (!b.src || !b.dst) return json({ error: "Pick two customers to merge" }, 400);
   if (b.src === b.dst) return json({ error: "Pick two different customers" }, 400);

@@ -4,9 +4,9 @@ import AppLayout from "../../layouts/AppLayout.astro";
 import { createSupabaseAdminClient } from "../../lib/supabase";
 import { fmt } from "../../lib/money";
 
-// Manager-gated (middleware also enforces it).
+// Permission-gated (middleware also enforces it).
 const profile = Astro.locals.profile;
-if (!profile || !["owner", "manager"].includes(profile.role)) return Astro.redirect("/dashboard");
+if (!profile || !Astro.locals.can("menu.manage")) return Astro.redirect("/dashboard");
 const admin = createSupabaseAdminClient();
 
 let needsMigration = false;
