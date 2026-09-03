@@ -192,11 +192,12 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
         </div>
       </details>
       <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;border-top:1px solid var(--border,#333);padding-top:0.7rem;">
-        <button id="lp-browser" type="button" style="font:inherit;font-weight:700;padding:0.45rem 0.9rem;background:var(--cyan,#2ce6e0);color:#04222a;border:1px solid var(--cyan,#2ce6e0);cursor:pointer;">🖨 Print</button>
-        <button id="lp-print" type="button" title="Build a PDF with exactly label-sized pages — prints identically from any device or viewer at 100%" style="font:inherit;padding:0.45rem 0.7rem;background:transparent;color:var(--text,#eee);border:1px solid var(--border-strong,#444);cursor:pointer;">📄 PDF</button>
-        <button id="lp-test" type="button" title="Print a single label to check printer alignment" style="font:inherit;padding:0.45rem 0.7rem;background:transparent;color:var(--muted,#999);border:1px solid var(--border,#333);cursor:pointer;">1 test label</button>
+        <button id="lp-browser" type="button" title="Opens a print-ready PDF — the reliable way to print labels from a browser" style="font:inherit;font-weight:700;padding:0.45rem 0.9rem;background:var(--cyan,#2ce6e0);color:#04222a;border:1px solid var(--cyan,#2ce6e0);cursor:pointer;">🖨 Print</button>
+        <button id="lp-print" type="button" title="Print straight from this tab without the PDF step — works in Chrome; Safari's print engine mangles it" style="font:inherit;padding:0.45rem 0.7rem;background:transparent;color:var(--muted,#999);border:1px solid var(--border,#333);cursor:pointer;">⚡ Quick print (Chrome)</button>
+        <button id="lp-test" type="button" title="One-label PDF to check printer alignment" style="font:inherit;padding:0.45rem 0.7rem;background:transparent;color:var(--muted,#999);border:1px solid var(--border,#333);cursor:pointer;">1 test label</button>
         <button id="lp-cancel" type="button" style="font:inherit;padding:0.45rem 0.7rem;background:transparent;color:var(--muted,#999);border:1px solid var(--border,#333);cursor:pointer;margin-left:auto;">Cancel</button>
       </div>
+      <p style="margin:0;color:var(--muted-2,#888);font-size:0.72rem;">Print opens a ready-made PDF in a new tab — press <b>⌘P</b> there and print at 100%. Every page is exactly one label; what you see is what prints.</p>
     </div>`;
 
   const close = () => overlay.remove();
@@ -282,7 +283,7 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
     const orig = btn.textContent;
     btn.disabled = true; btn.textContent = "Rendering…";
     try {
-      const blob = await labelsToPdf(jobs, chosenTpl(), { rotateDeg: rotDeg() });
+      const blob = await labelsToPdf(jobs, chosenTpl(), { rotateDeg: rotDeg(), ...tune() });
       const url = URL.createObjectURL(blob);
       const w = window.open(url, "_blank");
       if (!w) { const a = document.createElement("a"); a.href = url; a.download = "labels.pdf"; a.click(); }
@@ -291,17 +292,20 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
     } catch (e: any) { alert("Couldn't build the PDF: " + e.message); return false; }
     finally { btn.disabled = false; btn.textContent = orig; }
   };
-  overlay.querySelector("#lp-print")!.addEventListener("click", async (ev) => {
+  // PRIMARY: the PDF path — the only browser label-printing approach that is
+  // deterministic across engines (what Shopify/ShipStation-class tools do).
+  // Safari's HTML print pagination mangled every layout we fed it.
+  overlay.querySelector("#lp-browser")!.addEventListener("click", async (ev) => {
     const jobs = gatherJobs();
     if (!jobs) return;
     if (await openPdf(jobs, ev.currentTarget as HTMLButtonElement)) close();
   });
-  // Test label goes through the SAME path as the real print so alignment
-  // tuning is verified on the pipeline it applies to. Dialog stays open.
-  overlay.querySelector("#lp-test")!.addEventListener("click", () => {
-    printLabels([{ item: lines[0].item, copies: 1 }], chosenTpl(), { rotateDeg: rotDeg(), ...tune() });
+  // Test label: same PDF pipeline, one label, dialog stays open for tuning.
+  overlay.querySelector("#lp-test")!.addEventListener("click", (ev) => {
+    openPdf([{ item: lines[0].item, copies: 1 }], ev.currentTarget as HTMLButtonElement);
   });
-  overlay.querySelector("#lp-browser")!.addEventListener("click", () => {
+  // Chrome-only convenience: print straight from the tab, no PDF step.
+  overlay.querySelector("#lp-print")!.addEventListener("click", () => {
     const jobs = gatherJobs();
     if (!jobs) return;
     const opts = { rotateDeg: rotDeg(), ...tune() };
