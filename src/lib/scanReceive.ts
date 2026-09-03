@@ -3,17 +3,19 @@
 // any POS page can adopt it with two calls — initScanReceiver() on load and
 // openPairDialog() from a 📱 button. Pairing survives page navigation via
 // sessionStorage; scans land in the page's active input (or its default
-// target) exactly like a wedge scanner: value + input event + Enter.
-import { hostPairing, resumeHost, type HostSession, type ScanMsg } from "./scanChannel";
+// target) exactly like a wedge scanner: value + input event + Enter. Pages
+// that can look a code up pass `describe` so the phone gets told what it hit.
+import { hostPairing, resumeHost, type HostSession, type LinkStatus, type ScanMsg } from "./scanChannel";
 
 export type ReceiverOpts = {
-  target: () => HTMLInputElement | null; // page's default scan input
+  target: () => HTMLInputElement | null;          // page's default scan input
+  describe?: (code: string) => string | null;      // "Mario Kart 64 · CIB" / null = no match
+  page?: string;                                   // shown on the phone ("Checkout")
 };
 
 let session: HostSession | null = null;
 let opts: ReceiverOpts | null = null;
-
-const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] as string));
+let link: LinkStatus = "connecting";
 
 function route(m: ScanMsg) {
   const active = document.activeElement as HTMLElement | null;
@@ -22,33 +24,52 @@ function route(m: ScanMsg) {
     input = active as HTMLInputElement;
   }
   if (!input || input.readOnly || input.disabled) input = opts?.target() ?? null;
-  if (!input) return;
-  input.focus();
-  input.value = m.code;
-  input.dispatchEvent(new Event("input", { bubbles: true }));
-  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-  pulseChip();
+  // Look the code up BEFORE dispatching: pages clear the field / mutate their
+  // list on an exact hit, and the phone wants to know what that hit was.
+  let hit: string | null | undefined;
+  try { hit = opts?.describe ? opts.describe(m.code) : undefined; } catch { hit = undefined; }
+  if (input) {
+    input.focus();
+    input.value = m.code;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  }
+  // `page` is only set when a lookup actually ran — its absence tells the
+  // phone "delivered, but this page can't check it" rather than "no match".
+  session?.ack({ at: m.at, code: m.code, hit: hit ?? null, page: opts?.describe ? (opts.page || document.title) : undefined });
+  pulseChip(hit === null ? "miss" : "hit");
 }
 
 // ---------- Floating chip ----------
+const BASE_SHADOW = "0 8px 24px rgba(0,0,0,.45)";
 function chip(): HTMLElement {
   let el = document.getElementById("scanrx-chip");
   if (el) return el;
   el = document.createElement("div");
   el.id = "scanrx-chip";
-  el.style.cssText = "position:fixed;right:1rem;bottom:1rem;z-index:1500;display:flex;align-items:center;gap:0.5rem;padding:0.45rem 0.8rem;background:var(--panel,#111);border:1px solid var(--green,#80ff72);color:var(--text,#eee);font-size:0.82rem;font-weight:600;box-shadow:0 8px 24px rgba(0,0,0,.45);transition:box-shadow .15s ease;";
-  el.innerHTML = `📱 Phone scanner connected <button type="button" title="Disconnect the phone" style="background:none;border:none;color:var(--magenta,#ff49d0);cursor:pointer;font:inherit;padding:0 0 0 0.2rem;">✕</button>`;
+  el.style.cssText = "position:fixed;right:1rem;bottom:1rem;z-index:1500;display:flex;align-items:center;gap:0.5rem;padding:0.45rem 0.8rem;background:var(--panel,#111);border:1px solid var(--green,#80ff72);color:var(--text,#eee);font-size:0.82rem;font-weight:600;box-shadow:" + BASE_SHADOW + ";transition:box-shadow .15s ease,border-color .2s ease;";
+  el.innerHTML = `<span id="scanrx-chip-text">📱 Phone scanner connected</span> <button type="button" title="Disconnect the phone" style="background:none;border:none;color:var(--magenta,#ff49d0);cursor:pointer;font:inherit;padding:0 0 0 0.2rem;">✕</button>`;
   el.querySelector("button")!.addEventListener("click", () => stopReceiver(true));
   document.body.appendChild(el);
+  paintChip();
   return el;
 }
-function pulseChip() {
+function paintChip() {
+  const el = document.getElementById("scanrx-chip");
+  const t = document.getElementById("scanrx-chip-text");
+  if (!el || !t) return;
+  if (link === "live") { el.style.borderColor = "var(--green,#80ff72)"; t.textContent = "📱 Phone scanner connected"; }
+  else if (link === "error") { el.style.borderColor = "var(--magenta,#ff49d0)"; t.textContent = "📱 Phone link lost — retrying…"; }
+  else { el.style.borderColor = "var(--muted-2,#888)"; t.textContent = "📱 Phone link reconnecting…"; }
+}
+function pulseChip(kind: "hit" | "miss" = "hit") {
   const el = document.getElementById("scanrx-chip");
   if (!el) return;
-  el.style.boxShadow = "0 0 0 3px var(--green, #80ff72)";
-  setTimeout(() => (el.style.boxShadow = "0 8px 24px rgba(0,0,0,.45)"), 220);
+  el.style.boxShadow = `0 0 0 3px var(${kind === "miss" ? "--magenta, #ff49d0" : "--green, #80ff72"})`;
+  setTimeout(() => (el.style.boxShadow = BASE_SHADOW), 220);
 }
 function removeChip() { document.getElementById("scanrx-chip")?.remove(); }
+function onStatus(s: LinkStatus) { link = s; paintChip(); }
 
 export function stopReceiver(sayBye = false) {
   session?.stop(sayBye);
@@ -91,6 +112,10 @@ export function openPairDialog(o: ReceiverOpts): void {
     },
     onScan: route,
     onGone: () => stopReceiver(false),
+    onStatus: (s) => {
+      onStatus(s);
+      if (s === "error" && !paired) { const st = overlay.querySelector("#scanrx-status"); if (st) st.textContent = "Can't reach the realtime service — check this station's connection."; }
+    },
   });
   const cancelPending = () => { if (!paired) pending.stop(); };
   overlay.querySelector("#scanrx-cancel")!.addEventListener("click", () => { close(); cancelPending(); });
@@ -103,6 +128,6 @@ export function initScanReceiver(o: ReceiverOpts): void {
   let token = "";
   try { token = sessionStorage.getItem("tl-scan-host") || ""; } catch { /* private mode */ }
   if (!token) return;
-  session = resumeHost(token, { onScan: route, onGone: () => stopReceiver(false) });
+  session = resumeHost(token, { onScan: route, onGone: () => stopReceiver(false), onStatus });
   chip();
 }
