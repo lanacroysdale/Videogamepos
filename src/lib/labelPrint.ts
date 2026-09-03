@@ -52,13 +52,36 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: P
   // web font and logo as data: URLs (same treatment the PDF path uses).
   const styleTag = await fontStyleTag(tpl);
   const logoData = tpl.logoUrl ? await inlineLogo(tpl.logoUrl) : "";
+  // Rasterize to PNG before printing: Safari's print pass can drop SVG-format
+  // images entirely (blank pages), but a plain bitmap always paints.
+  const PXMM = 12; // ~300dpi — crisp on 203dpi thermal heads
+  const svgToPng = async (svg: string): Promise<string> => {
+    const img = new Image();
+    await new Promise<void>((res, rej) => {
+      img.onload = () => res();
+      img.onerror = () => rej(new Error("Label failed to render"));
+      img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+    });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(pw * PXMM);
+    canvas.height = Math.round(ph * PXMM);
+    const ctx = canvas.getContext("2d")!;
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/png");
+  };
+  // Alignment math in plain mm — no grid/object-fit/percent CSS for the print
+  // engine to resolve: the img gets explicit size and margins.
+  const imgW = (pw * scale) / 100, imgH = (ph * scale) / 100;
+  const offX = (pw - imgW) / 2 + nx, offY = (ph - imgH) / 2 + ny;
   const pages: string[] = [];
   for (const j of real) {
     let svg = renderLabelSvg(tpl, j.item);
     if (styleTag) svg = svg.replace(/(<svg[^>]*>)/, `$1${styleTag}`);
     if (tpl.logoUrl && logoData) svg = svg.split(escAttr(tpl.logoUrl)).join(logoData).split(tpl.logoUrl).join(logoData);
     svg = rotateSvg(svg);
-    const src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+    const src = await svgToPng(svg);
     for (let i = 0; i < Math.min(500, j.copies); i++) {
       pages.push(`<div class="label-page"><img src="${src}" alt=""></div>`);
     }
@@ -72,12 +95,12 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: P
     @page { size: ${pw}mm ${ph}mm; margin: 0; }
     html, body { margin: 0; padding: 0; width: ${pw}mm; background: #fff; }
     body { line-height: 0; font-size: 0; }
-    /* Composed 1mm shy of the page and contain-fitted: if the driver's page
-       box is a hair smaller than the paper (hidden margins, mm rounding),
-       the label scales down a percent instead of spilling to a second page. */
-    .label-page { width: ${pw}mm; height: calc(${ph}mm - 1mm); overflow: hidden; display: grid; place-items: center; break-after: page; page-break-after: always; break-inside: avoid; page-break-inside: avoid; }
+    /* Composed 1mm shy of the page: if the driver's page box is a hair
+       smaller than the paper (hidden margins, mm rounding), the label clips
+       a fraction instead of spilling to a second page. */
+    .label-page { width: ${pw}mm; height: calc(${ph}mm - 1mm); overflow: hidden; break-after: page; page-break-after: always; break-inside: avoid; page-break-inside: avoid; }
     .label-page:last-child { break-after: auto; page-break-after: auto; }
-    .label-page img { display: block; width: ${scale}%; height: ${scale}%; object-fit: contain; position: relative; left: ${nx}mm; top: ${ny}mm; }
+    .label-page img { display: block; width: ${imgW.toFixed(2)}mm; height: ${imgH.toFixed(2)}mm; margin: ${offY.toFixed(2)}mm 0 0 ${offX.toFixed(2)}mm; }
   </style></head><body>${pages.join("")}</body></html>`;
 
   document.getElementById("label-print-frame")?.remove();
