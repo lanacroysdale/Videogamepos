@@ -495,6 +495,7 @@ const posData = {
   import { resolveComp, compAbbrev } from "../../lib/conditionDisplay";
   import { openPrintDialog } from "../../lib/labelPrint";
   import { initScanReceiver, openPairDialog } from "../../lib/scanReceive";
+  import { barcodeEq } from "../../lib/gtin";
 
   const data = JSON.parse(document.getElementById("pos-data")!.textContent!);
   let items: any[] = data.items;
@@ -697,7 +698,7 @@ const posData = {
         (v.sku && v.sku.toUpperCase().includes(Q)) ||
         (v.internalCode && v.internalCode === Q) ||
         (v.labelCode && v.labelCode === rawQ) ||
-        (v.barcodes || []).some((b: any) => b.barcode === rawQ)));
+        (v.barcodes || []).some((b: any) => barcodeEq(b.barcode, rawQ))));
       if (codeHits.length) return codeHits.sort((a, b) => a.title.localeCompare(b.title));
     }
     let list = items.filter((p) => {
@@ -1439,7 +1440,7 @@ const posData = {
     if (q.length < 2) { box.hidden = true; return; }
     const flat = items.flatMap((p) => p.variants.map((v: any) => ({ p, v })));
     const hit = flat.find(({ v }: any) =>
-      (v.barcodes || []).some((b: any) => b.barcode === q) || (v.labelCode && v.labelCode === q) || (v.internalCode && v.internalCode === q.toUpperCase()));
+      (v.barcodes || []).some((b: any) => barcodeEq(b.barcode, q)) || (v.labelCode && v.labelCode === q) || (v.internalCode && v.internalCode === q.toUpperCase()));
     if (hit) { entSearch.value = ""; box.hidden = true; stageVariant(hit.p, hit.v); return; }
     // A unique exact-SKU hit stages instantly too (wedge scanners send SKUs).
     const skuExact = flat.filter(({ v }: any) => v.sku && v.sku.toUpperCase() === q.toUpperCase());
