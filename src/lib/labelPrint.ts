@@ -53,8 +53,9 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: P
   const styleTag = await fontStyleTag(tpl);
   const logoData = tpl.logoUrl ? await inlineLogo(tpl.logoUrl) : "";
   // Rasterize to PNG before printing: Safari's print pass can drop SVG-format
-  // images entirely (blank pages), but a plain bitmap always paints.
-  const PXMM = 12; // ~300dpi — crisp on 203dpi thermal heads
+  // images entirely (blank pages), but a plain bitmap always paints. Snap to
+  // pure black/white — thermal heads are binary, and dithered grays print fuzzy.
+  const PXMM = 24; // ~610dpi raster
   const svgToPng = async (svg: string): Promise<string> => {
     const img = new Image();
     await new Promise<void>((res, rej) => {
@@ -69,6 +70,13 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: P
     ctx.fillStyle = "#fff";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const im = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const d = im.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const v = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114 >= 128 ? 255 : 0;
+      d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
+    }
+    ctx.putImageData(im, 0, 0);
     return canvas.toDataURL("image/png");
   };
   // Alignment math in plain mm — no grid/object-fit/percent CSS for the print

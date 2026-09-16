@@ -11,7 +11,7 @@ import { renderLabelSvg, ensureLabelFont, LABEL_FONTS, type LabelTemplate, type 
 
 export type PdfJob = { item: LabelItem; copies: number };
 
-const PX_PER_MM = 8; // 203.2 dpi — native for the MUNBYN-class thermal heads
+const PX_PER_MM = 24; // ~610 dpi raster — sharp even after the 203/300dpi head resamples
 const PT_PER_MM = 72 / 25.4;
 
 const b64 = (buf: ArrayBuffer) => {
@@ -72,7 +72,7 @@ export const escAttr = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp
 
 export type PdfTune = { scalePct?: number; nudgeXMm?: number; nudgeYMm?: number };
 
-async function rasterize(svg: string, wMm: number, hMm: number, deg: 0 | 90 | 180 | 270, tune?: PdfTune): Promise<{ jpeg: Uint8Array; pw: number; ph: number }> {
+async function rasterize(svg: string, wMm: number, hMm: number, deg: 0 | 90 | 180 | 270, tune?: PdfTune): Promise<{ data: Uint8Array; pw: number; ph: number }> {
   const img = new Image();
   await new Promise<void>((res, rej) => {
     img.onload = () => res();
@@ -105,15 +105,25 @@ async function rasterize(svg: string, wMm: number, hMm: number, deg: 0 | 90 | 18
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   const dw = rotated.width * s, dh = rotated.height * s;
   ctx.drawImage(rotated, (canvas.width - dw) / 2 + nx, (canvas.height - dh) / 2 + ny, dw, dh);
-  const dataUrl = canvas.toDataURL("image/jpeg", 0.93);
-  const bin = atob(dataUrl.slice(dataUrl.indexOf(",") + 1));
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return { jpeg: bytes, pw: canvas.width, ph: canvas.height };
+  // Thermal heads are binary: gray pixels (JPEG ringing, anti-aliasing) get
+  // dithered by the driver into fuzz. Snap every pixel to pure black/white
+  // and pack 1 bit per pixel (DeviceGray, MSB first, byte-aligned rows) —
+  // LOSSLESS, razor-sharp bars and text, and smaller than JPEG was.
+  const px = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  const rowBytes = Math.ceil(canvas.width / 8);
+  const data = new Uint8Array(rowBytes * canvas.height); // 0 = black, 1 = white
+  for (let y = 0; y < canvas.height; y++) {
+    for (let x = 0; x < canvas.width; x++) {
+      const i = (y * canvas.width + x) * 4;
+      const lum = px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114;
+      if (lum >= 128) data[y * rowBytes + (x >> 3)] |= 0x80 >> (x & 7);
+    }
+  }
+  return { data, pw: canvas.width, ph: canvas.height };
 }
 
 // ---- minimal PDF writer: one image XObject per unique label, one page per copy ----
-function buildPdf(images: { jpeg: Uint8Array; pw: number; ph: number }[], pageOfCopy: number[], wPt: number, hPt: number): Blob {
+function buildPdf(images: { data: Uint8Array; pw: number; ph: number }[], pageOfCopy: number[], wPt: number, hPt: number): Blob {
   const enc = new TextEncoder();
   const parts: (Uint8Array | string)[] = [];
   let offset = 0;
@@ -136,8 +146,8 @@ function buildPdf(images: { jpeg: Uint8Array; pw: number; ph: number }[], pageOf
   obj(2, `<< /Type /Pages /Kids [${pageOfCopy.map((_, i) => `${pageObj(i)} 0 R`).join(" ")}] /Count ${pageOfCopy.length} >>`);
   images.forEach((im, i) => {
     offsets[imgObj(i)] = offset;
-    push(`${imgObj(i)} 0 obj\n<< /Type /XObject /Subtype /Image /Width ${im.pw} /Height ${im.ph} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${im.jpeg.length} >>\nstream\n`);
-    push(im.jpeg);
+    push(`${imgObj(i)} 0 obj\n<< /Type /XObject /Subtype /Image /Width ${im.pw} /Height ${im.ph} /ColorSpace /DeviceGray /BitsPerComponent 1 /Length ${im.data.length} >>\nstream\n`);
+    push(im.data);
     push("\nendstream\nendobj\n");
   });
   images.forEach((_, i) => {
@@ -167,7 +177,7 @@ export async function labelsToPdf(jobs: PdfJob[], tpl: LabelTemplate, opts?: { r
   const styleTag = await fontStyleTag(tpl);
   const logoData = tpl.logoUrl ? await inlineLogo(tpl.logoUrl) : "";
 
-  const images: { jpeg: Uint8Array; pw: number; ph: number }[] = [];
+  const images: { data: Uint8Array; pw: number; ph: number }[] = [];
   const pageOfCopy: number[] = [];
   for (const j of real) {
     let svg = renderLabelSvg(tpl, j.item);
