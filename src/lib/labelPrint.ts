@@ -6,7 +6,7 @@
 // optional "all copies" toggle + a 1-label test print. Self-contained styling
 // (CSS vars from app.css only), so it drops into any POS page.
 import { renderLabelSvg, ensureLabelFont, DEFAULT_TEMPLATE, type LabelTemplate, type LabelItem } from "./labels";
-import { labelsToPdf, fontStyleTag, inlineLogo, escAttr } from "./labelPdf";
+import { labelsToPdf, fontStyleTag, inlineLogo, escAttr, snapToInchGrid } from "./labelPdf";
 
 export type PrintJob = { item: LabelItem; copies: number };
 
@@ -27,8 +27,10 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: P
   // the dialog remembers the answer per station.
   const deg = ([0, 90, 180, 270] as const).includes(opts?.rotateDeg as any) ? (opts!.rotateDeg as RotateDeg) : 0;
   const sideways = deg === 90 || deg === 270;
-  const pw = sideways ? tpl.heightMm : tpl.widthMm;  // page width
-  const ph = sideways ? tpl.widthMm : tpl.heightMm;  // page height
+  // Page = the driver's inch-defined paper exactly (see snapToInchGrid in
+  // labelPdf) so nothing gets shrink-to-fitted; the label centers inside.
+  const pw = snapToInchGrid(sideways ? tpl.heightMm : tpl.widthMm);  // page width
+  const ph = snapToInchGrid(sideways ? tpl.widthMm : tpl.heightMm);  // page height
   const scale = Math.min(100, Math.max(60, Math.round(Number(opts?.scalePct) || 100)));
   const nx = Math.min(30, Math.max(-30, Number(opts?.nudgeXMm) || 0));
   const ny = Math.min(30, Math.max(-30, Number(opts?.nudgeYMm) || 0));
@@ -58,6 +60,8 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: P
   // fuzzy. Raster at the HEAD's native resolution: one pixel per printer dot
   // beats oversampling, which the driver averages back into gray edges.
   const PXMM = ([203, 300, 600].includes(Number(opts?.dpi)) ? Number(opts!.dpi) : 203) / 25.4;
+  const lw = sideways ? tpl.heightMm : tpl.widthMm;  // label (image) width on the page
+  const lh = sideways ? tpl.widthMm : tpl.heightMm;
   const svgToPng = async (svg: string): Promise<string> => {
     const img = new Image();
     await new Promise<void>((res, rej) => {
@@ -66,8 +70,8 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: P
       img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
     });
     const canvas = document.createElement("canvas");
-    canvas.width = Math.round(pw * PXMM);
-    canvas.height = Math.round(ph * PXMM);
+    canvas.width = Math.round(lw * PXMM);
+    canvas.height = Math.round(lh * PXMM);
     const ctx = canvas.getContext("2d")!;
     ctx.fillStyle = "#fff";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -82,8 +86,9 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: P
     return canvas.toDataURL("image/png");
   };
   // Alignment math in plain mm — no grid/object-fit/percent CSS for the print
-  // engine to resolve: the img gets explicit size and margins.
-  const imgW = (pw * scale) / 100, imgH = (ph * scale) / 100;
+  // engine to resolve: the img gets explicit size and margins. The label
+  // keeps its true size, centered on the (inch-exact) page.
+  const imgW = (lw * scale) / 100, imgH = (lh * scale) / 100;
   const offX = (pw - imgW) / 2 + nx, offY = (ph - imgH) / 2 + ny;
   const pages: string[] = [];
   for (const j of real) {
