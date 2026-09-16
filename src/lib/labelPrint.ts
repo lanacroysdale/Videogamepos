@@ -57,9 +57,10 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: P
   // Rasterize to PNG before printing: Safari's print pass can drop SVG-format
   // images entirely (blank pages), but a plain bitmap always paints. Snap to
   // pure black/white — thermal heads are binary, and dithered grays print
-  // fuzzy. Raster at the HEAD's native resolution: one pixel per printer dot
-  // beats oversampling, which the driver averages back into gray edges.
-  const PXMM = ([203, 300, 600].includes(Number(opts?.dpi)) ? Number(opts!.dpi) : 203) / 25.4;
+  // fuzzy. Raster at the HEAD's native dot pitch: thermal "203dpi" is really
+  // 8 dots/mm (203.2) — one pixel per dot, or bar edges get smoothed to gray.
+  const dpiOpt = Number(opts?.dpi);
+  const PXMM = dpiOpt === 600 ? 24 : dpiOpt === 300 ? 300 / 25.4 : 8;
   const lw = sideways ? tpl.heightMm : tpl.widthMm;  // label (image) width on the page
   const lh = sideways ? tpl.widthMm : tpl.heightMm;
   const svgToPng = async (svg: string): Promise<string> => {

@@ -13,8 +13,13 @@ export type PdfJob = { item: LabelItem; copies: number };
 
 const PT_PER_MM = 72 / 25.4;
 // One raster pixel per printer dot: oversampling gets averaged back into gray
-// edges by the driver, which its halftoning then speckles. 203dpi default.
-const pxPerMm = (dpi?: number) => ([203, 300, 600].includes(Number(dpi)) ? Number(dpi) : 203) / 25.4;
+// edges by the driver, which its halftoning then speckles. Thermal heads are
+// metric — "203 dpi" is really 8 dots/mm (203.2), "300" is 11.81/mm — so use
+// the exact dot pitch or every bar edge lands between dots and gets smoothed.
+const pxPerMm = (dpi?: number) => {
+  const d = Number(dpi);
+  return d === 600 ? 24 : d === 300 ? 300 / 25.4 : 8; // 203-class default
+};
 
 const b64 = (buf: ArrayBuffer) => {
   const bytes = new Uint8Array(buf);
@@ -159,7 +164,7 @@ function buildPdf(images: { data: Uint8Array; pw: number; ph: number }[], pageOf
   obj(2, `<< /Type /Pages /Kids [${pageOfCopy.map((_, i) => `${pageObj(i)} 0 R`).join(" ")}] /Count ${pageOfCopy.length} >>`);
   images.forEach((im, i) => {
     offsets[imgObj(i)] = offset;
-    push(`${imgObj(i)} 0 obj\n<< /Type /XObject /Subtype /Image /Width ${im.pw} /Height ${im.ph} /ColorSpace /DeviceGray /BitsPerComponent 1 /Length ${im.data.length} >>\nstream\n`);
+    push(`${imgObj(i)} 0 obj\n<< /Type /XObject /Subtype /Image /Width ${im.pw} /Height ${im.ph} /ColorSpace /DeviceGray /BitsPerComponent 1 /Interpolate false /Length ${im.data.length} >>\nstream\n`);
     push(im.data);
     push("\nendstream\nendobj\n");
   });
