@@ -74,6 +74,16 @@ export const escAttr = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp
 
 export type PdfTune = { scalePct?: number; nudgeXMm?: number; nudgeYMm?: number; dpi?: number };
 
+// Label stock is sold in INCHES but templates store whole millimeters: a
+// "57×32mm" template on 2.25×1.25″ (57.15×31.75mm) driver paper is off by a
+// hair, which makes the print pipeline shrink-to-fit — and rescaling a 1-bit
+// bitmap even 1% smears crisp bars into fuzz. Snap page dimensions to the
+// nearest ⅛-inch when within 0.6mm so page == paper exactly, no scaling ever.
+export const snapToInchGrid = (mm: number) => {
+  const q = Math.round(mm / 3.175) * 3.175;
+  return q > 0 && Math.abs(q - mm) <= 0.6 ? q : mm;
+};
+
 async function rasterize(svg: string, wMm: number, hMm: number, deg: 0 | 90 | 180 | 270, tune?: PdfTune): Promise<{ data: Uint8Array; pw: number; ph: number }> {
   const PX_PER_MM = pxPerMm(tune?.dpi);
   const img = new Image();
@@ -84,7 +94,7 @@ async function rasterize(svg: string, wMm: number, hMm: number, deg: 0 | 90 | 18
   });
   const w = Math.round(wMm * PX_PER_MM), h = Math.round(hMm * PX_PER_MM);
   const sideways = deg === 90 || deg === 270;
-  // Rotate onto a page-size scratch canvas first…
+  // Rotate onto a label-size scratch canvas first…
   const rotated = document.createElement("canvas");
   rotated.width = sideways ? h : w;
   rotated.height = sideways ? w : h;
@@ -95,14 +105,14 @@ async function rasterize(svg: string, wMm: number, hMm: number, deg: 0 | 90 | 18
   else if (deg === 180) { rctx.translate(rotated.width, rotated.height); rctx.rotate(Math.PI); }
   else if (deg === 270) { rctx.translate(0, rotated.height); rctx.rotate(-Math.PI / 2); }
   rctx.drawImage(img, 0, 0, w, h);
-  // …then apply the per-station physical alignment (size % + mm nudges) in
-  // plain page coordinates.
+  // …then center it on the inch-exact PAGE canvas, applying the per-station
+  // physical alignment (size % + mm nudges) in plain page coordinates.
   const s = Math.min(100, Math.max(60, Math.round(Number(tune?.scalePct) || 100))) / 100;
   const nx = Math.min(30, Math.max(-30, Number(tune?.nudgeXMm) || 0)) * PX_PER_MM;
   const ny = Math.min(30, Math.max(-30, Number(tune?.nudgeYMm) || 0)) * PX_PER_MM;
   const canvas = document.createElement("canvas");
-  canvas.width = rotated.width;
-  canvas.height = rotated.height;
+  canvas.width = Math.round(snapToInchGrid(sideways ? hMm : wMm) * PX_PER_MM);
+  canvas.height = Math.round(snapToInchGrid(sideways ? wMm : hMm) * PX_PER_MM);
   const ctx = canvas.getContext("2d")!;
   ctx.fillStyle = "#fff";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -190,7 +200,8 @@ export async function labelsToPdf(jobs: PdfJob[], tpl: LabelTemplate, opts?: { r
     const idx = images.push(im) - 1;
     for (let c = 0; c < Math.min(500, j.copies); c++) pageOfCopy.push(idx);
   }
-  const wPt = (sideways ? tpl.heightMm : tpl.widthMm) * PT_PER_MM;
-  const hPt = (sideways ? tpl.widthMm : tpl.heightMm) * PT_PER_MM;
+  // Page = the driver's inch-defined paper, exactly (see snapToInchGrid).
+  const wPt = snapToInchGrid(sideways ? tpl.heightMm : tpl.widthMm) * PT_PER_MM;
+  const hPt = snapToInchGrid(sideways ? tpl.widthMm : tpl.heightMm) * PT_PER_MM;
   return buildPdf(images, pageOfCopy, wPt, hPt);
 }
