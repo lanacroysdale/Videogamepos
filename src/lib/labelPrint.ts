@@ -7,6 +7,7 @@
 // (CSS vars from app.css only), so it drops into any POS page.
 import { renderLabelSvg, ensureLabelFont, DEFAULT_TEMPLATE, type LabelTemplate, type LabelItem } from "./labels";
 import { labelsToPdf, fontStyleTag, inlineLogo, escAttr, snapToInchGrid } from "./labelPdf";
+import { findZebraPrinter, printDirect } from "./zebraDirect";
 
 export type PrintJob = { item: LabelItem; copies: number };
 
@@ -181,7 +182,7 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
           </label>
         </div>
       </details>
-      <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;border-top:1px solid var(--border,#333);padding-top:0.7rem;">
+      <div id="lp-buttons" style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;border-top:1px solid var(--border,#333);padding-top:0.7rem;">
         <button id="lp-browser" type="button" title="Opens a print-ready PDF — the reliable way to print labels from a browser" style="font:inherit;font-weight:700;padding:0.45rem 0.9rem;background:var(--cyan,#2ce6e0);color:#04222a;border:1px solid var(--cyan,#2ce6e0);cursor:pointer;">🖨 Print</button>
         <button id="lp-print" type="button" title="Sharpest output — prints the labels as vectors straight from this tab. Use in Chrome; Safari's print engine mangles it" style="font:inherit;padding:0.45rem 0.7rem;background:transparent;color:var(--muted,#999);border:1px solid var(--border,#333);cursor:pointer;">⚡ Vector print (Chrome)</button>
         <button id="lp-test" type="button" title="One-label PDF to check printer alignment" style="font:inherit;padding:0.45rem 0.7rem;background:transparent;color:var(--muted,#999);border:1px solid var(--border,#333);cursor:pointer;">1 test label</button>
@@ -299,6 +300,35 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
     const jobs = gatherJobs();
     if (!jobs) return;
     if (await openPdf(jobs, ev.currentTarget as HTMLButtonElement)) close();
+  });
+
+  // BEST, where available: the Zebra Browser Print agent — ZPL straight to
+  // the printer, no macOS printing, no dialogs, no paper sizes, dot-exact.
+  // Probed async; the button appears only when the agent answers.
+  findZebraPrinter().then((z) => {
+    if (!z || !overlay.isConnected) return;
+    const row = overlay.querySelector("#lp-buttons")!;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.id = "lp-zebra";
+    btn.title = `Sends the labels straight to ${z.name} through Zebra Browser Print — no print dialog, dot-perfect`;
+    btn.style.cssText = "font:inherit;font-weight:700;padding:0.45rem 0.9rem;background:var(--green,#80ff72);color:#0a2506;border:1px solid var(--green,#80ff72);cursor:pointer;";
+    btn.textContent = `⚡ Direct to ${z.name}`;
+    row.prepend(btn);
+    btn.addEventListener("click", async () => {
+      const jobs = gatherJobs();
+      if (!jobs) return;
+      const orig = btn.textContent;
+      btn.disabled = true; btn.textContent = "Printing…";
+      try {
+        const n = await printDirect(z.device, jobs, chosenTpl(), tune());
+        btn.textContent = `✓ Sent ${n} label${n === 1 ? "" : "s"}`;
+        setTimeout(close, 900);
+      } catch (e: any) {
+        alert("Direct print failed: " + e.message + "\n\nIs Zebra Browser Print running on this computer?");
+        btn.disabled = false; btn.textContent = orig;
+      }
+    });
   });
   // Test label: same PDF pipeline, one label, dialog stays open for tuning.
   overlay.querySelector("#lp-test")!.addEventListener("click", (ev) => {
