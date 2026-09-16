@@ -50,44 +50,18 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: P
     const ow = sideways ? H : W, oh = sideways ? W : H;
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${ow}mm" height="${oh}mm" viewBox="0 0 ${ow} ${oh}"><g transform="${g}">${inner}</g></svg>`;
   };
-  // An <img>'s SVG is an isolated document: no external fetches — inline the
-  // web font and logo as data: URLs (same treatment the PDF path uses).
+  // This path prints from Chrome (the dialog labels it so): the label goes in
+  // as INLINE VECTOR SVG — shapes and text, no bitmap anywhere — so the print
+  // chain draws it at whatever resolution the device has. Nothing to
+  // pixelate, nothing to rescale. (Safari mangles inline-SVG pagination; its
+  // path is the PDF button.) Fonts and the logo inline as data: URLs so the
+  // isolated iframe needs no network.
   const styleTag = await fontStyleTag(tpl);
   const logoData = tpl.logoUrl ? await inlineLogo(tpl.logoUrl) : "";
-  // Rasterize to PNG before printing: Safari's print pass can drop SVG-format
-  // images entirely (blank pages), but a plain bitmap always paints. Snap to
-  // pure black/white — thermal heads are binary, and dithered grays print
-  // fuzzy. Raster at the HEAD's native dot pitch: thermal "203dpi" is really
-  // 8 dots/mm (203.2) — one pixel per dot, or bar edges get smoothed to gray.
-  const dpiOpt = Number(opts?.dpi);
-  const PXMM = dpiOpt === 600 ? 24 : dpiOpt === 300 ? 300 / 25.4 : 8;
-  const lw = sideways ? tpl.heightMm : tpl.widthMm;  // label (image) width on the page
+  const lw = sideways ? tpl.heightMm : tpl.widthMm;  // label width on the page
   const lh = sideways ? tpl.widthMm : tpl.heightMm;
-  const svgToPng = async (svg: string): Promise<string> => {
-    const img = new Image();
-    await new Promise<void>((res, rej) => {
-      img.onload = () => res();
-      img.onerror = () => rej(new Error("Label failed to render"));
-      img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
-    });
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.round(lw * PXMM);
-    canvas.height = Math.round(lh * PXMM);
-    const ctx = canvas.getContext("2d")!;
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    const im = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const d = im.data;
-    for (let i = 0; i < d.length; i += 4) {
-      const v = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114 >= 128 ? 255 : 0;
-      d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
-    }
-    ctx.putImageData(im, 0, 0);
-    return canvas.toDataURL("image/png");
-  };
   // Alignment math in plain mm — no grid/object-fit/percent CSS for the print
-  // engine to resolve: the img gets explicit size and margins. The label
+  // engine to resolve: the svg gets explicit size and margins. The label
   // keeps its true size, centered on the (inch-exact) page.
   const imgW = (lw * scale) / 100, imgH = (lh * scale) / 100;
   const offX = (pw - imgW) / 2 + nx, offY = (ph - imgH) / 2 + ny;
@@ -97,9 +71,8 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: P
     if (styleTag) svg = svg.replace(/(<svg[^>]*>)/, `$1${styleTag}`);
     if (tpl.logoUrl && logoData) svg = svg.split(escAttr(tpl.logoUrl)).join(logoData).split(tpl.logoUrl).join(logoData);
     svg = rotateSvg(svg);
-    const src = await svgToPng(svg);
     for (let i = 0; i < Math.min(500, j.copies); i++) {
-      pages.push(`<div class="label-page"><img src="${src}" alt=""></div>`);
+      pages.push(`<div class="label-page">${svg}</div>`);
     }
   }
 
@@ -116,7 +89,7 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: P
        a fraction instead of spilling to a second page. */
     .label-page { width: ${pw}mm; height: calc(${ph}mm - 1mm); overflow: hidden; break-after: page; page-break-after: always; break-inside: avoid; page-break-inside: avoid; }
     .label-page:last-child { break-after: auto; page-break-after: auto; }
-    .label-page img { display: block; width: ${imgW.toFixed(2)}mm; height: ${imgH.toFixed(2)}mm; margin: ${offY.toFixed(2)}mm 0 0 ${offX.toFixed(2)}mm; }
+    .label-page svg { display: block; width: ${imgW.toFixed(2)}mm; height: ${imgH.toFixed(2)}mm; margin: ${offY.toFixed(2)}mm 0 0 ${offX.toFixed(2)}mm; }
   </style></head><body>${pages.join("")}</body></html>`;
 
   document.getElementById("label-print-frame")?.remove();
@@ -127,14 +100,8 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: P
   frame.srcdoc = html;
   await new Promise<void>((res) => { frame.onload = () => res(); document.body.appendChild(frame); });
   const cw = frame.contentWindow!;
-  // Every label <img> must be decoded before print or pages come out empty.
-  try {
-    const imgs = [...cw.document.images];
-    await Promise.race([
-      Promise.all(imgs.map((im) => im.decode().catch(() => undefined))),
-      new Promise((r) => setTimeout(r, 3000)),
-    ]);
-  } catch { /* print what we have */ }
+  // Fonts must be ready in the iframe before print, or text falls back.
+  try { await Promise.race([(cw.document as any).fonts?.ready, new Promise((r) => setTimeout(r, 2500))]); } catch { /* fallback font ok */ }
   await new Promise((r) => setTimeout(r, 50)); // one layout tick
   const cleanup = () => frame.remove();
   cw.addEventListener("afterprint", () => setTimeout(cleanup, 500));
@@ -216,7 +183,7 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
       </details>
       <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;border-top:1px solid var(--border,#333);padding-top:0.7rem;">
         <button id="lp-browser" type="button" title="Opens a print-ready PDF — the reliable way to print labels from a browser" style="font:inherit;font-weight:700;padding:0.45rem 0.9rem;background:var(--cyan,#2ce6e0);color:#04222a;border:1px solid var(--cyan,#2ce6e0);cursor:pointer;">🖨 Print</button>
-        <button id="lp-print" type="button" title="Print straight from this tab without the PDF step — works in Chrome; Safari's print engine mangles it" style="font:inherit;padding:0.45rem 0.7rem;background:transparent;color:var(--muted,#999);border:1px solid var(--border,#333);cursor:pointer;">⚡ Quick print (Chrome)</button>
+        <button id="lp-print" type="button" title="Sharpest output — prints the labels as vectors straight from this tab. Use in Chrome; Safari's print engine mangles it" style="font:inherit;padding:0.45rem 0.7rem;background:transparent;color:var(--muted,#999);border:1px solid var(--border,#333);cursor:pointer;">⚡ Vector print (Chrome)</button>
         <button id="lp-test" type="button" title="One-label PDF to check printer alignment" style="font:inherit;padding:0.45rem 0.7rem;background:transparent;color:var(--muted,#999);border:1px solid var(--border,#333);cursor:pointer;">1 test label</button>
         <button id="lp-cancel" type="button" style="font:inherit;padding:0.45rem 0.7rem;background:transparent;color:var(--muted,#999);border:1px solid var(--border,#333);cursor:pointer;margin-left:auto;">Cancel</button>
       </div>
