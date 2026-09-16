@@ -11,8 +11,10 @@ import { renderLabelSvg, ensureLabelFont, LABEL_FONTS, type LabelTemplate, type 
 
 export type PdfJob = { item: LabelItem; copies: number };
 
-const PX_PER_MM = 24; // ~610 dpi raster — sharp even after the 203/300dpi head resamples
 const PT_PER_MM = 72 / 25.4;
+// One raster pixel per printer dot: oversampling gets averaged back into gray
+// edges by the driver, which its halftoning then speckles. 203dpi default.
+const pxPerMm = (dpi?: number) => ([203, 300, 600].includes(Number(dpi)) ? Number(dpi) : 203) / 25.4;
 
 const b64 = (buf: ArrayBuffer) => {
   const bytes = new Uint8Array(buf);
@@ -70,9 +72,10 @@ export async function fontStyleTag(tpl: LabelTemplate): Promise<string> {
 // esc() in labels.ts entity-encodes the logo URL inside href="…"
 export const escAttr = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
 
-export type PdfTune = { scalePct?: number; nudgeXMm?: number; nudgeYMm?: number };
+export type PdfTune = { scalePct?: number; nudgeXMm?: number; nudgeYMm?: number; dpi?: number };
 
 async function rasterize(svg: string, wMm: number, hMm: number, deg: 0 | 90 | 180 | 270, tune?: PdfTune): Promise<{ data: Uint8Array; pw: number; ph: number }> {
+  const PX_PER_MM = pxPerMm(tune?.dpi);
   const img = new Image();
   await new Promise<void>((res, rej) => {
     img.onload = () => res();

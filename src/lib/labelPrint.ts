@@ -14,7 +14,7 @@ export type PrintJob = { item: LabelItem; copies: number };
 // margins, and feed directions no web page can detect, so the user dials
 // these in once from a test label and they stick (localStorage).
 export type RotateDeg = 0 | 90 | 180 | 270;
-export type PrintTune = { rotateDeg?: RotateDeg; scalePct?: number; nudgeXMm?: number; nudgeYMm?: number };
+export type PrintTune = { rotateDeg?: RotateDeg; scalePct?: number; nudgeXMm?: number; nudgeYMm?: number; dpi?: number };
 
 export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: PrintTune): Promise<void> {
   const real = jobs.filter((j) => j.copies > 0);
@@ -54,8 +54,10 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: P
   const logoData = tpl.logoUrl ? await inlineLogo(tpl.logoUrl) : "";
   // Rasterize to PNG before printing: Safari's print pass can drop SVG-format
   // images entirely (blank pages), but a plain bitmap always paints. Snap to
-  // pure black/white — thermal heads are binary, and dithered grays print fuzzy.
-  const PXMM = 24; // ~610dpi raster
+  // pure black/white — thermal heads are binary, and dithered grays print
+  // fuzzy. Raster at the HEAD's native resolution: one pixel per printer dot
+  // beats oversampling, which the driver averages back into gray edges.
+  const PXMM = ([203, 300, 600].includes(Number(opts?.dpi)) ? Number(opts!.dpi) : 203) / 25.4;
   const svgToPng = async (svg: string): Promise<string> => {
     const img = new Image();
     await new Promise<void>((res, rej) => {
@@ -188,6 +190,13 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
       <details id="lp-tune-wrap" style="font-size:0.78rem;color:var(--muted,#999);">
         <summary style="cursor:pointer;">🎛 Fine-tune alignment (if the printed label is clipped or off-center — saves on this station)</summary>
         <div style="display:flex;gap:0.9rem;align-items:center;flex-wrap:wrap;margin-top:0.5rem;">
+          <label style="display:flex;align-items:center;gap:0.35rem;" title="Match your printer's head — sharpest output is one pixel per printer dot">Printer
+            <select id="lp-dpi" style="font:inherit;padding:0.25rem 0.35rem;background:var(--bg,#000);color:var(--text,#eee);border:1px solid var(--border-strong,#444);">
+              <option value="203">203 dpi (most thermal printers)</option>
+              <option value="300">300 dpi</option>
+              <option value="600">600 dpi</option>
+            </select>
+          </label>
           <label style="display:flex;align-items:center;gap:0.35rem;">Size
             <input id="lp-scale" type="number" min="60" max="100" step="1" value="100" style="width:4.2rem;font:inherit;padding:0.25rem 0.35rem;background:var(--bg,#000);color:var(--text,#eee);border:1px solid var(--border-strong,#444);">%
           </label>
@@ -240,21 +249,29 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
   // Physical-alignment tune values persist per station; the details block
   // opens automatically when a saved value is in play so it's never hidden.
   const tuneEls = {
+    dpi: overlay.querySelector<HTMLSelectElement>("#lp-dpi")!,
     scale: overlay.querySelector<HTMLInputElement>("#lp-scale")!,
     nx: overlay.querySelector<HTMLInputElement>("#lp-nx")!,
     ny: overlay.querySelector<HTMLInputElement>("#lp-ny")!,
   };
   try {
+    tuneEls.dpi.value = ["203", "300", "600"].includes(localStorage.getItem("tl-print-dpi") ?? "") ? localStorage.getItem("tl-print-dpi")! : "203";
     tuneEls.scale.value = localStorage.getItem("tl-print-scale") || "100";
     tuneEls.nx.value = localStorage.getItem("tl-print-nx") || "0";
     tuneEls.ny.value = localStorage.getItem("tl-print-ny") || "0";
   } catch { /* private mode */ }
-  if (tuneEls.scale.value !== "100" || tuneEls.nx.value !== "0" || tuneEls.ny.value !== "0") {
+  if (tuneEls.scale.value !== "100" || tuneEls.nx.value !== "0" || tuneEls.ny.value !== "0" || tuneEls.dpi.value !== "203") {
     overlay.querySelector<HTMLDetailsElement>("#lp-tune-wrap")!.open = true;
   }
-  const tune = (): { scalePct: number; nudgeXMm: number; nudgeYMm: number } => {
-    const t = { scalePct: Number(tuneEls.scale.value) || 100, nudgeXMm: Number(tuneEls.nx.value) || 0, nudgeYMm: Number(tuneEls.ny.value) || 0 };
+  const tune = (): { scalePct: number; nudgeXMm: number; nudgeYMm: number; dpi: number } => {
+    const t = {
+      scalePct: Number(tuneEls.scale.value) || 100,
+      nudgeXMm: Number(tuneEls.nx.value) || 0,
+      nudgeYMm: Number(tuneEls.ny.value) || 0,
+      dpi: Number(tuneEls.dpi.value) || 203,
+    };
     try {
+      localStorage.setItem("tl-print-dpi", String(t.dpi));
       localStorage.setItem("tl-print-scale", String(t.scalePct));
       localStorage.setItem("tl-print-nx", String(t.nudgeXMm));
       localStorage.setItem("tl-print-ny", String(t.nudgeYMm));
