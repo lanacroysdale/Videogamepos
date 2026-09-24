@@ -82,6 +82,105 @@ export const POST: APIRoute = async ({ locals, request }) => {
       if (error) return json({ error: /applied/.test(error.message) ? "Run migration 20260801000002_entry_drafts.sql first." : error.message }, 500);
       return json({ ok: true, itemId: item.id });
     }
+    case "importStage": {
+      // Bulk stage from a collection CSV (PriceCharting export etc.). Rows are
+      // already RESOLVED client-side (existing variant / new variant on a
+      // listing / new product); this just writes them onto the open draft.
+      // Nothing applies to stock until the draft is finished. Per-row errors
+      // come back in `results` so one bad line never aborts the batch.
+      if (!b.entryId || !Array.isArray(b.rows)) return json({ error: "entryId and rows required" }, 400);
+      const { data: entry } = await sb.from("inventory_entries").select("status").eq("id", b.entryId).maybeSingle();
+      if (!entry || entry.status !== "open") return json({ error: "That draft is closed — start a new entry." }, 409);
+      const rows = b.rows.slice(0, 40);
+      const { data: existingLines } = await sb.from("inventory_entry_items").select("id, variant_id, qty_added").eq("entry_id", b.entryId);
+      const lineByVariant = new Map<string, { id: string; qty: number }>();
+      for (const l of existingLines ?? []) lineByVariant.set(l.variant_id, { id: l.id, qty: l.qty_added });
+      const cents = (v: unknown) => (v == null || v === "" ? null : Math.max(0, Math.round(Number(v)) || 0));
+      const qtyOf = (v: unknown) => Math.max(1, Math.round(Number(v)) || 1);
+      const tagPc = async (productId: string, pcId: string) => {
+        // Remember the PriceCharting id on the listing so re-imports match exactly.
+        const tag = `pricecharting:${String(pcId).slice(0, 40)}`;
+        const { data: p } = await sb.from("products").select("tags").eq("id", productId).maybeSingle();
+        const tags: string[] = Array.isArray(p?.tags) ? p!.tags : [];
+        // First id wins — an employee mapping a PAL row onto the NTSC listing
+        // must not re-tag it (client only sends this when the listing has none).
+        if (!tags.some((t) => t.startsWith("pricecharting:"))) await sb.from("products").update({ tags: [...tags, tag] }).eq("id", productId);
+      };
+      const stage = async (variantId: string, priceCents: number, qty: number, costCents: number | null, wasNew: boolean) => {
+        const { data: st, error } = await sb.from("inventory_entry_items").insert({
+          entry_id: b.entryId, variant_id: variantId, qty_added: qty, unit_cost_cents: costCents,
+          price_cents_at_entry: priceCents, was_new_variant: wasNew, applied: false,
+        }).select("id").single();
+        if (error) throw new Error(error.message);
+        lineByVariant.set(variantId, { id: st.id, qty });
+        return st.id as string;
+      };
+      const results: any[] = [];
+      for (const r of rows) {
+        try {
+          const qty = qtyOf(r.qty), cost = cents(r.costCents);
+          if (r.kind === "variant") {
+            if (!r.variantId) throw new Error("variantId required");
+            const had = lineByVariant.get(r.variantId);
+            if (had) {
+              // Already on this draft → bump instead of a duplicate line.
+              const { error } = await sb.from("inventory_entry_items").update({ qty_added: had.qty + qty, ...(cost != null ? { unit_cost_cents: cost } : {}) }).eq("id", had.id);
+              if (error) throw new Error(error.message);
+              had.qty += qty;
+              results.push({ ok: true, itemId: had.id, variantId: r.variantId, merged: true });
+            } else {
+              const { data: v } = await sb.from("product_variants").select("id, price_cents, product_id").eq("id", r.variantId).maybeSingle();
+              if (!v) throw new Error("Variant not found");
+              const itemId = await stage(v.id, v.price_cents ?? 0, qty, cost, false);
+              results.push({ ok: true, itemId, variantId: v.id, productId: v.product_id });
+            }
+            if (r.tagPcId && r.productId) await tagPc(r.productId, r.tagPcId).catch(() => {});
+            continue;
+          }
+          const condition = String(r.condition || "Used").slice(0, 40);
+          const variantRow = {
+            condition,
+            completeness_code: r.completenessCode || null,
+            grade_code: r.gradeCode || null,
+            price_cents: cents(r.priceCents) ?? 0,
+            quantity: 0, // staged → lands on Finish
+            barcode: r.barcode ? String(r.barcode).slice(0, 40) : null,
+            ...(r.inventoryTypeId ? { inventory_type_id: r.inventoryTypeId } : {}),
+            ...(r.locationId ? { location_id: r.locationId } : {}),
+          };
+          if (r.kind === "newVariant") {
+            if (!r.productId) throw new Error("productId required");
+            const { data: v, error } = await sb.from("product_variants").insert({ product_id: r.productId, ...variantRow })
+              .select("id, internal_code, price_cents").single();
+            if (error) throw new Error(error.message);
+            const itemId = await stage(v.id, v.price_cents ?? 0, qty, cost, true);
+            if (r.tagPcId) await tagPc(r.productId, r.tagPcId).catch(() => {});
+            results.push({ ok: true, itemId, variantId: v.id, productId: r.productId, internalCode: v.internal_code ?? "", newVariant: true });
+            continue;
+          }
+          if (r.kind === "newProduct") {
+            const title = String(r.title ?? "").trim().slice(0, 200);
+            if (!title || !r.categoryId) throw new Error("Title and category required");
+            const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+            const { data: prod, error: pErr } = await sb.from("products").insert({
+              title, platform: r.platform ? String(r.platform).slice(0, 80) : null, category_id: r.categoryId, slug,
+              ...(r.tagPcId ? { tags: [`pricecharting:${String(r.tagPcId).slice(0, 40)}`] } : {}),
+            }).select("id").single();
+            if (pErr) throw new Error(pErr.message);
+            const { data: v, error: vErr } = await sb.from("product_variants").insert({ product_id: prod.id, ...variantRow })
+              .select("id, internal_code, price_cents").single();
+            if (vErr) throw new Error(vErr.message);
+            const itemId = await stage(v.id, v.price_cents ?? 0, qty, cost, true);
+            results.push({ ok: true, itemId, variantId: v.id, productId: prod.id, internalCode: v.internal_code ?? "", newProduct: true });
+            continue;
+          }
+          throw new Error("Unknown row kind");
+        } catch (e: any) {
+          results.push({ ok: false, error: e?.message || "Failed" });
+        }
+      }
+      return json({ ok: true, results });
+    }
     case "updateEntryItem": {
       if (!b.itemId) return json({ error: "itemId required" }, 400);
       const patch: Record<string, unknown> = {};

@@ -75,6 +75,7 @@ const allRows = (products ?? []).map((p: any) => ({
   categoryName: p.category?.name ?? "",
   categoryColor: p.category?.color ?? "#2ce6e0",
   ebayId: (p.tags ?? []).find((t: string) => t.startsWith("ebay:"))?.slice(5) ?? "",
+  pcId: (p.tags ?? []).find((t: string) => t.startsWith("pricecharting:"))?.slice(13) ?? "",
   supplierLinks: p.product_suppliers ?? [], // manager-only via RLS (staff get [])
   variants: (p.product_variants ?? []).map((v: any) => ({
     id: v.id,
@@ -136,6 +137,7 @@ const posData = {
     {isManager && <button id="resync-img" class="btn btn-ghost btn-sm" title="Fetch covers for items with no image (only fills empties)">🔄 Resync images</button>}
     <button id="phone-scan-btn" class="btn btn-ghost btn-sm" title="Pair your phone as a wireless scanner">📱 Phone</button>
     <a href="/entries" class="btn btn-ghost btn-sm" title="Past receiving entries + label reprints">📥 Entries</a>
+    <button id="inv-import" class="btn btn-ghost btn-sm" title="Import a collection .csv (PriceCharting export or any Title / Platform / Condition sheet) as staged lines on an entry">📄 Import CSV</button>
     <button id="recv-toggle" class="btn btn-ghost btn-sm" title="Start a receiving session — new products and received stock get grouped for label printing">▶ Start receiving</button>
     <button id="toggle-add" class="btn btn-primary btn-sm">＋ Add product</button>
   </div>
@@ -159,6 +161,7 @@ const posData = {
           <div class="ti-suggest" id="ent-suggest" hidden></div>
         </div>
         <button id="ent-new" class="btn btn-ghost btn-sm" type="button">＋ New product</button>
+        <button id="ent-import" class="btn btn-ghost btn-sm" type="button" title="Import a collection .csv — each row becomes a staged line (matched to existing listings when possible)">📄 Import CSV</button>
       </div>
       <table class="tbl" id="ent-table">
         <thead><tr>
@@ -496,6 +499,7 @@ const posData = {
   import { openPrintDialog } from "../../lib/labelPrint";
   import { initScanReceiver, openPairDialog } from "../../lib/scanReceive";
   import { barcodeEq } from "../../lib/gtin";
+  import { openImportDialog } from "../../lib/importDialog";
 
   const data = JSON.parse(document.getElementById("pos-data")!.textContent!);
   let items: any[] = data.items;
@@ -1505,6 +1509,108 @@ const posData = {
     panel.scrollIntoView({ behavior: "smooth", block: "center" });
     ($("np-price") as HTMLInputElement).focus();
   }
+
+  /* ---------- Collection CSV import (PriceCharting export etc.) ----------
+     Rows are matched client-side against the loaded catalog (existing
+     condition → same variant; other condition → new variant on that listing;
+     no listing → new product) and STAGED onto the draft in batches. Nothing
+     applies to stock until Finish, exactly like typed/scanned lines. */
+  const importCatalog = () => items.map((p: any) => ({
+    id: p.id, title: p.title, platform: p.platform || "", franchise: p.franchise || "", altNames: p.altNames || [],
+    categoryId: p.categoryId, pcId: p.pcId || "",
+    variants: (p.variants || []).map((v: any) => ({
+      id: v.id, completenessCode: v.completenessCode || "", gradeCode: v.gradeCode || "", priceCents: v.priceCents || 0,
+      quantity: v.quantity, barcodes: (v.barcodes || []).map((b: any) => b.barcode),
+    })),
+  }));
+  const mkImportedVariant = (res: any, p: any) => ({
+    id: res.variantId, condition: p.condition, completeness: null, completenessCode: p.completenessCode, gradeCode: p.gradeCode,
+    sku: null, internalCode: res.internalCode || "", labelCode: "", priceCents: p.priceCents, onlinePriceCents: null, costCents: null,
+    quantity: 0, onlineVisible: false, inventoryTypeId: p.inventoryTypeId || retailTypeId, locationId: "",
+    barcodes: p.barcode ? [{ id: "primary:" + res.variantId, barcode: p.barcode, label: "Primary", primary: true }] : [],
+  });
+  async function enrichInBackground(list: any[]) {
+    let done = 0, added = 0; const CONC = 3;
+    for (let i = 0; i < list.length; i += CONC) {
+      await Promise.all(list.slice(i, i + CONC).map(async (p) => {
+        try {
+          const e = await enrich({ productId: p.id, title: p.title, platform: p.platform });
+          if (e.ok && e.found) { if (e.imageUrl) { p.imageUrl = e.imageUrl; added++; } if (e.altNames?.length) p.altNames = e.altNames; if (e.description) p.description = e.description; }
+        } catch {}
+        done++;
+      }));
+      toast(`🎮 Fetching covers ${done}/${list.length}…`);
+    }
+    render();
+    toast(`🎮 Covers added for ${added} of ${list.length} new listing${list.length === 1 ? "" : "s"}`);
+  }
+  async function openCollectionImport() {
+    if (!draftsReady) { alert("Run supabase/migrations/20260801000002_entry_drafts.sql in the Supabase SQL editor first, then refresh."); return; }
+    try { await ensureEntry(); setEntryMode(true); } catch (e: any) { alert(e.message); return; }
+    openImportDialog({
+      mode: "entry", catalog: importCatalog(), completeness, grades, platforms: PLATFORMS, categories, invTypes,
+      onImport: async (rows, ch, progress) => {
+        const condText = (r: any) => [completeness.find((c) => c.code === r.row.completenessCode)?.label, grades.find((g) => g.code === r.row.gradeCode)?.label].filter(Boolean).join(" ") || "Used";
+        const priceOf = (r: any) => (r.row.priceCents == null ? 0 : Math.round(r.row.priceCents * ch.pricePct / 100));
+        const newProducts: any[] = [];
+        const payload = rows.map((r: any) => {
+          const base = { qty: r.row.qty, costCents: r.row.costCents, tagPcId: r.row.pcId && !(r.product && r.product.pcId) ? r.row.pcId : undefined };
+          if (r.product && r.variant) return { kind: "variant", variantId: r.variant.id, productId: r.product.id, ...base };
+          const v = { completenessCode: r.row.completenessCode, gradeCode: r.row.gradeCode, condition: condText(r), priceCents: priceOf(r), barcode: r.row.upc || null, inventoryTypeId: ch.inventoryTypeId || undefined };
+          if (r.product) return { kind: "newVariant", productId: r.product.id, ...v, ...base };
+          return { kind: "newProduct", title: r.row.title, platform: r.row.platform, categoryId: ch.categoryId, ...v, ...base };
+        });
+        const results: any[] = [];
+        const STEP = 25;
+        try {
+          for (let i = 0; i < payload.length; i += STEP) {
+            progress(`Staging ${Math.min(i + STEP, payload.length)} / ${payload.length}…`);
+            const j = await api({ action: "importStage", entryId, rows: payload.slice(i, i + STEP) });
+            results.push(...(j.results || []));
+            // Staged → never re-sent if a later batch fails and the employee retries.
+            rows.slice(i, i + STEP).forEach((r: any, k: number) => { if (j.results?.[k]?.ok) r.skip = true; });
+          }
+        } catch (e) {
+          if (results.length) { await mirrorImported(results); await loadEntry(entryId); setEntryMode(true); render(); }
+          throw e;
+        }
+        await mirrorImported(results);
+        async function mirrorImported(results: any[]) {
+        // Mirror new listings/conditions into the loaded catalog so the
+        // typeahead (and a second import of the same sheet) sees them.
+        const cat = categories.find((c: any) => c.id === ch.categoryId);
+        results.forEach((res, i) => {
+          if (!res?.ok) return;
+          const r: any = rows[i]; const p: any = payload[i];
+          if (res.newProduct) {
+            const np: any = {
+              id: res.productId, title: r.row.title, slug: r.row.title.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""),
+              platform: r.row.platform, franchise: "", genre: "", description: "", imageUrl: "", altNames: [], categoryId: ch.categoryId,
+              categoryName: cat?.name ?? "", categoryColor: cat?.color ?? "#2ce6e0", ebayId: "", pcId: r.row.pcId || "", supplierLinks: [],
+              variants: [mkImportedVariant(res, p)],
+            };
+            items.push(np); newProducts.push(np);
+          } else {
+            const lp = items.find((x) => x.id === res.productId);
+            if (lp && res.newVariant) lp.variants.push(mkImportedVariant(res, p));
+            if (lp && p.tagPcId) lp.pcId = p.tagPcId;
+          }
+        });
+        }
+        const failed = results.map((res, i) => (res?.ok ? null : `Row ${rows[i].row.n} “${rows[i].row.title}”: ${res?.error || "failed"}`)).filter(Boolean);
+        progress("Loading the draft…");
+        await loadEntry(entryId);
+        setEntryMode(true);
+        render();
+        const okN = results.filter((r) => r?.ok).length;
+        toast(`📄 Imported ${okN} line${okN === 1 ? "" : "s"} → Entry #${entryHuman}`);
+        if (failed.length) alert(`${failed.length} row(s) didn't import:\n\n${failed.slice(0, 15).join("\n")}${failed.length > 15 ? "\n…" : ""}`);
+        if (newProducts.length) enrichInBackground(newProducts);
+      },
+    });
+  }
+  $("inv-import")?.addEventListener("click", openCollectionImport);
+  $("ent-import")?.addEventListener("click", openCollectionImport);
 
   $("ent-finish")?.addEventListener("click", async () => {
     if (!entryId) return;
