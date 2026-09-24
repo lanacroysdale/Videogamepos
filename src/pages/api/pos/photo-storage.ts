@@ -3,7 +3,8 @@ import { createSupabaseAdminClient } from "../../../lib/supabase";
 import { shrinkImage } from "../../../lib/imageShrink";
 import {
   SUPABASE_BUCKET, listSupabase, r2Configured, r2List, r2Put, r2Delete,
-  supabasePublicPrefix, r2PublicPrefix,
+  supabasePublicPrefix, r2PublicPrefix, StorageCapError,
+  r2UsedBytes, r2CapEnabled, forgetR2CapSetting, R2_FREE_BYTES, R2_CAP_BYTES,
 } from "../../../lib/imageStore";
 
 export const prerender = false;
@@ -16,6 +17,7 @@ const json = (d: unknown, s = 200) =>
 //
 //   { action: "move-to-r2", phase: "copy" | "relink" | "cleanup", after? }
 //   { action: "delete-ebay", confirm: "DELETE" }
+//   { action: "set-r2-cap", enabled: boolean }
 
 const BUDGET_MS = 6000;
 // Photo folders that move to R2. Custom label fonts (fonts/) stay in Supabase.
@@ -52,7 +54,8 @@ async function copyPhase(admin: Admin, after: string) {
         const { bytes, contentType } = await shrinkImage(orig, f.mimetype || blob.type || "image/jpeg");
         await r2Put(f.path, bytes, contentType);
         copied++;
-      } catch {
+      } catch (e) {
+        if (e instanceof StorageCapError) throw e; // stop the move; the page shows why
         failed++;
       }
     }));
@@ -205,7 +208,9 @@ async function deleteEbayBatch(admin: Admin) {
 export const GET: APIRoute = async ({ locals }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
   if (!locals.can("maintenance.manage")) return json({ error: "You don't have permission for the danger zone" }, 403);
-  return json({ r2: r2Configured() });
+  if (!r2Configured()) return json({ r2: false });
+  const [capOn, used] = await Promise.all([r2CapEnabled(true), r2UsedBytes(true).catch(() => null)]);
+  return json({ r2: true, capOn, used, freeBytes: R2_FREE_BYTES, capBytes: R2_CAP_BYTES });
 };
 
 export const POST: APIRoute = async ({ locals, request }) => {
@@ -224,6 +229,15 @@ export const POST: APIRoute = async ({ locals, request }) => {
       if (b.phase === "relink") return json({ ok: true, ...(await relinkPhase(admin)) });
       if (b.phase === "cleanup") return json({ ok: true, ...(await cleanupPhase(admin)) });
       return json({ error: "Unknown phase" }, 400);
+    }
+    if (b.action === "set-r2-cap") {
+      const { data: cur } = await admin.from("store_settings").select("settings").eq("id", 1).maybeSingle();
+      const { error } = await admin.from("store_settings")
+        .update({ settings: { ...(cur?.settings ?? {}), r2CapEnabled: !!b.enabled } })
+        .eq("id", 1);
+      if (error) throw new Error(error.message);
+      forgetR2CapSetting();
+      return json({ ok: true, capOn: !!b.enabled });
     }
     if (b.action === "delete-ebay") {
       if (b.confirm !== "DELETE") return json({ error: "Type DELETE to confirm." }, 400);

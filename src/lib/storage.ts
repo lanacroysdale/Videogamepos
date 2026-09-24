@@ -1,5 +1,5 @@
 import { shrinkImage } from "./imageShrink";
-import { putImage, listFolder, publicUrlFor, removeImages } from "./imageStore";
+import { putImage, listFolder, publicUrlFor, removeImages, StorageCapError } from "./imageStore";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const extFor = (ct: string) => (ct.includes("png") ? "png" : ct.includes("webp") ? "webp" : "jpg");
@@ -22,7 +22,8 @@ export async function copyImageToStorage(
         new Uint8Array(await res.arrayBuffer()), res.headers.get("content-type") || "image/jpeg");
       const path = `products/${prefix}-${crypto.randomUUID()}.${extFor(ct)}`;
       return await putImage(admin, path, bytes, ct);
-    } catch {
+    } catch (e) {
+      if (e instanceof StorageCapError) return null; // full — retrying won't help
       await sleep(700);
     }
   }
@@ -66,7 +67,10 @@ export async function copyGallery(
           const file = `${name}.${extFor(ct)}`;
           await putImage(admin, `${folder}/${file}`, bytes, ct, true);
           copied++; written.add(file); return;
-        } catch { await sleep(500); }
+        } catch (e) {
+          if (e instanceof StorageCapError) return;
+          await sleep(500);
+        }
       }
     });
     await Promise.all(batch);

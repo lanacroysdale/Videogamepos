@@ -727,6 +727,15 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
           <button id="dz-r2" class="btn" disabled>☁️ Move photos to R2</button>
           <span id="dz-r2-status" class="muted">Checking R2 setup…</span>
         </div>
+        <label class="set-row set-toggle" style="border:0;padding:0.9rem 0 0;">
+          <input type="checkbox" id="dz-r2cap" checked disabled />
+          <span>
+            Keep R2 photo storage under 10 GB (Cloudflare's free limit). While on, new photos are
+            refused once storage reaches 9.5 GB, so you're never charged. Turn off only if you're
+            happy to pay for extra storage.
+            <br /><span id="dz-r2cap-usage" class="muted"></span>
+          </span>
+        </label>
       </div>
 
       <div class="set-row" style="display:block;">
@@ -1555,10 +1564,39 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
 
     const dzR2 = document.getElementById("dz-r2") as HTMLButtonElement;
     const dzR2Status = document.getElementById("dz-r2-status")!;
+    const dzR2Cap = document.getElementById("dz-r2cap") as HTMLInputElement;
+    const dzR2CapUsage = document.getElementById("dz-r2cap-usage")!;
+    const gb = (n: number) => `${(n / 1e9).toFixed(2)} GB`;
     fetch("/api/pos/photo-storage").then((r) => r.json()).then((j) => {
       dzR2.disabled = !j.r2;
       dzR2Status.textContent = j.r2 ? "R2 is set up — ready to move." : "R2 isn't set up yet (add the R2 settings in Vercel, then redeploy).";
+      if (!j.r2) return;
+      dzR2Cap.disabled = false;
+      dzR2Cap.checked = j.capOn;
+      if (typeof j.used === "number") dzR2CapUsage.textContent = `Currently using ${gb(j.used)} of ${gb(j.freeBytes)} free.`;
     }).catch(() => { dzR2Status.textContent = ""; });
+    dzR2Cap.addEventListener("change", async () => {
+      const enabled = dzR2Cap.checked;
+      if (!enabled && !confirm("Turn off the 10 GB limit? Cloudflare will charge for storage above 10 GB (about $0.015 per GB each month).")) {
+        dzR2Cap.checked = true;
+        return;
+      }
+      dzR2Cap.disabled = true;
+      try {
+        const res = await fetch("/api/pos/photo-storage", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action: "set-r2-cap", enabled }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok || !j.ok) throw new Error(j.error || "Couldn't save");
+      } catch (err: any) {
+        dzR2Cap.checked = !enabled;
+        alert(err.message);
+      } finally {
+        dzR2Cap.disabled = false;
+      }
+    });
     dzR2.addEventListener("click", async () => {
       dzR2.disabled = true;
       let copied = 0, failed = 0, relinked = 0, removed = 0, freed = 0;

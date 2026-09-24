@@ -1,4 +1,5 @@
 import { AwsClient } from "aws4fetch";
+import { createSupabaseAdminClient } from "./supabase";
 
 // Where product/menu photos live. When the R2_* env vars are set, photos go to
 // Cloudflare R2 (10GB free, no bandwidth fees); otherwise they fall back to the
@@ -44,15 +45,55 @@ const objectUrl = (key: string) => {
   return `https://${c.accountId}.r2.cloudflarestorage.com/${c.bucket}/${k}`;
 };
 
+// ---- 10 GB free-tier guard -----------------------------------------------
+// R2 is free up to 10 GB stored (Cloudflare counts decimal GB). While the
+// owner's "Keep R2 under 10 GB" setting is on (the default), uploads that
+// would push the bucket past R2_CAP_BYTES are refused. The cap sits a little
+// under 10 GB because the usage figure is cached briefly per server instance.
+export const R2_FREE_BYTES = 10e9;
+export const R2_CAP_BYTES = 9.5e9;
+
+export class StorageCapError extends Error {
+  constructor() {
+    super("Photo storage has reached its 10 GB free limit, so this photo wasn't saved. " +
+      "Delete some photos, or turn off the 10 GB limit in Settings → Danger zone.");
+  }
+}
+
+let usage: { bytes: number; at: number } | null = null;
+// Total bytes in the bucket (listed at most every 5 minutes per instance).
+export async function r2UsedBytes(fresh = false): Promise<number> {
+  if (!fresh && usage && Date.now() - usage.at < 5 * 60_000) return usage.bytes;
+  const bytes = (await r2List("")).reduce((a, o) => a + o.size, 0);
+  usage = { bytes, at: Date.now() };
+  return bytes;
+}
+
+let cap: { on: boolean; at: number } | null = null;
+// store_settings.settings.r2CapEnabled — on unless explicitly turned off.
+export async function r2CapEnabled(fresh = false): Promise<boolean> {
+  if (!fresh && cap && Date.now() - cap.at < 60_000) return cap.on;
+  const { data } = await createSupabaseAdminClient()
+    .from("store_settings").select("settings").eq("id", 1).maybeSingle();
+  const on = (data?.settings as any)?.r2CapEnabled !== false;
+  cap = { on, at: Date.now() };
+  return on;
+}
+export function forgetR2CapSetting() { cap = null; }
+
 // ---- R2 primitives -------------------------------------------------------
 
 export async function r2Put(key: string, bytes: Uint8Array, contentType: string) {
+  if (await r2CapEnabled()) {
+    if ((await r2UsedBytes()) + bytes.byteLength > R2_CAP_BYTES) throw new StorageCapError();
+  }
   const res = await aws().fetch(objectUrl(key), {
     method: "PUT",
     body: bytes as BodyInit,
     headers: { "content-type": contentType, "cache-control": "public, max-age=31536000" },
   });
   if (!res.ok) throw new Error(`R2 upload ${key}: ${res.status} ${(await res.text()).slice(0, 200)}`);
+  if (usage) usage.bytes += bytes.byteLength; // overwrites over-count: errs on the safe side
 }
 
 export async function r2Delete(keys: string[]) {
@@ -63,6 +104,7 @@ export async function r2Delete(keys: string[]) {
       if (!res.ok && res.status !== 404) throw new Error(`R2 delete ${k}: ${res.status}`);
     }));
   }
+  usage = null; // re-measure on the next upload
 }
 
 const unxml = (s: string) =>
