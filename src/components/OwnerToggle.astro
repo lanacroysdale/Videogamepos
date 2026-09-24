@@ -18,10 +18,16 @@
   .owner-tb {
     position: fixed; right: 1rem; bottom: 1rem; z-index: 2147483000;
     display: none; flex-direction: column; align-items: flex-end; gap: 0.55rem;
+    /* The closed fly-out items are invisible but still take up layout space,
+       so the wrapper must not catch clicks — otherwise it silently eats taps on
+       whatever sits under it (e.g. Checkout's Clear button). Only the FAB and
+       the open menu items are clickable. */
+    pointer-events: none;
   }
   html.tl-owner .owner-tb { display: flex; }
 
   .owner-fab {
+    pointer-events: auto;
     width: 3.1rem; height: 3.1rem; flex: none; cursor: pointer;
     border: 2px solid color-mix(in srgb, var(--cyan) 65%, #000);
     background: linear-gradient(150deg, var(--cyan), var(--cyan-deep));
