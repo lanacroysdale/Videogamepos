@@ -1,0 +1,129 @@
+---
+export const prerender = false;
+import AppLayout from "../../layouts/AppLayout.astro";
+import { NOTIFICATION_TYPES } from "../../lib/notifications";
+
+const supabase = Astro.locals.supabase;
+const uid = Astro.locals.user!.id;
+
+// RLS scopes rows to my role (owner sees all). A missing table = migration
+// pending → empty inbox + a note, same idiom as the other new-feature pages.
+const { data: rows, error } = await supabase
+  .from("notifications")
+  .select("id, human_id, type, title, body, href, created_at")
+  .order("created_at", { ascending: false })
+  .limit(300);
+const ready = !error;
+const { data: reads } = ready ? await supabase.from("notification_reads").select("notification_id").eq("user_id", uid) : { data: [] };
+const readIds = new Set((reads ?? []).map((r: any) => r.notification_id));
+const items = (rows ?? []).map((n: any) => ({ ...n, read: readIds.has(n.id) }));
+const unread = items.filter((n) => !n.read).length;
+const typeDef = (t: string) => NOTIFICATION_TYPES.find((d) => d.key === t);
+const when = (s: string) => new Date(s).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+const canSettings = Astro.locals.can("settings.manage");
+---
+
+<AppLayout title="Inbox" active="inbox">
+  <div class="pos-panel">
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.8rem;align-items:center;">
+      <button class="chip filt active" data-filt="">All</button>
+      <button class="chip filt" data-filt="unread">Unread <span id="unread-n">{unread}</span></button>
+      <span style="width:1px;height:1.4rem;background:var(--border-strong);margin:0 0.3rem;"></span>
+      {NOTIFICATION_TYPES.map((t) => <button class="chip filt" data-filt={t.key}>{t.icon} {t.label}</button>)}
+      <span style="flex:1;"></span>
+      <button id="mark-all" class="btn btn-ghost btn-sm" type="button" disabled={unread === 0}>Mark all read</button>
+      {canSettings && <a href="/settings#inbox" class="btn btn-ghost btn-sm" title="Who gets what">⚙️ Routing</a>}
+    </div>
+
+    {!ready && (
+      <p class="empty">The inbox isn't set up yet — apply the <code>20260924000001_warranty_inbox</code> migration in Supabase.</p>
+    )}
+    {ready && items.length === 0 && (
+      <p class="empty">Nothing here yet. Warranty registrations, sell-form leads and Free Club signups will land here as they happen.</p>
+    )}
+
+    <div id="inbox-list" class="inbox">
+      {items.map((n) => {
+        const d = typeDef(n.type);
+        return (
+          <div class:list={["inbox-row", { unread: !n.read }]} data-id={n.id} data-type={n.type} data-read={n.read ? "1" : "0"}>
+            <span class="inbox-ico" aria-hidden="true">{d?.icon ?? "🔔"}</span>
+            <div class="inbox-main">
+              <div class="inbox-title">{n.title}</div>
+              {n.body && <div class="inbox-body">{n.body}</div>}
+              <div class="inbox-meta">{d?.label ?? n.type} · {when(n.created_at)}</div>
+            </div>
+            <div class="inbox-actions">
+              {n.href && <a class="btn btn-primary btn-sm open" href={n.href} data-id={n.id}>Open</a>}
+              <button class="link-btn toggle" type="button" data-id={n.id}>{n.read ? "Mark unread" : "Mark read"}</button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  </div>
+</AppLayout>
+
+<style>
+  .chip.filt { cursor: pointer; }
+  .chip.filt.active { border-color: var(--cyan); color: var(--cyan); }
+  .inbox { display: grid; gap: 0.35rem; }
+  .inbox-row { display: flex; gap: 0.8rem; align-items: flex-start; padding: 0.7rem 0.8rem; border: 1px solid var(--border); background: rgba(255,255,255,0.02); }
+  .inbox-row.unread { border-left: 3px solid var(--magenta); background: rgba(255,255,255,0.05); }
+  .inbox-row.unread .inbox-title { font-weight: 800; }
+  .inbox-ico { font-size: 1.3rem; line-height: 1; padding-top: 0.15rem; }
+  .inbox-main { flex: 1; min-width: 0; }
+  .inbox-title { font-weight: 600; }
+  .inbox-body { color: var(--muted); font-size: 0.9rem; white-space: pre-wrap; }
+  .inbox-meta { color: var(--muted-2); font-size: 0.76rem; margin-top: 0.15rem; }
+  .inbox-actions { display: flex; flex-direction: column; gap: 0.35rem; align-items: flex-end; white-space: nowrap; }
+</style>
+
+<script>
+  const list = document.getElementById("inbox-list")!;
+  const unreadN = document.getElementById("unread-n")!;
+  let filt = "";
+  const rows = () => Array.from(list.querySelectorAll<HTMLElement>(".inbox-row"));
+  const call = (body: any) => fetch("/api/pos/notifications", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
+
+  function apply() {
+    rows().forEach((r) => {
+      const ok = !filt || (filt === "unread" ? r.dataset.read === "0" : r.dataset.type === filt);
+      r.style.display = ok ? "" : "none";
+    });
+    const n = rows().filter((r) => r.dataset.read === "0").length;
+    unreadN.textContent = String(n);
+    (document.getElementById("mark-all") as HTMLButtonElement).disabled = n === 0;
+  }
+  function setRead(row: HTMLElement, read: boolean) {
+    row.dataset.read = read ? "1" : "0";
+    row.classList.toggle("unread", !read);
+    const t = row.querySelector<HTMLButtonElement>(".toggle");
+    if (t) t.textContent = read ? "Mark unread" : "Mark read";
+    apply();
+  }
+  document.querySelectorAll<HTMLElement>(".chip.filt").forEach((chip) => chip.addEventListener("click", () => {
+    document.querySelectorAll(".chip.filt").forEach((c) => c.classList.remove("active"));
+    chip.classList.add("active");
+    filt = chip.dataset.filt || "";
+    apply();
+  }));
+  list.addEventListener("click", async (e) => {
+    const t = (e.target as HTMLElement).closest<HTMLElement>(".toggle, .open");
+    if (!t) return;
+    const row = t.closest<HTMLElement>(".inbox-row")!;
+    const id = t.dataset.id!;
+    if (t.classList.contains("open")) {
+      // Opening marks read; let the navigation proceed.
+      if (row.dataset.read === "0") { setRead(row, true); await call({ action: "markRead", id }); }
+      return;
+    }
+    const nowRead = row.dataset.read === "0";
+    setRead(row, nowRead);
+    await call({ action: nowRead ? "markRead" : "markUnread", id });
+  });
+  document.getElementById("mark-all")!.addEventListener("click", async () => {
+    rows().forEach((r) => setRead(r, true));
+    await call({ action: "markAllRead" });
+  });
+</script>

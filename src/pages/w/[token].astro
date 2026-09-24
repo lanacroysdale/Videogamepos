@@ -1,0 +1,205 @@
+---
+export const prerender = false;
+import Layout from "../../layouts/Layout.astro";
+import { createSupabaseAdminClient } from "../../lib/supabase";
+import { SITE } from "../../consts";
+import { isToken, readSnapshot, fmtDate, daysLeft, fractionLeft, lengthLabel, maskEmail } from "../../lib/warranty";
+
+// The page a warranty sticker's QR opens. Before registration: the item and
+// plan are shown (locked) and the customer adds their contact details. After:
+// this same link is their proof of warranty — item, dates, time left, terms.
+// The token IS the credential (bearer link, like a receipt URL), so we never
+// show a full email address here.
+const token = String(Astro.params.token ?? "").toLowerCase();
+let reg: any = null;
+if (isToken(token)) {
+  const admin = createSupabaseAdminClient();
+  const { data } = await admin
+    .from("warranty_registrations")
+    .select("id, warranty_no, status, plan_snapshot, item_title, item_platform, item_condition, serial, sale_date, coverage_start, coverage_end, first_name, last_name, email, registered_at")
+    .eq("token", token)
+    .maybeSingle();
+  reg = data;
+}
+const { data: srow } = reg ? await createSupabaseAdminClient().from("store_settings").select("store_name").eq("id", 1).maybeSingle() : { data: null };
+const storeName = (srow as any)?.store_name || SITE.name;
+const snap = reg ? readSnapshot(reg.plan_snapshot) : null;
+const left = reg ? daysLeft(reg.coverage_end) : 0;
+const pct = reg ? Math.round(fractionLeft(reg.coverage_start, reg.coverage_end) * 100) : 0;
+const itemLine = reg ? [reg.item_condition, reg.item_platform].filter(Boolean).join(" · ") : "";
+const state: "missing" | "void" | "active" | "review" | "pending" = !reg ? "missing" : reg.status;
+---
+
+<Layout title={reg ? `Warranty ${reg.warranty_no}` : "Warranty"} description="Register or view your product warranty." noindex>
+  <section class="section--tight">
+    <div class="container narrow">
+      {state === "missing" && (
+        <div class="panel wcard">
+          <span class="eyebrow">Warranty</span>
+          <h1>We couldn't find that warranty</h1>
+          <p class="lead">The link may have been typed wrong or the sticker may have been cancelled. Email <a href={`mailto:${SITE.email}`}>{SITE.email}</a> or call {SITE.phoneDisplay} and we'll sort it out.</p>
+          <p><a class="btn btn-ghost" href="/warranty">Register without a sticker →</a></p>
+        </div>
+      )}
+
+      {state === "void" && (
+        <div class="panel wcard">
+          <span class="eyebrow">Warranty {reg.warranty_no}</span>
+          <h1>This warranty has been cancelled</h1>
+          <p class="lead">If you think that's a mistake, email <a href={`mailto:${SITE.email}`}>{SITE.email}</a> with your warranty number and we'll take a look.</p>
+        </div>
+      )}
+
+      {(state === "active" || state === "review") && (
+        <div class="panel wcard cert">
+          <div class="cert-head">
+            <div>
+              <span class="eyebrow">{state === "review" ? "Registration received" : "Proof of warranty"}</span>
+              <h1>{snap!.name}</h1>
+              <p class="wno">{reg.warranty_no}</p>
+            </div>
+            <div class="cert-brand"><img src="/logo-dark.png" alt="" /><span>{storeName}</span></div>
+          </div>
+          {state === "review" && (
+            <p class="notice">Thanks{reg.first_name ? `, ${reg.first_name}` : ""}! We're confirming this purchase against our records. You'll get your proof-of-warranty email as soon as it's approved — usually within a day.</p>
+          )}
+          <dl class="facts">
+            <div><dt>Item</dt><dd><strong>{reg.item_title}</strong>{itemLine && <span class="sub">{itemLine}</span>}{reg.serial && <span class="sub">S/N {reg.serial}</span>}</dd></div>
+            <div><dt>Registered to</dt><dd>{`${reg.first_name ?? ""} ${reg.last_name ?? ""}`.trim() || "—"}<span class="sub">{maskEmail(reg.email)}</span></dd></div>
+            <div><dt>Purchased</dt><dd>{fmtDate(reg.sale_date, "long")}</dd></div>
+            <div><dt>Covered through</dt><dd>{fmtDate(reg.coverage_end, "long")}</dd></div>
+          </dl>
+          <div class="bar" role="img" aria-label={`${pct}% of coverage remaining`}>
+            <div class="bar-fill" style={`width:${pct}%`}></div>
+          </div>
+          <p class="bar-label">
+            {left < 0 ? <strong>Expired {fmtDate(reg.coverage_end)}</strong> : <><strong>{left} day{left === 1 ? "" : "s"}</strong> of {lengthLabel(snap!.months).toLowerCase()} coverage remaining</>}
+          </p>
+          {snap!.coverage.length > 0 && (<><h2>What's covered</h2><ul>{snap!.coverage.map((c) => <li>{c}</li>)}</ul></>)}
+          {snap!.exclusions.length > 0 && (<><h2>What's not covered</h2><ul>{snap!.exclusions.map((c) => <li>{c}</li>)}</ul></>)}
+          {snap!.terms && <p class="fine">{snap!.terms}</p>}
+          <p class="fine">Need to make a claim? Bring or ship the item to us and quote <strong>{reg.warranty_no}</strong>. Email <a href={`mailto:${SITE.email}`}>{SITE.email}</a> · {SITE.phoneDisplay}</p>
+          <p class="print-row"><button class="btn btn-ghost" type="button" onclick="window.print()">🖨 Print this page</button></p>
+        </div>
+      )}
+
+      {state === "pending" && (
+        <div class="panel wcard">
+          <span class="eyebrow">Register your warranty</span>
+          <h1>{snap!.name}</h1>
+          <p class="lead">{snap!.summary || `Covers this purchase for ${lengthLabel(snap!.months).toLowerCase()} from the date of sale.`}</p>
+
+          <dl class="facts locked">
+            <div><dt>Item</dt><dd><strong>{reg.item_title}</strong>{itemLine && <span class="sub">{itemLine}</span>}{reg.serial && <span class="sub">S/N {reg.serial}</span>}</dd></div>
+            <div><dt>Purchased</dt><dd>{fmtDate(reg.sale_date, "long")}</dd></div>
+            <div><dt>Covered through</dt><dd>{fmtDate(reg.coverage_end, "long")}</dd></div>
+            <div><dt>Warranty #</dt><dd>{reg.warranty_no}</dd></div>
+          </dl>
+
+          <form id="wform" novalidate>
+            <div class="hp" aria-hidden="true"><label>Company<input type="text" name="company" tabindex="-1" autocomplete="off" /></label></div>
+            <div class="row">
+              <div class="field"><label for="w-first">First name <span class="req">*</span></label><input id="w-first" name="first" required autocomplete="given-name" value={reg.first_name ?? ""} /></div>
+              <div class="field"><label for="w-last">Last name</label><input id="w-last" name="last" autocomplete="family-name" value={reg.last_name ?? ""} /></div>
+            </div>
+            <div class="row">
+              <div class="field"><label for="w-email">Email <span class="req">*</span></label><input id="w-email" name="email" type="email" required autocomplete="email" placeholder="you@email.com" /><p class="hint">Your proof of warranty is emailed here.</p></div>
+              <div class="field"><label for="w-phone">Phone <span class="opt">(optional)</span></label><input id="w-phone" name="phone" type="tel" autocomplete="tel" placeholder="(555) 123-4567" /></div>
+            </div>
+            <label class="check"><input type="checkbox" name="subscribe" /> Send me occasional news and deals from {storeName}</label>
+            <p class="form-status" role="status" aria-live="polite"></p>
+            <button type="submit" class="btn btn-primary btn-block submit">Register my warranty →</button>
+            <p class="fineprint">We use your details to keep your warranty on file and contact you about it. See our <a href="/privacy">privacy policy</a>.</p>
+          </form>
+
+          <details class="terms">
+            <summary>What's covered</summary>
+            {snap!.coverage.length > 0 && (<><h3>Covered</h3><ul>{snap!.coverage.map((c) => <li>{c}</li>)}</ul></>)}
+            {snap!.exclusions.length > 0 && (<><h3>Not covered</h3><ul>{snap!.exclusions.map((c) => <li>{c}</li>)}</ul></>)}
+            {snap!.terms && <p class="fine">{snap!.terms}</p>}
+          </details>
+        </div>
+      )}
+    </div>
+  </section>
+</Layout>
+
+<style>
+  .wcard { padding: clamp(1.25rem, 1rem + 1.5vw, 2rem); }
+  .wcard h1 { margin: 0.25rem 0 0.5rem; font-size: clamp(1.6rem, 1.2rem + 1.5vw, 2.3rem); }
+  .wcard h2 { font-size: 1.05rem; margin: 1.4rem 0 0.4rem; }
+  .wcard ul { margin: 0; padding-left: 1.2rem; }
+  .wcard li { margin: 0.2rem 0; }
+  .wno { font-family: var(--font-mono, monospace); color: var(--muted); margin: 0; letter-spacing: 0.05em; }
+  .cert-head { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; }
+  .cert-brand { display: flex; align-items: center; gap: 0.5rem; font-weight: 800; white-space: nowrap; }
+  .cert-brand img { height: 36px; width: auto; }
+  .notice { background: rgba(44, 230, 224, 0.12); border: 1px solid rgba(44, 230, 224, 0.4); padding: 0.8rem 1rem; font-weight: 600; }
+  .facts { display: grid; gap: 0.8rem; grid-template-columns: 1fr 1fr; margin: 1.2rem 0; padding: 1rem; background: rgba(0,0,0,0.25); border: 1px solid var(--border-strong); }
+  @media (max-width: 560px) { .facts { grid-template-columns: 1fr; } }
+  .facts div { display: grid; gap: 0.15rem; }
+  .facts dt { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted-2); font-weight: 700; }
+  .facts dd { margin: 0; }
+  .facts .sub { display: block; color: var(--muted); font-size: 0.86rem; }
+  .bar { height: 12px; background: rgba(255,255,255,0.08); border: 1px solid var(--border-strong); overflow: hidden; }
+  .bar-fill { height: 100%; background: linear-gradient(90deg, var(--green), var(--cyan)); }
+  .bar-label { margin: 0.5rem 0 0; color: var(--muted); }
+  .fine { font-size: 0.86rem; color: var(--muted); margin-top: 1rem; }
+  .print-row { margin-top: 1.2rem; }
+  .hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+  .row { display: grid; gap: 1rem; }
+  @media (min-width: 560px) { .row { grid-template-columns: 1fr 1fr; } }
+  .field { display: grid; gap: 0.4rem; margin-bottom: 1rem; }
+  .field label { font-weight: 600; font-size: 0.92rem; }
+  .req { color: var(--magenta); }
+  .opt { color: var(--muted-2); font-weight: 500; }
+  input[type="text"], input[type="email"], input[type="tel"], input:not([type]) {
+    width: 100%; padding: 0.75rem 0.9rem; background: rgba(0,0,0,0.25); border: 1px solid var(--border-strong); color: var(--text);
+  }
+  input:focus { outline: none; border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(44,230,224,0.18); }
+  .hint, .fineprint { font-size: 0.82rem; color: var(--muted-2); margin: 0; }
+  .fineprint { text-align: center; margin-top: 0.8rem; }
+  .check { display: flex; gap: 0.5rem; align-items: flex-start; font-size: 0.9rem; margin-bottom: 1rem; }
+  .form-status:empty { display: none; }
+  .form-status { margin: 0.25rem 0 0.75rem; font-weight: 600; }
+  .form-status[data-state="error"] { color: #ff9aa2; }
+  .submit[aria-busy="true"] { opacity: 0.7; cursor: progress; }
+  .terms { margin-top: 1.5rem; border-top: 1px solid var(--border); padding-top: 1rem; }
+  .terms summary { cursor: pointer; font-weight: 700; }
+  .terms h3 { font-size: 0.95rem; margin: 0.9rem 0 0.3rem; }
+  @media print {
+    :global(header), :global(footer), .print-row, :global(.skip-link) { display: none !important; }
+    .wcard { border: none; padding: 0; }
+    .bar-fill { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+</style>
+
+<script>
+  const form = document.getElementById("wform") as HTMLFormElement | null;
+  if (form) {
+    const status = form.querySelector<HTMLElement>(".form-status")!;
+    const submit = form.querySelector<HTMLButtonElement>(".submit")!;
+    const token = location.pathname.split("/").pop() || "";
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (!form.checkValidity()) { form.reportValidity(); return; }
+      status.textContent = ""; status.dataset.state = "";
+      submit.setAttribute("aria-busy", "true"); submit.disabled = true;
+      const fd = new FormData(form);
+      try {
+        const res = await fetch("/api/warranty/register", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token, first: fd.get("first"), last: fd.get("last"), email: fd.get("email"), phone: fd.get("phone"), company: fd.get("company"), subscribe: fd.get("subscribe") === "on" }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (res.ok && j.ok) { location.reload(); return; }
+        status.textContent = j.error || "Sorry, something went wrong. Please try again.";
+        status.dataset.state = "error";
+      } catch {
+        status.textContent = "Network error — please check your connection and try again.";
+        status.dataset.state = "error";
+      } finally { submit.removeAttribute("aria-busy"); submit.disabled = false; }
+    });
+  }
+</script>

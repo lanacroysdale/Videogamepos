@@ -3,6 +3,7 @@ import { createSupabaseAdminClient } from "../../../lib/supabase";
 import { THEME_KEYS, SIDEBAR_KEYS } from "../../../lib/themeSettings";
 import { AI_PROVIDERS, AI_QUALITIES } from "../../../lib/ai";
 import { sanitizeLabelTemplates } from "../../../lib/labels";
+import { sanitizeNotifyRouting } from "../../../lib/notifications";
 
 export const prerender = false;
 const json = (d: unknown, s = 200) =>
@@ -38,6 +39,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
   if (b.labelTemplates !== undefined) settings.labelTemplates = sanitizeLabelTemplates(b.labelTemplates);
   if (b.leadNotifyEnabled !== undefined) settings.leadNotifyEnabled = !!b.leadNotifyEnabled;
   if (b.leadNotifyEmail !== undefined) settings.leadNotifyEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(b.leadNotifyEmail).trim()) ? String(b.leadNotifyEmail).trim().slice(0, 200) : "";
+  if (b.notifyRouting !== undefined) settings.notifyRouting = sanitizeNotifyRouting(b.notifyRouting, locals.roles);
   if (b.aiProvider !== undefined && AI_PROVIDERS.some((p) => p.key === String(b.aiProvider))) settings.aiProvider = String(b.aiProvider);
   if (b.aiQuality !== undefined && AI_QUALITIES.some((q) => q.key === String(b.aiQuality))) settings.aiQuality = String(b.aiQuality);
 

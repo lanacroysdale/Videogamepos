@@ -59,7 +59,10 @@ const jsonLd = {
       // host) jumps straight to the dashboard. This runs on the STATIC marketing
       // pages — a vercel.json/middleware redirect for "/" can't (the prerendered
       // index file takes filesystem precedence). Marketing hosts are unaffected.
-      if (!${JSON.stringify(MARKETING_HOSTS)}.includes(location.hostname)) location.replace("/dashboard" + location.search);
+      // Customer-facing warranty pages (/warranty, /w/<token>) are public on
+      // every host — a scanned sticker must never bounce into the POS.
+      var pubPath = location.pathname === "/warranty" || location.pathname.indexOf("/w/") === 0;
+      if (!pubPath && !${JSON.stringify(MARKETING_HOSTS)}.includes(location.hostname)) location.replace("/dashboard" + location.search);
     `} />
     <meta name="generator" content={Astro.generator} />
     <ThemeInit scope="site" />

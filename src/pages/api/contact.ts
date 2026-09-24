@@ -1,5 +1,6 @@
 import type { APIRoute } from "astro";
 import { createSupabaseAdminClient } from "../../lib/supabase";
+import { createNotification } from "../../lib/notifications";
 
 // Run as an on-demand Vercel serverless function (not prerendered).
 export const prerender = false;
@@ -117,7 +118,10 @@ export const POST: APIRoute = async ({ request, redirect }) => {
       payload: { attachments: attachLine },
     });
     if (leadErr) console.error("[contact] lead insert failed:", leadErr.message);
-    else leadOk = true;
+    else {
+      leadOk = true;
+      await createNotification(admin, { type: "lead_new", title: `Sell request from ${name}`, body: items.slice(0, 200), href: "/leads" });
+    }
     const { data: srow } = await admin.from("store_settings").select("settings").eq("id", 1).maybeSingle();
     const s = (srow?.settings as any) ?? {};
     notifyEnabled = s.leadNotifyEnabled !== false; // default on

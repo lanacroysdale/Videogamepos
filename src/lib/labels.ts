@@ -5,6 +5,8 @@
 // Modeled on the wrap tag: a vertical price spine + a face with title/meta/
 // price/barcode. Integer cents throughout.
 import { code128SvgGroup, code128Modules } from "./barcode";
+import { encodeQr, qrSvgGroup } from "./qr";
+import type { WarrantyLabel } from "./warranty";
 
 // Label font choices with per-font OPTICAL PROFILES — each face renders at a
 // different visual size for the same nominal mm, so the renderer corrects:
@@ -113,6 +115,8 @@ export type LabelItem = {
   labelCode?: string;     // preferred payload: 10-digit numeric → compact Code 128C
   sku: string;
   storeName: string;      // spine logo text (used when no logoUrl)
+  /** Set → this prints as a WARRANTY STICKER (QR + terms) instead of a price tag. */
+  warranty?: WarrantyLabel;
 };
 
 export const DEFAULT_TEMPLATE: LabelTemplate = {
@@ -249,6 +253,7 @@ function wrapTitle(title: string, maxChars: number, maxLines: 1 | 2): string[] {
 // opts.preview draws designer-only guides (the spine divider) that must NOT
 // appear on the printed label.
 export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { preview?: boolean }): string {
+  if (item.warranty) return renderWarrantySvg(tpl, item, opts);
   const W = tpl.widthMm, H = tpl.heightMm, fs = tpl.fontScale;
   const FP = LABEL_FONTS.find((f) => f.key === tpl.fontKey) ?? LABEL_FONTS[0];
   const fam = FP.family.replace(/"/g, "'");
@@ -465,6 +470,95 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
     });
     parts.push(svg);
   }
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}mm" height="${H}mm" viewBox="0 0 ${W} ${H}">${parts.join("")}</svg>`;
+}
+
+// ---------------------------------------------------------------------------
+// Warranty sticker. Same physical template (size, font, logo) as the price
+// tags so it prints on the same roll, but its own layout: a QR code fills the
+// right side (the customer's registration link), and the left column stacks
+// logo → "1 YEAR WARRANTY" → item → condition/platform → sold date → number +
+// "scan to register". Nothing here is a template toggle — a warranty sticker
+// always shows the same facts — so the designer's show/hide flags don't apply.
+// ---------------------------------------------------------------------------
+export function renderWarrantySvg(tpl: LabelTemplate, item: LabelItem, opts?: { preview?: boolean }): string {
+  const w = item.warranty!;
+  const W = tpl.widthMm, H = tpl.heightMm, fs = tpl.fontScale;
+  const FP = LABEL_FONTS.find((f) => f.key === tpl.fontKey) ?? LABEL_FONTS[0];
+  const fam = FP.family.replace(/"/g, "'");
+  const fsc = FP.scale ?? 1;
+  const chW = FP.charW ?? 0.54;
+  const wHeavy = FP.noBold ? "500" : "800";
+  const wMid = FP.noBold ? "400" : "700";
+  const INSET = 1.6;
+  const parts: string[] = [];
+  parts.push(`<rect x="0" y="0" width="${W}" height="${H}" fill="#fff"/>`);
+
+  // QR on the right: as tall as the label allows, capped so the text column
+  // keeps at least ~55% of the width. Quiet zone of 2 modules is inside qrSz.
+  let qr: ReturnType<typeof encodeQr> | null = null;
+  try { qr = encodeQr(w.url, "M"); } catch { /* unencodable → text-only sticker */ }
+  const qrSz = qr ? Math.min(H - INSET * 2, W * 0.42) : 0;
+  const qrX = W - INSET - qrSz;
+  if (qr) {
+    parts.push(qrSvgGroup(qr, qrX, (H - qrSz) / 2, qrSz, 2));
+    if (opts?.preview) parts.push(`<rect x="${qrX.toFixed(2)}" y="${((H - qrSz) / 2).toFixed(2)}" width="${qrSz.toFixed(2)}" height="${qrSz.toFixed(2)}" fill="none" stroke="#bbb" stroke-width="0.2" stroke-dasharray="1,0.8"/>`);
+  }
+
+  // Text column. Widths are ESTIMATED from the font's average char width
+  // (bold caps run ~1.3× the mixed-case average); since an estimate can miss,
+  // every line that comes near the column edge also gets an SVG textLength so
+  // it can never run under the QR — a hair of letter-spacing beats overlap.
+  const cx0 = INSET, colW = (qr ? qrX - 1.2 : W - INSET) - cx0;
+  const CAPS_BOLD = 1.3, MIXED_BOLD = 1.05, MIXED = 0.95;
+  const est = (text: string, size: number, factor: number) => Math.max(1, text.length) * size * chW * factor;
+  const fit = (text: string, maxSize: number, minSize: number, factor: number) => Math.max(minSize, Math.min(maxSize, colW / (Math.max(1, text.length) * chW * factor)));
+  const line = (text: string, y: number, size: number, weight: string, factor: number, extra = "") => {
+    const w = est(text, size, factor);
+    const tl = w > colW ? ` textLength="${colW.toFixed(2)}" lengthAdjust="spacingAndGlyphs"` : w > colW * 0.75 ? ` textLength="${w.toFixed(2)}" lengthAdjust="spacingAndGlyphs"` : "";
+    return `<text x="${cx0.toFixed(2)}" y="${y.toFixed(2)}" font-family="${fam}" font-weight="${weight}" font-size="${size.toFixed(2)}"${tl}${extra} fill="#000">${esc(text)}</text>`;
+  };
+  let y = INSET;
+
+  // Logo (image) or store name — same asset as the price tags.
+  const logoH = Math.min(tpl.logoHeightMm, H * 0.22);
+  if (tpl.logoUrl) {
+    parts.push(`<image href="${esc(tpl.logoUrl)}" x="${cx0.toFixed(2)}" y="${y.toFixed(2)}" width="${Math.min(colW, logoH * 3).toFixed(2)}" height="${logoH.toFixed(2)}" preserveAspectRatio="xMinYMid meet"/>`);
+    y += logoH + 0.8;
+  } else if (item.storeName) {
+    const sz = 2.0 * fs * fsc;
+    y += sz;
+    parts.push(line(item.storeName.toUpperCase().slice(0, 24), y, sz, wMid, CAPS_BOLD, ' letter-spacing="0.25"'));
+    y += 0.9;
+  }
+
+  // Headline: "1 YEAR WARRANTY" — the biggest thing on the sticker.
+  const head = `${w.lengthText} Warranty`.toUpperCase();
+  const headSz = fit(head, 4.6 * fs * fsc, 2.4 * fs, CAPS_BOLD);
+  y += headSz * 0.95;
+  parts.push(line(head, y, headSz, wHeavy, CAPS_BOLD, FP.titleItalic ? ' font-style="italic"' : ""));
+  y += headSz * 0.35;
+
+  // Item title, up to 2 lines.
+  const titleSz = fit(w.itemTitle.slice(0, 24), 3.2 * fs * fsc, 2.2 * fs, MIXED_BOLD);
+  const maxChars = Math.max(8, Math.floor(colW / (titleSz * chW * MIXED_BOLD)));
+  for (const l of wrapTitle(w.itemTitle.replace(/\s+/g, " ").trim(), maxChars, 2)) {
+    y += titleSz * 1.05;
+    parts.push(line(l, y, titleSz, wMid, MIXED_BOLD));
+  }
+
+  // Meta: condition · platform, then the sale date.
+  const metaSz = 2.2 * fs * fsc * (FP.metaScale ?? 1);
+  const meta = [w.condition, w.platform].filter(Boolean).join("  ·  ");
+  if (meta) { y += metaSz * 1.25; parts.push(line(meta.slice(0, 40), y, metaSz, "400", MIXED)); }
+  y += metaSz * 1.25;
+  parts.push(line(`Sold ${w.saleDate}`, y, metaSz, "400", MIXED));
+
+  // Footer pinned to the bottom: warranty number + call to action.
+  const footSz = 2.0 * fs * fsc;
+  const footY = H - INSET - 0.3;
+  parts.push(line(`${w.warrantyNo} · Scan to register`, footY, footSz, wMid, MIXED_BOLD, ' letter-spacing="0.1"'));
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}mm" height="${H}mm" viewBox="0 0 ${W} ${H}">${parts.join("")}</svg>`;
 }

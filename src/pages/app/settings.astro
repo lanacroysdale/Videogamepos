@@ -10,6 +10,9 @@ import { labelTemplates, LABEL_FONTS } from "../../lib/labels";
 import type { StoreDepartment, StoreInventoryType, StoreLocation } from "../../lib/types";
 import { createSupabaseAdminClient } from "../../lib/supabase";
 import { PERMISSIONS, PERMISSION_GROUPS, loadRoles, roleName } from "../../lib/permissions";
+import { NOTIFICATION_TYPES, notifyRouting } from "../../lib/notifications";
+import { lengthLabel } from "../../lib/warranty";
+import { SITE } from "../../consts";
 
 const supabase = Astro.locals.supabase;
 // Every panel is gated by a permission (Settings → Roles & permissions); the
@@ -77,6 +80,18 @@ if (canInvConfig) {
   locations = (locRows as StoreLocation[]) ?? [];
 }
 const aiSt = aiStatus(ai.provider);
+// Warranty plans (Settings → Warranty) — empty pre-migration → setup note.
+const canWarranty = can("warranty.manage");
+let warrantyPlans: any[] = [];
+let warrantyReady = false;
+if (canWarranty) {
+  const { data: wp, error: wpErr } = await supabase.from("warranty_plans").select("*").order("sort_order").order("name");
+  warrantyReady = !wpErr;
+  warrantyPlans = wp ?? [];
+}
+// Inbox routing: which roles each event type reaches (owner always does).
+const routing = notifyRouting(row?.settings, roles);
+const routableRoles = roles.filter((r) => r.key !== "owner");
 const aiProviderLabel = aiSt.provider === "gemini" ? "Gemini" : aiSt.provider === "anthropic" ? "Claude" : "";
 const minPriceDollars = (ls.lowStockMinPriceCents / 100).toFixed(2);
 const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
@@ -647,6 +662,113 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     </div>
   </div>
 
+  <div class="pos-panel set-panel" style="margin-top:1.25rem;" id="inbox">
+    <h2>Inbox routing</h2>
+    <p class="muted set-desc">
+      Who gets each kind of notification in the POS <strong>Inbox</strong> (and as a desktop alert). New form submissions
+      go to managers by default. The owner always sees everything.
+    </p>
+    <table class="tbl" style="font-size:0.88rem;">
+      <thead><tr><th>Event</th>{routableRoles.map((r) => <th style="text-align:center;">{r.name}</th>)}</tr></thead>
+      <tbody>
+        {NOTIFICATION_TYPES.map((t) => (
+          <tr>
+            <td><strong>{t.icon} {t.label}</strong><span class="muted-2" style="display:block;font-size:0.78rem;">{t.description}</span></td>
+            {routableRoles.map((r) => <td style="text-align:center;"><input type="checkbox" data-route={t.key} data-role={r.key} checked={routing[t.key].includes(r.key)} /></td>)}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+    <div class="set-actions">
+      <button id="route-save" class="btn btn-primary">Save routing</button>
+      <span id="route-status" class="muted"></span>
+    </div>
+  </div>
+
+  {canWarranty && (
+    <div class="pos-panel set-panel" style="margin-top:1.25rem;" id="warranty">
+      <h2>Warranty</h2>
+      <p class="muted set-desc">
+        Your warranty as data: name, length, what's covered and what isn't. Staff pick a plan when they print a
+        warranty sticker (the <strong>Warranty</strong> tab); customers see these terms when they register.
+        Editing a plan changes future stickers only — every existing warranty keeps the terms it was sold with.
+      </p>
+      {!warrantyReady && <p class="empty">Apply the <code>20260924000001_warranty_inbox</code> migration in Supabase to enable warranties.</p>}
+      {warrantyReady && (
+        <div class="wp-layout">
+          <div class="wp-left">
+            <div class="lt-list-h">Plans — click one to edit</div>
+            <div id="wp-list" class="lt-list">
+              {warrantyPlans.map((p) => (
+                <button type="button" class="lt-item" data-wp={p.id}>
+                  <strong>{p.name}</strong> <span class="muted-2">{lengthLabel(p.months)}{p.is_default ? " · ⭐ default" : ""}{p.is_active ? "" : " · inactive"}</span>
+                </button>
+              ))}
+            </div>
+            <div class="dept-actions"><button id="wp-add" class="btn btn-ghost btn-sm" type="button">+ Plan</button></div>
+          </div>
+          <form id="wp-form" class="wp-form" autocomplete="off">
+            <input type="hidden" id="wp-id" />
+            <div class="dm-grid">
+              <label class="dm-field" style="flex:2;">Plan name<input id="wp-name" maxlength="80" placeholder="1 Year Limited Warranty" required /></label>
+              <label class="dm-field">Length (months)<input id="wp-months" type="number" min="1" max="120" step="1" value="12" required /></label>
+              <label class="dm-field">Short key <span class="muted-2">(URL)</span><input id="wp-key" maxlength="24" placeholder="1yr" /></label>
+            </div>
+            <label class="dm-field">One-line summary<input id="wp-summary" maxlength="300" placeholder="Covers defects in materials and workmanship for one year from the date of purchase." /></label>
+            <div class="dm-grid">
+              <label class="dm-field">What's covered <span class="muted-2">(one per line)</span><textarea id="wp-coverage" rows="5"></textarea></label>
+              <label class="dm-field">What's not covered <span class="muted-2">(one per line)</span><textarea id="wp-exclusions" rows="5"></textarea></label>
+            </div>
+            <label class="dm-field">Fine print / how to claim<textarea id="wp-terms" rows="3"></textarea></label>
+            <div class="dm-grid" style="align-items:center;">
+              <label class="dm-field" style="flex:0 0 12rem;">Register within (days)<input id="wp-window" type="number" min="1" max="3650" step="1" value="60" /></label>
+              <label class="dm-toggle"><input type="checkbox" id="wp-active" checked /> Active</label>
+              <label class="dm-toggle"><input type="checkbox" id="wp-default" /> ⭐ Default plan</label>
+            </div>
+            <div class="set-actions">
+              <button id="wp-save" class="btn btn-primary" type="submit">Save plan</button>
+              <button id="wp-del" class="btn btn-ghost" type="button">Delete</button>
+              <span id="wp-status" class="muted"></span>
+            </div>
+          </form>
+        </div>
+      )}
+
+      <script type="application/json" id="wp-data" set:html={JSON.stringify(warrantyPlans)}></script>
+      <div class="wp-qr">
+        <h3 style="margin:0 0 0.3rem;">📱 QR code generator</h3>
+        <p class="muted set-desc">
+          A QR for flyers, business cards and the booth: it opens the public registration page (no sticker needed —
+          those registrations land in the Inbox for you to confirm). Pick a plan or paste any address on the site.
+        </p>
+        <div class="dm-grid" style="align-items:flex-end;">
+          <label class="dm-field" style="flex:2;">Link
+            <select id="qr-preset">
+              <option value="/warranty">Warranty registration (default plan)</option>
+              {warrantyPlans.filter((p) => p.is_active).map((p) => <option value={`/warranty?plan=${p.key}`}>Warranty registration · {p.name}</option>)}
+              <option value="/">Home page</option>
+              <option value="/sell">Sell your games</option>
+              <option value="custom">Custom…</option>
+            </select>
+          </label>
+          <label class="dm-field" style="flex:2;">URL<input id="qr-url" value={`${SITE.url}/warranty`} /></label>
+          <label class="dm-field" style="flex:0 0 7rem;">Error correction
+            <select id="qr-ecc"><option value="M" selected>M (standard)</option><option value="L">L (smallest)</option><option value="Q">Q</option><option value="H">H (print-proof)</option></select>
+          </label>
+        </div>
+        <div class="qr-out">
+          <div id="qr-preview" class="qr-preview"></div>
+          <div class="qr-actions">
+            <p id="qr-info" class="muted-2" style="margin:0;"></p>
+            <button id="qr-svg" class="btn btn-ghost btn-sm" type="button">⬇ SVG (print)</button>
+            <button id="qr-png" class="btn btn-ghost btn-sm" type="button">⬇ PNG 1024px</button>
+            <button id="qr-copy" class="btn btn-ghost btn-sm" type="button">Copy link</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )}
+
   <div class="pos-panel set-panel" style="margin-top:1.25rem;">
     <h2>AI assistant</h2>
     <p class="muted set-desc">
@@ -818,6 +940,17 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   .lt-layout { display: flex; flex-direction: column; gap: 1.1rem; }
   .lt-right { order: -1; }
   .lt-list { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.6rem; }
+  .lt-item { font: inherit; text-align: left; padding: 0.4rem 0.6rem; background: rgba(255,255,255,0.03); color: var(--text); border: 1px solid var(--border-strong); cursor: pointer; }
+  .lt-item.active { border-color: var(--cyan); }
+  .wp-layout { display: grid; gap: 1rem; grid-template-columns: minmax(200px, 260px) 1fr; align-items: start; }
+  @media (max-width: 900px) { .wp-layout { grid-template-columns: 1fr; } }
+  .wp-form .dm-field textarea { font: inherit; font-weight: 400; padding: 0.45rem 0.55rem; background: var(--bg); color: var(--text); border: 1px solid var(--border-strong); resize: vertical; }
+  .wp-form .dm-field { margin-bottom: 0.5rem; }
+  .wp-qr { border-top: 1px solid var(--border); margin-top: 1.2rem; padding-top: 1rem; }
+  .qr-out { display: flex; gap: 1rem; align-items: flex-start; flex-wrap: wrap; margin-top: 0.6rem; }
+  .qr-preview { background: #fff; padding: 8px; line-height: 0; }
+  .qr-preview :global(svg) { width: 220px; height: 220px; display: block; }
+  .qr-actions { display: flex; flex-direction: column; gap: 0.4rem; align-items: flex-start; max-width: 28rem; }
   .lt-list-h { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted-2, #8a94a3); font-weight: 700; margin-bottom: 0.35rem; }
   /* .lt-chip + .lt-preview svg rules live in the is:global block — those nodes
      are runtime-inserted, so scoped selectors can never match them. */
@@ -885,6 +1018,7 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
 
 <script>
   import { renderLabelSvg, barcodeFits, ensureLabelFont, DEFAULT_TEMPLATE } from "../../lib/labels";
+  import { encodeQr, qrSvg } from "../../lib/qr";
   const $ = (id: string) => document.getElementById(id) as HTMLInputElement;
   const save = async (body: any, statusEl: HTMLElement, btn: HTMLButtonElement) => {
     btn.disabled = true; statusEl.textContent = "Saving…";
@@ -1491,6 +1625,115 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     });
   }
 
+  // ---- Inbox routing ----
+  document.getElementById("route-save")?.addEventListener("click", (e) => {
+    const routing: Record<string, string[]> = {};
+    document.querySelectorAll<HTMLInputElement>("input[data-route]").forEach((cb) => {
+      (routing[cb.dataset.route!] ||= []);
+      if (cb.checked) routing[cb.dataset.route!].push(cb.dataset.role!);
+    });
+    save({ notifyRouting: routing }, document.getElementById("route-status")!, e.currentTarget as HTMLButtonElement);
+  });
+
+  // ---- Warranty plans ----
+  const esc = (v: any) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
+  const wpForm = document.getElementById("wp-form") as HTMLFormElement | null;
+  if (wpForm) {
+    const wpList = document.getElementById("wp-list")!;
+    const wpStatus = document.getElementById("wp-status")!;
+    const wpDel = document.getElementById("wp-del") as HTMLButtonElement;
+    let wpPlans: any[] = [];
+    const f = (id: string) => document.getElementById(id) as HTMLInputElement;
+    const wpCall = (body: any) => fetch("/api/pos/warranty", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+      .then(async (r) => { const j = await r.json(); if (!r.ok || !j.ok) throw new Error(j.error || "Failed"); return j; });
+    const wpRenderList = () => {
+      wpList.innerHTML = wpPlans.map((p) => `<button type="button" class="lt-item${p.id === f("wp-id").value ? " active" : ""}" data-wp="${p.id}"><strong>${esc(p.name)}</strong> <span class="muted-2">${p.months % 12 === 0 ? p.months / 12 + " yr" : p.months + " mo"}${p.is_default ? " · ⭐ default" : ""}${p.is_active ? "" : " · inactive"}</span></button>`).join("");
+      wpList.querySelectorAll<HTMLElement>("[data-wp]").forEach((b) => b.addEventListener("click", () => wpLoad(wpPlans.find((p) => p.id === b.dataset.wp))));
+    };
+    const wpLoad = (p: any) => {
+      f("wp-id").value = p?.id ?? "";
+      f("wp-name").value = p?.name ?? "";
+      f("wp-months").value = String(p?.months ?? 12);
+      f("wp-key").value = p?.key ?? "";
+      f("wp-summary").value = p?.summary ?? "";
+      (document.getElementById("wp-coverage") as HTMLTextAreaElement).value = p?.coverage ?? "";
+      (document.getElementById("wp-exclusions") as HTMLTextAreaElement).value = p?.exclusions ?? "";
+      (document.getElementById("wp-terms") as HTMLTextAreaElement).value = p?.terms ?? "";
+      f("wp-window").value = String(p?.registration_window_days ?? 60);
+      f("wp-active").checked = p ? p.is_active !== false : true;
+      f("wp-default").checked = !!p?.is_default;
+      wpDel.hidden = !p;
+      wpStatus.textContent = "";
+      wpRenderList();
+    };
+    // Initial plans come from the server-rendered list's dataset + a fetch-free
+    // bootstrap: read them off the JSON the page embeds.
+    try { wpPlans = JSON.parse(document.getElementById("wp-data")!.textContent!); } catch { wpPlans = []; }
+    wpLoad(wpPlans.find((p) => p.is_default) ?? wpPlans[0] ?? null);
+    document.getElementById("wp-add")!.addEventListener("click", () => wpLoad(null));
+    wpForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      wpStatus.textContent = "Saving…";
+      try {
+        const j = await wpCall({ action: "savePlan", id: f("wp-id").value || null, plan: {
+          name: f("wp-name").value, months: f("wp-months").value, key: f("wp-key").value, summary: f("wp-summary").value,
+          coverage: (document.getElementById("wp-coverage") as HTMLTextAreaElement).value,
+          exclusions: (document.getElementById("wp-exclusions") as HTMLTextAreaElement).value,
+          terms: (document.getElementById("wp-terms") as HTMLTextAreaElement).value,
+          registration_window_days: f("wp-window").value, is_active: f("wp-active").checked, is_default: f("wp-default").checked,
+        } });
+        const i = wpPlans.findIndex((p) => p.id === j.plan.id);
+        if (j.plan.is_default) wpPlans.forEach((p) => (p.is_default = false));
+        if (i >= 0) wpPlans[i] = j.plan; else wpPlans.push(j.plan);
+        wpLoad(j.plan);
+        wpStatus.textContent = "✓ Saved";
+      } catch (err: any) { wpStatus.textContent = ""; alert(err.message); }
+    });
+    wpDel.addEventListener("click", async () => {
+      const id = f("wp-id").value; if (!id) return;
+      if (!confirm(`Delete "${f("wp-name").value}"? (Plans with registrations can't be deleted — mark them inactive instead.)`)) return;
+      try { await wpCall({ action: "deletePlan", id }); wpPlans = wpPlans.filter((p) => p.id !== id); wpLoad(wpPlans[0] ?? null); }
+      catch (err: any) { alert(err.message); }
+    });
+  }
+
+  // ---- QR generator ----
+  const qrUrl = document.getElementById("qr-url") as HTMLInputElement | null;
+  if (qrUrl) {
+    const preset = document.getElementById("qr-preset") as HTMLSelectElement;
+    const eccSel = document.getElementById("qr-ecc") as HTMLSelectElement;
+    const preview = document.getElementById("qr-preview")!;
+    const info = document.getElementById("qr-info")!;
+    const base = qrUrl.value.replace(/\/warranty$/, "");
+    const draw = () => {
+      const url = qrUrl.value.trim();
+      if (!url) { preview.innerHTML = ""; info.textContent = ""; return; }
+      try {
+        const q = encodeQr(url, eccSel.value as any);
+        preview.innerHTML = qrSvg(url, { ecc: eccSel.value as any, px: 220 });
+        info.textContent = `${q.size}×${q.size} modules (version ${q.version}, level ${q.ecc}) — ${url.length} characters. Shorter links scan easier at small sizes.`;
+      } catch (e: any) { preview.innerHTML = ""; info.textContent = e.message; }
+    };
+    preset.addEventListener("change", () => { if (preset.value !== "custom") qrUrl.value = base + preset.value; draw(); });
+    qrUrl.addEventListener("input", () => { preset.value = "custom"; draw(); });
+    eccSel.addEventListener("change", draw);
+    const dl = (blob: Blob, name: string) => { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); };
+    const fname = () => "qr-" + qrUrl.value.replace(/^https?:\/\//, "").replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").slice(0, 40);
+    document.getElementById("qr-svg")!.addEventListener("click", () => dl(new Blob([qrSvg(qrUrl.value.trim(), { ecc: eccSel.value as any, px: 1024 })], { type: "image/svg+xml" }), fname() + ".svg"));
+    document.getElementById("qr-png")!.addEventListener("click", () => {
+      const svg = qrSvg(qrUrl.value.trim(), { ecc: eccSel.value as any, px: 1024 });
+      const img = new Image();
+      img.onload = () => {
+        const c = document.createElement("canvas"); c.width = 1024; c.height = 1024;
+        const ctx = c.getContext("2d")!; ctx.imageSmoothingEnabled = false; ctx.drawImage(img, 0, 0, 1024, 1024);
+        c.toBlob((b) => b && dl(b, fname() + ".png"), "image/png");
+      };
+      img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+    });
+    document.getElementById("qr-copy")!.addEventListener("click", (e) => { navigator.clipboard.writeText(qrUrl.value.trim()).then(() => { const b = e.currentTarget as HTMLElement; b.textContent = "✓ Copied"; setTimeout(() => (b.textContent = "Copy link"), 1200); }); });
+    draw();
+  }
+
   // ---- Accordionize the settings sections ----
   // Runs LAST: every listener above is already attached, and moving nodes into
   // the .acc-body wrapper preserves them. All sections collapse by default;
@@ -1509,6 +1752,8 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     [/^Food/, "🍺", "Menu · bar tabs · gratuity"],
     [/^Tasks/, "✅", "Completion notifications"],
     [/^Lead/, "📥", "Sell-form email alerts"],
+    [/^Inbox/, "📨", "Who gets which notifications"],
+    [/^Warranty/, "🛡️", "Plans · terms · QR generator"],
     [/^AI/, "✨", "Provider · quality · brand voice"],
     [/^Danger/, "🧨", "Full backup · inventory reset"],
   ];

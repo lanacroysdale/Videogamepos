@@ -1,5 +1,5 @@
 ---
-import { SITE, EBAY, NAV, YEAR } from "../consts";
+import { SITE, EBAY, NAV, FOOTER_LINKS, YEAR } from "../consts";
 import SocialLinks from "./SocialLinks.astro";
 ---
 
@@ -25,6 +25,7 @@ import SocialLinks from "./SocialLinks.astro";
         <ul>
           {NAV.map((item) => <li><a href={item.href}>{item.label}</a></li>)}
           <li><a href={EBAY.storeUrl} target="_blank" rel="noopener">Shop on eBay ↗</a></li>
+          {FOOTER_LINKS.map((item) => <li><a href={item.href}>{item.label}</a></li>)}
         </ul>
       </div>
 

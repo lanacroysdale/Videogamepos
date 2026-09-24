@@ -12,7 +12,7 @@
 export type PermissionKey =
   | "reports.view" | "pricing.manage" | "settings.manage" | "menu.manage"
   | "inventory.manage" | "inventory_config.manage"
-  | "returns.override" | "tabs.close_all" | "customers.merge"
+  | "returns.override" | "tabs.close_all" | "customers.merge" | "warranty.manage"
   | "shifts.manage" | "tasks.manage" | "sops.manage" | "sops.approve"
   | "data.elevated" | "departments.manage" | "team.manage" | "team.remove" | "roles.manage" | "maintenance.manage";
 
@@ -38,6 +38,7 @@ export const PERMISSIONS: PermissionDef[] = [
   { key: "returns.override", group: "Sales", label: "Approve late returns", description: "Process a return after the return window has passed." },
   { key: "tabs.close_all", group: "Sales", label: "Close all bar tabs", description: "End-of-night close-out of every open tab." },
   { key: "customers.merge", group: "Sales", label: "Merge customers", description: "Merge duplicate customer records." },
+  { key: "warranty.manage", group: "Sales", label: "Warranty plans", description: "Edit the store's warranty plans and terms (Settings → Warranty), approve self-registrations, and void warranties. Anyone can print warranty stickers." },
   // ---- Staff ----
   { key: "shifts.manage", group: "Staff", label: "Schedule", description: "Add and remove scheduled shifts." },
   { key: "tasks.manage", group: "Staff", label: "To-do categories & checklists", description: "Add or remove to-do categories, edit recurring checklists, see managers-only lists, and receive task-completion notifications." },
@@ -68,7 +69,7 @@ export interface StoreRole {
 export const SYSTEM_ROLE_KEYS = ["owner", "developer", "manager", "cashier"] as const;
 const MANAGER_DEFAULTS: PermissionKey[] = [
   "reports.view", "pricing.manage", "settings.manage", "menu.manage", "inventory.manage", "inventory_config.manage",
-  "returns.override", "tabs.close_all", "customers.merge", "shifts.manage", "tasks.manage", "sops.manage", "data.elevated",
+  "returns.override", "tabs.close_all", "customers.merge", "warranty.manage", "shifts.manage", "tasks.manage", "sops.manage", "data.elevated",
 ];
 export const DEFAULT_ROLES: StoreRole[] = [
   { key: "owner", name: "Owner", description: "Full access to everything, including the team and this permission matrix.", is_system: true, sort_order: 0, permissions: [] },

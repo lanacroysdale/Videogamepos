@@ -1,0 +1,169 @@
+---
+export const prerender = false;
+import Layout from "../layouts/Layout.astro";
+import { createSupabaseAdminClient } from "../lib/supabase";
+import { SITE } from "../consts";
+import { lines, lengthLabel } from "../lib/warranty";
+
+// The general warranty page: what the store's warranty is (from the plans
+// managers maintain in Settings) plus a self-registration form for anyone
+// who didn't get a sticker (flyer QR, business card, "I lost my receipt
+// slip"). Those registrations land in the POS inbox for staff to confirm.
+// ?plan=<key> preselects a plan (the QR generator in Settings produces these).
+const admin = createSupabaseAdminClient();
+const { data: planRows } = await admin.from("warranty_plans").select("*").eq("is_active", true).order("sort_order").order("name");
+const plans = (planRows ?? []) as any[];
+const wantKey = Astro.url.searchParams.get("plan") ?? "";
+const selected = plans.find((p) => p.key === wantKey) ?? plans.find((p) => p.is_default) ?? plans[0] ?? null;
+const { data: srow } = await admin.from("store_settings").select("store_name").eq("id", 1).maybeSingle();
+const storeName = (srow as any)?.store_name || SITE.name;
+const today = new Date().toISOString().slice(0, 10);
+---
+
+<Layout title="Warranty Registration" description={`Register your ${storeName} product warranty and see what's covered.`}>
+  <section class="section--tight sell-hero">
+    <div class="container">
+      <span class="eyebrow">Warranty</span>
+      <h1>Register your <span class="grad">warranty</span></h1>
+      <p class="lead">
+        Bought a refurbished console or accessory from us? Register it here and we'll email you your proof of warranty.
+        Got a sticker with a QR code? Scan it instead — your purchase details are already filled in.
+      </p>
+    </div>
+  </section>
+
+  <section class="section--tight">
+    <div class="container narrow">
+      {!selected && (
+        <div class="panel wcard"><p class="lead">Warranty registration isn't open yet. Email <a href={`mailto:${SITE.email}`}>{SITE.email}</a> with your receipt and we'll take care of you.</p></div>
+      )}
+      {selected && (
+        <div class="panel wcard">
+          <form id="wform" novalidate>
+            <div class="hp" aria-hidden="true"><label>Company<input type="text" name="company" tabindex="-1" autocomplete="off" /></label></div>
+            {plans.length > 1 && (
+              <div class="field">
+                <label for="w-plan">Warranty</label>
+                <select id="w-plan" name="plan_key">{plans.map((p) => <option value={p.key} selected={p.key === selected.key}>{p.name} · {lengthLabel(p.months)}</option>)}</select>
+              </div>
+            )}
+            {plans.length === 1 && <input type="hidden" name="plan_key" value={selected.key} />}
+            <h2>What did you buy?</h2>
+            <div class="field"><label for="w-item">Item <span class="req">*</span></label><input id="w-item" name="item_title" required maxlength="140" placeholder="e.g. Refurbished Nintendo 64 console" /></div>
+            <div class="row">
+              <div class="field"><label for="w-platform">Platform <span class="opt">(optional)</span></label><input id="w-platform" name="item_platform" maxlength="60" placeholder="Nintendo 64" /></div>
+              <div class="field"><label for="w-serial">Serial number <span class="opt">(optional)</span></label><input id="w-serial" name="serial" maxlength="80" placeholder="If it has one" /></div>
+            </div>
+            <div class="row">
+              <div class="field"><label for="w-date">Purchase date <span class="req">*</span></label><input id="w-date" name="sale_date" type="date" required max={today} /></div>
+              <div class="field"><label for="w-receipt">Receipt # or where you bought it <span class="opt">(optional)</span></label><input id="w-receipt" name="receipt" maxlength="120" placeholder="e.g. #1042, or PRGE booth" /></div>
+            </div>
+            <h2>Your details</h2>
+            <div class="row">
+              <div class="field"><label for="w-first">First name <span class="req">*</span></label><input id="w-first" name="first" required autocomplete="given-name" /></div>
+              <div class="field"><label for="w-last">Last name</label><input id="w-last" name="last" autocomplete="family-name" /></div>
+            </div>
+            <div class="row">
+              <div class="field"><label for="w-email">Email <span class="req">*</span></label><input id="w-email" name="email" type="email" required autocomplete="email" placeholder="you@email.com" /><p class="hint">Your proof of warranty is emailed here.</p></div>
+              <div class="field"><label for="w-phone">Phone <span class="opt">(optional)</span></label><input id="w-phone" name="phone" type="tel" autocomplete="tel" /></div>
+            </div>
+            <label class="check"><input type="checkbox" name="subscribe" /> Send me occasional news and deals from {storeName}</label>
+            <p class="form-status" role="status" aria-live="polite"></p>
+            <button type="submit" class="btn btn-primary btn-block submit">Register my warranty →</button>
+            <p class="fineprint">We'll confirm the purchase against our records and email your proof of warranty. See our <a href="/privacy">privacy policy</a>.</p>
+          </form>
+          <div class="form-success" hidden>
+            <div class="check-mark" aria-hidden="true">✓</div>
+            <h3>Registration received</h3>
+            <p>Thanks! Your warranty number is <strong id="w-no"></strong>. We'll confirm the purchase and email your proof of warranty — usually within a day.</p>
+          </div>
+        </div>
+      )}
+    </div>
+  </section>
+
+  {selected && (
+    <section class="section" id="terms">
+      <div class="container narrow">
+        <div class="section-head center">
+          <span class="eyebrow">The fine print</span>
+          <h2>{selected.name}</h2>
+          {selected.summary && <p class="lead">{selected.summary}</p>}
+        </div>
+        <div class="terms-grid">
+          {lines(selected.coverage).length > 0 && (<div class="panel tcol"><h3>✅ What's covered</h3><ul>{lines(selected.coverage).map((c) => <li>{c}</li>)}</ul></div>)}
+          {lines(selected.exclusions).length > 0 && (<div class="panel tcol"><h3>🚫 What's not</h3><ul>{lines(selected.exclusions).map((c) => <li>{c}</li>)}</ul></div>)}
+        </div>
+        {selected.terms && <p class="fine">{selected.terms}</p>}
+        <p class="fine">Coverage runs {lengthLabel(selected.months).toLowerCase()} from the purchase date. Register within {selected.registration_window_days} days of purchase. Questions: <a href={`mailto:${SITE.email}`}>{SITE.email}</a> · {SITE.phoneDisplay}.</p>
+      </div>
+    </section>
+  )}
+</Layout>
+
+<style>
+  .wcard { padding: clamp(1.25rem, 1rem + 1.5vw, 2rem); }
+  .wcard h2 { font-size: 1.05rem; margin: 0.5rem 0 0.8rem; }
+  .wcard h2 + .field, .row + h2 { margin-top: 0.4rem; }
+  .hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+  .row { display: grid; gap: 1rem; }
+  @media (min-width: 560px) { .row { grid-template-columns: 1fr 1fr; } }
+  .field { display: grid; gap: 0.4rem; margin-bottom: 1rem; }
+  .field label { font-weight: 600; font-size: 0.92rem; }
+  .req { color: var(--magenta); }
+  .opt { color: var(--muted-2); font-weight: 500; }
+  input, select { width: 100%; padding: 0.75rem 0.9rem; background: rgba(0,0,0,0.25); border: 1px solid var(--border-strong); color: var(--text); }
+  input:focus, select:focus { outline: none; border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(44,230,224,0.18); }
+  .check { display: flex; gap: 0.5rem; align-items: flex-start; font-size: 0.9rem; margin-bottom: 1rem; }
+  .check input { width: auto; }
+  .hint, .fineprint, .fine { font-size: 0.84rem; color: var(--muted-2); margin: 0; }
+  .fineprint { text-align: center; margin-top: 0.8rem; }
+  .fine { margin-top: 1rem; color: var(--muted); }
+  .form-status:empty { display: none; }
+  .form-status { margin: 0.25rem 0 0.75rem; font-weight: 600; }
+  .form-status[data-state="error"] { color: #ff9aa2; }
+  .submit[aria-busy="true"] { opacity: 0.7; cursor: progress; }
+  .form-success { text-align: center; padding: 1rem 0.5rem; }
+  .check-mark { width: 64px; height: 64px; margin: 0 auto 1rem; display: grid; place-items: center; font-size: 2rem; font-weight: 800; color: var(--accent-ink); background: linear-gradient(135deg, var(--green), var(--cyan)); }
+  .terms-grid { display: grid; gap: 1rem; grid-template-columns: 1fr 1fr; }
+  @media (max-width: 640px) { .terms-grid { grid-template-columns: 1fr; } }
+  .tcol { padding: 1.2rem; }
+  .tcol h3 { font-size: 1rem; margin: 0 0 0.6rem; }
+  .tcol ul { margin: 0; padding-left: 1.2rem; }
+  .tcol li { margin: 0.25rem 0; }
+</style>
+
+<script>
+  const form = document.getElementById("wform") as HTMLFormElement | null;
+  if (form) {
+    const card = form.closest(".wcard")!;
+    const status = form.querySelector<HTMLElement>(".form-status")!;
+    const submit = form.querySelector<HTMLButtonElement>(".submit")!;
+    const success = card.querySelector<HTMLElement>(".form-success")!;
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (!form.checkValidity()) { form.reportValidity(); return; }
+      status.textContent = ""; status.dataset.state = "";
+      submit.setAttribute("aria-busy", "true"); submit.disabled = true;
+      const fd = new FormData(form);
+      const body: Record<string, any> = { mode: "public" };
+      fd.forEach((v, k) => (body[k] = v));
+      body.subscribe = fd.get("subscribe") === "on";
+      try {
+        const res = await fetch("/api/warranty/register", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+        const j = await res.json().catch(() => ({}));
+        if (res.ok && j.ok) {
+          (window as any).gtag?.("event", "warranty_register", { source: "public" });
+          document.getElementById("w-no")!.textContent = j.warranty_no || "";
+          form.hidden = true; success.hidden = false; success.scrollIntoView({ behavior: "smooth", block: "center" });
+          return;
+        }
+        status.textContent = j.error || "Sorry, something went wrong. Please try again.";
+        status.dataset.state = "error";
+      } catch {
+        status.textContent = "Network error — please check your connection and try again.";
+        status.dataset.state = "error";
+      } finally { submit.removeAttribute("aria-busy"); submit.disabled = false; }
+    });
+  }
+</script>

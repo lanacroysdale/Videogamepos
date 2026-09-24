@@ -8,7 +8,7 @@ import GbFilter from "../components/GbFilter.astro";
 interface Props {
   title: string;
   active?:
-    | "dashboard" | "leads" | "checkout" | "tradein" | "inventory" | "returns"
+    | "dashboard" | "inbox" | "leads" | "checkout" | "tradein" | "inventory" | "returns" | "warranty"
     | "repairs" | "schedule" | "customers" | "reports" | "pricing" | "settings" | "todos" | "sops" | "menu" | "tabs" | "scan";
 }
 const { title, active } = Astro.props;
@@ -38,11 +38,13 @@ let menuSections: { id: string; name: string }[] = [];
 
 const nav = [
   { key: "dashboard", label: "Dashboard", href: "/dashboard", icon: "🏠" },
+  { key: "inbox", label: "Inbox", href: "/inbox", icon: "📨" },
   { key: "leads", label: "Leads", href: "/leads", icon: "📥" },
   { key: "checkout", label: "Checkout", href: "/checkout", icon: "🧾" },
   ...(fnbEnabled ? [{ key: "tabs", label: "Tabs", href: "/tabs", icon: "🍻" }] : []),
   { key: "tradein", label: "Trade-In", href: "/trade-in", icon: "🔁" },
   { key: "returns", label: "Returns", href: "/returns", icon: "↩️" },
+  { key: "warranty", label: "Warranty", href: "/warranties", icon: "🛡️" },
   { key: "inventory", label: "Inventory", href: "/inventory", icon: "📦" },
   { key: "repairs", label: "Repairs", href: "/repairs", icon: "🛠️" },
   { key: "customers", label: "Customers", href: "/customers", icon: "🧑" },
@@ -96,6 +98,7 @@ const nav = [
               <a href={item.href} class={active === item.key ? "active" : ""}>
                 <span class="ico" aria-hidden="true">{item.icon}</span>
                 <span class="label">{item.label}</span>
+                {item.key === "inbox" && <span class="nav-badge" id="inbox-badge" title="Unread" hidden>0</span>}
                 {item.key === "leads" && <span class="nav-badge" id="leads-badge" hidden>0</span>}
                 {item.key === "inventory" && <span class="nav-badge warn" id="inv-badge" title="Listings needing images or data" hidden>0</span>}
                 {item.key === "todos" && <span class="nav-badge open" id="todos-badge" title="Open tasks" hidden>0</span>}
@@ -275,7 +278,37 @@ const nav = [
             .catch(function () {});
         }
 
+        // The inbox: unread badge + a desktop notification per new row this
+        // browser hasn't seen (the server already scoped rows to my role).
+        var inboxBadge = document.getElementById("inbox-badge");
+        var IKEY = "tl_inbox_seen_id";
+        var inboxFirst = !localStorage.getItem(IKEY);
+        function notifyInbox(n) {
+          if (!("Notification" in window) || Notification.permission !== "granted") return;
+          var x = new Notification(n.title, { body: n.body || "", tag: "tl-inbox-" + n.human_id });
+          x.onclick = function () { window.focus(); window.location.href = n.href || "/inbox"; x.close(); };
+        }
+        function pollInbox() {
+          var since = parseInt(localStorage.getItem(IKEY) || "0", 10) || 0;
+          fetch("/api/pos/notifications?since=" + since, { headers: { "x-requested-with": "fetch" } })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (j) {
+              if (!j || !j.ok) return;
+              if (inboxBadge) {
+                if (j.unread > 0) { inboxBadge.textContent = String(j.unread); inboxBadge.hidden = false; }
+                else { inboxBadge.hidden = true; }
+              }
+              if (j.maxId > since) {
+                if (!inboxFirst) (j.fresh || []).forEach(notifyInbox);
+                localStorage.setItem(IKEY, String(j.maxId));
+              }
+              inboxFirst = false;
+            })
+            .catch(function () {});
+        }
+
         function poll() {
+          pollInbox();
           fetch("/api/pos/leads?since=" + seen(), { headers: { "x-requested-with": "fetch" } })
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (j) {

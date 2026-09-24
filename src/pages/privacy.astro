@@ -1,0 +1,65 @@
+---
+export const prerender = true;
+import Layout from "../layouts/Layout.astro";
+import { SITE } from "../consts";
+
+// Plain-language privacy policy. Kept honest and short: it describes what the
+// site and POS actually collect today (forms, warranty registrations, orders,
+// analytics) — update it when a new data flow ships.
+const updated = "September 24, 2026";
+---
+
+<Layout title="Privacy Policy" description={`How ${SITE.name} collects, uses and protects your information.`}>
+  <section class="section--tight sell-hero">
+    <div class="container">
+      <span class="eyebrow">Legal</span>
+      <h1>Privacy <span class="grad">Policy</span></h1>
+      <p class="lead">We're a small game shop, not a data company. Here's exactly what we collect and why. Last updated {updated}.</p>
+    </div>
+  </section>
+
+  <section class="section--tight">
+    <div class="container narrow prose">
+      <h2>What we collect</h2>
+      <ul>
+        <li><strong>Contact details you give us</strong> — name, email and phone when you fill out our sell-your-games form, join the Free Club, register a warranty, or make a purchase.</li>
+        <li><strong>Purchase and warranty records</strong> — what you bought, when, its condition and serial number, and the warranty attached to it. We keep these so we can honor returns, warranties and repairs.</li>
+        <li><strong>Trade-in details</strong> — the items you sell us and, where the law requires it, identification for secondhand-goods records.</li>
+        <li><strong>Site analytics</strong> — anonymous usage statistics (pages visited, device type) through Google Analytics. No account is needed and we don't sell or share this.</li>
+      </ul>
+
+      <h2>How we use it</h2>
+      <ul>
+        <li>To respond to your sell requests and make you an offer.</li>
+        <li>To keep your warranty on file, email you proof of it, and handle claims.</li>
+        <li>To process orders, returns and store credit.</li>
+        <li>To send news and deals — <em>only</em> if you opted in. Every email has an unsubscribe link.</li>
+      </ul>
+
+      <h2>Your account</h2>
+      <p>Registering a warranty or making a purchase creates a customer record with us so your history is in one place. No password is created unless you choose to set one up. You can ask us to see, correct or delete your record at any time.</p>
+
+      <h2>What we don't do</h2>
+      <ul>
+        <li>We never sell your information.</li>
+        <li>We don't share it with anyone except the services that run the shop for us (payment processing, email delivery, our database host), and only what they need to do that job.</li>
+        <li>We don't store full card numbers — payments are handled by our payment processor.</li>
+      </ul>
+
+      <h2>Cookies</h2>
+      <p>The public site sets only the cookies needed for analytics. Our staff point-of-sale uses a login cookie for employees.</p>
+
+      <h2>Retention</h2>
+      <p>Purchase, warranty and trade-in records are kept as long as we need them to honor warranties and meet record-keeping laws. Leads and marketing signups are deleted on request.</p>
+
+      <h2>Questions or requests</h2>
+      <p>Email <a href={`mailto:${SITE.email}`}>{SITE.email}</a> or call {SITE.phoneDisplay}. We're in {SITE.location}.</p>
+    </div>
+  </section>
+</Layout>
+
+<style>
+  .prose h2 { font-size: 1.2rem; margin: 1.8rem 0 0.5rem; }
+  .prose ul { padding-left: 1.2rem; }
+  .prose li { margin: 0.35rem 0; }
+</style>

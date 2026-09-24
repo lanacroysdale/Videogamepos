@@ -1,5 +1,6 @@
 import type { APIRoute } from "astro";
 import { createSupabaseAdminClient } from "../../lib/supabase";
+import { createNotification } from "../../lib/notifications";
 
 // Runs as an on-demand serverless function (not prerendered).
 export const prerender = false;
@@ -59,7 +60,10 @@ export const POST: APIRoute = async ({ request, redirect }) => {
       source: "club_form",
     });
     if (leadErr) console.error("[subscribe] lead insert failed:", leadErr.message);
-    else captured = true;
+    else {
+      captured = true;
+      await createNotification(admin, { type: "club_signup", title: `${first} ${last}`.trim() + " joined the Free Club", body: email, href: "/leads" });
+    }
   } catch (err) {
     console.error("[subscribe] lead insert threw:", err);
   }

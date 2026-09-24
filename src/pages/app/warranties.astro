@@ -1,0 +1,422 @@
+---
+export const prerender = false;
+import AppLayout from "../../layouts/AppLayout.astro";
+import { labelTemplates } from "../../lib/labels";
+import { loadPosCatalog } from "../../lib/posCatalog";
+import { REG_STATUS, fmtDate, daysLeft, lengthLabel, readSnapshot } from "../../lib/warranty";
+
+// The counter page (POS host: /warranties — /warranty is the PUBLIC page): print a warranty QR sticker in a few keystrokes, then
+// work the registrations (what's pending, who registered, void/approve).
+const supabase = Astro.locals.supabase;
+const canManage = Astro.locals.can("warranty.manage");
+const focusId = Astro.url.searchParams.get("reg") ?? "";
+
+const [{ data: settings }, { data: plans, error: planErr }, { data: comp }, { data: grades }] = await Promise.all([
+  supabase.from("store_settings").select("store_name, settings").eq("id", 1).maybeSingle(),
+  supabase.from("warranty_plans").select("*").eq("is_active", true).order("sort_order").order("name"),
+  supabase.from("completeness_levels").select("code, label").eq("is_active", true).order("sort_order"),
+  supabase.from("condition_grades").select("code, label, icon").eq("is_active", true).order("rank"),
+]);
+const ready = !planErr;
+const storeName = (settings as any)?.store_name || "TimeLag";
+const REG_COLS = "id, human_id, warranty_no, token, status, source, plan_snapshot, item_title, item_platform, item_condition, serial, sale_date, coverage_start, coverage_end, customer_id, first_name, last_name, email, phone, notes, created_at, registered_at, voided_at, void_reason";
+// ?q= searches (warranty #, token, name, email, item, serial); otherwise the
+// 60 most recent.
+const q = (Astro.url.searchParams.get("q") ?? "").replace(/[,()*%\\]/g, " ").trim();
+let regQuery = supabase.from("warranty_registrations").select(REG_COLS).order("created_at", { ascending: false }).limit(60);
+if (q) {
+  const like = `%${q}%`;
+  regQuery = regQuery.or(`warranty_no.ilike.${like},token.eq.${q.toLowerCase()},first_name.ilike.${like},last_name.ilike.${like},email.ilike.${like},item_title.ilike.${like},serial.ilike.${like}`);
+}
+const { data: regs } = ready ? await regQuery : { data: [] };
+// The focused row (from an inbox link) is loaded even if it's older than the list.
+let focused: any = null;
+if (focusId && ready && !(regs ?? []).some((r: any) => r.id === focusId)) {
+  const { data } = await supabase.from("warranty_registrations").select(REG_COLS).eq("id", focusId).maybeSingle();
+  focused = data;
+}
+const rows = focused ? [focused, ...(regs ?? [])] : (regs ?? []);
+const catalog = ready ? await loadPosCatalog(supabase) : [];
+const condOptions = [
+  ...(comp ?? []).map((c: any) => c.label),
+  ...(grades ?? []).map((g: any) => (g.icon ? g.icon + " " : "") + g.label),
+];
+const pageData = {
+  plans: plans ?? [],
+  storeName,
+  lblTemplates: labelTemplates((settings as any)?.settings),
+  // Slim catalog for the typeahead (title/platform/condition/codes only).
+  catalog: catalog.map((r) => ({ v: r.variantId, t: r.title, p: r.platform, c: [r.completeness, r.condition].filter(Boolean).join(" · "), lc: r.labelCode, bc: r.barcode, ic: r.internalCode })),
+  regs: rows,
+  canManage,
+  focusId,
+};
+const counts = { pending: 0, active: 0, review: 0, void: 0 } as Record<string, number>;
+for (const r of rows) counts[r.status] = (counts[r.status] ?? 0) + 1;
+const who = (r: any) => `${r.first_name ?? ""} ${r.last_name ?? ""}`.trim();
+---
+
+<AppLayout title="Warranty" active="warranty">
+  {!ready && (
+    <div class="pos-panel" style="margin-bottom:1rem;">
+      <p class="empty">Warranty registration isn't set up yet — apply the <code>20260924000001_warranty_inbox</code> migration in Supabase, then reload.</p>
+    </div>
+  )}
+
+  <div class="wr-layout">
+    <!-- ---------------- New sticker ---------------- -->
+    <div class="pos-panel wr-new">
+      <h2>🛡️ New warranty sticker</h2>
+      <p class="muted set-desc">Type what was sold, pick the plan, print. The sticker's QR opens the customer's registration page with these details already filled in.</p>
+      <form id="wr-form" autocomplete="off">
+        <label class="dm-field" style="position:relative;">Item
+          <input id="wr-title" placeholder="Start typing — e.g. N64 console, Game Boy Color…" required maxlength="140" />
+          <div id="wr-suggest" class="wr-suggest" hidden></div>
+        </label>
+        <div class="dm-grid">
+          <label class="dm-field">Platform / category<input id="wr-platform" placeholder="Nintendo 64" maxlength="60" /></label>
+          <label class="dm-field">Condition
+            <input id="wr-cond" list="wr-cond-list" placeholder="Refurbished" maxlength="60" />
+            <datalist id="wr-cond-list">{["Refurbished", "New", "Used", ...condOptions].map((c) => <option value={c} />)}</datalist>
+          </label>
+        </div>
+        <div class="dm-grid">
+          <label class="dm-field">Serial <span class="muted-2">(optional)</span><input id="wr-serial" placeholder="NS1234567" maxlength="80" /></label>
+          <label class="dm-field">Sale date<input id="wr-date" type="date" required /></label>
+        </div>
+        <div class="dm-grid">
+          <label class="dm-field">Warranty plan
+            <select id="wr-plan" required>
+              {(plans ?? []).map((p: any) => <option value={p.id} selected={p.is_default}>{p.name} · {lengthLabel(p.months)}</option>)}
+            </select>
+          </label>
+          <label class="dm-field" style="position:relative;">Customer <span class="muted-2">(optional — if they're already in the system)</span>
+            <input id="wr-cust" placeholder="Search name / email / phone" />
+            <input type="hidden" id="wr-cust-id" />
+            <div id="wr-cust-suggest" class="wr-suggest" hidden></div>
+          </label>
+        </div>
+        <label class="dm-field">Notes <span class="muted-2">(staff only)</span><input id="wr-notes" placeholder="e.g. PRGE booth, paid cash" maxlength="1000" /></label>
+        <div class="dm-actions" style="margin-top:0.6rem;">
+          <button class="btn btn-primary" type="submit" id="wr-go">🖨 Generate &amp; print sticker</button>
+          <button class="btn btn-ghost" type="button" id="wr-go-only">Generate only</button>
+          <span id="wr-status" class="muted-2"></span>
+        </div>
+      </form>
+
+      <div id="wr-result" class="wr-result" hidden>
+        <div class="wr-result-head">
+          <strong id="wr-result-no"></strong>
+          <span class="pill cyan">Awaiting customer</span>
+          <span style="flex:1;"></span>
+          <button class="btn btn-ghost btn-sm" type="button" id="wr-result-print">🖨 Print</button>
+          <button class="btn btn-ghost btn-sm" type="button" id="wr-result-copy">Copy link</button>
+          <button class="btn btn-ghost btn-sm" type="button" id="wr-result-show">📱 Show QR</button>
+        </div>
+        <div id="wr-result-preview" class="wr-preview"></div>
+        <p class="muted-2" style="margin:0.4rem 0 0;">Sticker preview at the default label size. Adjust size, font and logo under Settings → Label templates.</p>
+      </div>
+    </div>
+
+    <!-- ---------------- Registrations ---------------- -->
+    <div class="pos-panel wr-list">
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;margin-bottom:0.8rem;">
+        <h2 style="margin:0;">Registrations</h2>
+        <span style="flex:1;"></span>
+        <div class="search" style="min-width:16rem;"><span class="mag">🔍</span><input id="wr-search" placeholder="Warranty #, name, email, item, serial" value={q} /></div>
+      </div>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.8rem;">
+        <button class="chip filt active" data-filt="">All</button>
+        {(Object.keys(REG_STATUS) as (keyof typeof REG_STATUS)[]).map((s) => (
+          <button class="chip filt" data-filt={s} title={REG_STATUS[s].hint}>{REG_STATUS[s].label} <span class="muted-2">{counts[s] ?? 0}</span></button>
+        ))}
+      </div>
+      <table class="tbl wr-tbl">
+        <thead><tr><th>#</th><th>Status</th><th>Item</th><th>Customer</th><th>Sold</th><th>Coverage</th><th></th></tr></thead>
+        <tbody id="wr-rows">
+          {rows.map((r: any) => {
+            const snap = readSnapshot(r.plan_snapshot);
+            const left = daysLeft(r.coverage_end);
+            return (
+              <tr data-id={r.id} data-status={r.status} class:list={{ focus: r.id === focusId }}>
+                <td><strong>{r.warranty_no}</strong><span class="muted-2" style="display:block;font-size:0.72rem;">{r.source === "public" ? "self-registered" : r.source}</span></td>
+                <td><span class={`pill ${REG_STATUS[r.status as keyof typeof REG_STATUS]?.pill ?? "muted"} st`} title={REG_STATUS[r.status as keyof typeof REG_STATUS]?.hint}>{REG_STATUS[r.status as keyof typeof REG_STATUS]?.label ?? r.status}</span></td>
+                <td style="max-width:18rem;">
+                  <strong>{r.item_title}</strong>
+                  <span class="muted-2" style="display:block;font-size:0.8rem;">{[r.item_condition, r.item_platform, r.serial ? `S/N ${r.serial}` : ""].filter(Boolean).join(" · ")}</span>
+                  <span class="muted-2" style="display:block;font-size:0.76rem;">{snap.name}</span>
+                </td>
+                <td>
+                  {who(r) ? <strong>{who(r)}</strong> : <span class="muted-2">—</span>}
+                  {r.email && <span class="muted-2" style="display:block;font-size:0.8rem;">{r.email}</span>}
+                  {r.phone && <span class="muted-2" style="display:block;font-size:0.8rem;">{r.phone}</span>}
+                  {r.customer_id && <a href={`/customers?id=${r.customer_id}`} class="muted-2" style="font-size:0.74rem;">View customer ↗</a>}
+                </td>
+                <td style="white-space:nowrap;">{fmtDate(r.sale_date)}</td>
+                <td style="white-space:nowrap;">
+                  {r.status === "void" ? <span class="muted-2">—</span> : (
+                    <>
+                      <span>{fmtDate(r.coverage_end)}</span>
+                      <span class:list={["muted-2", { warn: left < 30 }]} style="display:block;font-size:0.76rem;">{left < 0 ? `expired ${-left}d ago` : `${left}d left`}</span>
+                    </>
+                  )}
+                </td>
+                <td style="white-space:nowrap;">
+                  <div class="wr-acts">
+                    <button class="btn btn-ghost btn-sm act" data-act="print" title="Reprint the QR sticker">🖨</button>
+                    <button class="btn btn-ghost btn-sm act" data-act="show" title="Show the QR on screen">📱</button>
+                    <button class="btn btn-ghost btn-sm act" data-act="copy" title="Copy the registration link">🔗</button>
+                    {r.status === "active" && <button class="btn btn-ghost btn-sm act" data-act="resend" title="Resend proof-of-warranty email">✉️</button>}
+                    {r.status === "review" && canManage && <button class="btn btn-primary btn-sm act" data-act="approve" title="Confirm the purchase and activate">✓ Approve</button>}
+                    {r.status !== "void" && canManage && <button class="link-btn act" data-act="void">Void</button>}
+                    {r.status === "void" && canManage && <button class="link-btn act" data-act="unvoid">Restore</button>}
+                  </div>
+                  {r.notes && <span class="muted-2" style="display:block;font-size:0.74rem;max-width:12rem;white-space:normal;">📝 {r.notes}</span>}
+                  {r.void_reason && <span class="muted-2" style="display:block;font-size:0.74rem;">Void: {r.void_reason}</span>}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {rows.length === 0 && ready && <p class="empty">{q ? `Nothing matches “${q}”.` : "No warranties yet. Generate the first sticker on the left."}</p>}
+    </div>
+  </div>
+
+  <!-- Big on-screen QR for the customer to scan at the counter -->
+  <div class="dept-modal" id="wr-qr-modal" hidden>
+    <div class="dept-modal-card wr-qr-card">
+      <h3 id="wr-qr-title">Scan to register</h3>
+      <div id="wr-qr-svg" class="wr-qr"></div>
+      <p id="wr-qr-sub" class="muted"></p>
+      <div class="dm-actions"><button class="btn btn-primary btn-sm" type="button" id="wr-qr-close">Done</button></div>
+    </div>
+  </div>
+
+  <script type="application/json" id="wr-data" set:html={JSON.stringify(pageData)}></script>
+</AppLayout>
+
+<style>
+  .wr-layout { display: grid; gap: 1rem; grid-template-columns: minmax(300px, 420px) 1fr; align-items: start; }
+  @media (max-width: 1100px) { .wr-layout { grid-template-columns: 1fr; } }
+  .set-desc { margin-top: -0.4rem; margin-bottom: 0.8rem; font-size: 0.88rem; }
+  .dm-grid { display: flex; gap: 0.7rem; flex-wrap: wrap; }
+  .dm-field { display: grid; gap: 0.25rem; font-size: 0.82rem; font-weight: 600; flex: 1; min-width: 120px; margin-bottom: 0.55rem; }
+  .dm-field input, .dm-field select { font: inherit; font-weight: 400; padding: 0.5rem 0.6rem; background: var(--bg); color: var(--text); border: 1px solid var(--border-strong); width: 100%; }
+  .dm-actions { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+  .wr-suggest { position: absolute; left: 0; right: 0; top: 100%; z-index: 20; background: var(--panel, #111); border: 1px solid var(--border-strong); max-height: 16rem; overflow: auto; font-weight: 400; }
+  .wr-suggest div { padding: 0.45rem 0.6rem; cursor: pointer; border-bottom: 1px solid var(--border); font-size: 0.86rem; }
+  .wr-suggest div:hover, .wr-suggest div.hi { background: rgba(255,255,255,0.07); }
+  .wr-suggest small { color: var(--muted-2); display: block; }
+  .wr-result { margin-top: 1rem; border-top: 1px solid var(--border); padding-top: 0.8rem; }
+  .wr-result-head { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.6rem; }
+  .wr-preview { background: #fff; padding: 0.5rem; display: inline-block; max-width: 100%; }
+  .wr-preview :global(svg) { display: block; width: 100%; height: auto; max-width: 340px; }
+  .wr-tbl td { vertical-align: top; }
+  .wr-tbl tr.focus { outline: 2px solid var(--magenta); outline-offset: -2px; }
+  .wr-acts { display: flex; gap: 0.3rem; align-items: center; flex-wrap: wrap; }
+  .warn { color: var(--magenta) !important; }
+  .chip.filt { cursor: pointer; }
+  .chip.filt.active { border-color: var(--cyan); color: var(--cyan); }
+  .dept-modal { position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,.75); display: grid; place-items: center; padding: 1rem; }
+  .dept-modal-card { background: var(--panel, #111); border: 1px solid var(--border-strong); padding: 1.2rem; display: grid; gap: 0.8rem; }
+  .wr-qr-card { text-align: center; max-width: 420px; width: 100%; }
+  .wr-qr { background: #fff; padding: 12px; display: inline-block; margin: 0 auto; }
+  .wr-qr :global(svg) { display: block; width: min(70vw, 320px); height: auto; }
+</style>
+
+<script>
+  import { openPrintDialog } from "../../lib/labelPrint";
+  import { renderLabelSvg, DEFAULT_TEMPLATE } from "../../lib/labels";
+  import { warrantyLabelItem, warrantyUrl } from "../../lib/warranty";
+  import { qrSvg } from "../../lib/qr";
+
+  const data = JSON.parse(document.getElementById("wr-data")!.textContent!);
+  const $ = (id: string) => document.getElementById(id)!;
+  const esc = (s: any) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
+  const tpls: any[] = data.lblTemplates?.length ? data.lblTemplates : [DEFAULT_TEMPLATE];
+  const defTpl = tpls.find((t) => t.isDefault) ?? tpls[0];
+  const regsById = new Map<string, any>((data.regs as any[]).map((r) => [r.id, r]));
+  const call = (body: any) => fetch("/api/pos/warranty", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(async (r) => { const j = await r.json(); if (!r.ok || j.ok === false || j.error) throw new Error(j.error || "Failed"); return j; });
+
+  // ---- Sale date defaults to today (local) ----
+  const dateEl = $("wr-date") as HTMLInputElement;
+  const d = new Date(); dateEl.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+  // ---- Item typeahead over the catalog (title / platform / any code) ----
+  const titleEl = $("wr-title") as HTMLInputElement;
+  const sug = $("wr-suggest");
+  let variantId = "";
+  function suggest() {
+    const q = titleEl.value.trim().toLowerCase();
+    variantId = "";
+    if (q.length < 2) { sug.hidden = true; return; }
+    const hits = (data.catalog as any[]).filter((r) => r.lc === q || r.bc === q || r.ic === q.toUpperCase() || (r.t + " " + r.p).toLowerCase().includes(q)).slice(0, 8);
+    if (!hits.length) { sug.hidden = true; return; }
+    sug.innerHTML = hits.map((r, i) => `<div data-i="${i}"><strong>${esc(r.t)}</strong><small>${esc([r.p, r.c].filter(Boolean).join(" · "))}</small></div>`).join("");
+    sug.hidden = false;
+    sug.querySelectorAll<HTMLElement>("div").forEach((el) => el.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      const r = hits[Number(el.dataset.i)];
+      titleEl.value = r.t;
+      ($("wr-platform") as HTMLInputElement).value = r.p || "";
+      if (r.c) ($("wr-cond") as HTMLInputElement).value = r.c;
+      variantId = r.v;
+      sug.hidden = true;
+    }));
+  }
+  titleEl.addEventListener("input", suggest);
+  titleEl.addEventListener("blur", () => setTimeout(() => (sug.hidden = true), 150));
+  titleEl.addEventListener("focus", suggest);
+
+  // ---- Customer typeahead ----
+  const custEl = $("wr-cust") as HTMLInputElement;
+  const custId = $("wr-cust-id") as HTMLInputElement;
+  const custSug = $("wr-cust-suggest");
+  let custT: any;
+  custEl.addEventListener("input", () => {
+    custId.value = "";
+    clearTimeout(custT);
+    const q = custEl.value.trim();
+    if (q.length < 2) { custSug.hidden = true; return; }
+    custT = setTimeout(async () => {
+      const r = await fetch("/api/pos/customers?q=" + encodeURIComponent(q)).then((x) => x.json()).catch(() => null);
+      const res: any[] = r?.results ?? [];
+      if (!res.length) { custSug.hidden = true; return; }
+      custSug.innerHTML = res.map((c, i) => `<div data-i="${i}"><strong>${esc(c.first_name + " " + c.last_name)}</strong><small>${esc([c.email, c.phone].filter(Boolean).join(" · "))}</small></div>`).join("");
+      custSug.hidden = false;
+      custSug.querySelectorAll<HTMLElement>("div").forEach((el) => el.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        const c = res[Number(el.dataset.i)];
+        custEl.value = `${c.first_name} ${c.last_name}`.trim();
+        custId.value = c.id;
+        custSug.hidden = true;
+      }));
+    }, 200);
+  });
+  custEl.addEventListener("blur", () => setTimeout(() => (custSug.hidden = true), 150));
+
+  // ---- Sticker helpers ----
+  const stickerItem = (reg: any) => warrantyLabelItem(reg, data.storeName);
+  const printReg = (reg: any) => openPrintDialog([{ item: stickerItem(reg), defaultCopies: 1 }], tpls, { title: `Warranty sticker · ${reg.warranty_no}` });
+  const copyLink = async (reg: any, btn?: HTMLElement) => {
+    try { await navigator.clipboard.writeText(warrantyUrl(reg.token)); if (btn) { const o = btn.textContent; btn.textContent = "✓ Copied"; setTimeout(() => (btn.textContent = o), 1200); } }
+    catch { prompt("Registration link:", warrantyUrl(reg.token)); }
+  };
+  const showQr = (reg: any) => {
+    $("wr-qr-title").textContent = `${reg.warranty_no} · Scan to register`;
+    $("wr-qr-svg").innerHTML = qrSvg(warrantyUrl(reg.token), { px: 320 });
+    $("wr-qr-sub").textContent = `${reg.item_title} · ${warrantyUrl(reg.token)}`;
+    $("wr-qr-modal").hidden = false;
+  };
+  $("wr-qr-close").addEventListener("click", () => ($("wr-qr-modal").hidden = true));
+  $("wr-qr-modal").addEventListener("click", (e) => { if (e.target === $("wr-qr-modal")) $("wr-qr-modal").hidden = true; });
+
+  // ---- Generate ----
+  let lastReg: any = null;
+  async function generate(print: boolean) {
+    const status = $("wr-status");
+    const title = titleEl.value.trim();
+    if (!title) { titleEl.focus(); return; }
+    if (variantId && (data.catalog as any[]).find((r) => r.v === variantId)?.t !== title) variantId = "";
+    status.textContent = "Generating…";
+    ($("wr-go") as HTMLButtonElement).disabled = true;
+    try {
+      const j = await call({
+        action: "create",
+        item_title: title,
+        item_platform: ($("wr-platform") as HTMLInputElement).value,
+        item_condition: ($("wr-cond") as HTMLInputElement).value,
+        serial: ($("wr-serial") as HTMLInputElement).value,
+        sale_date: dateEl.value,
+        plan_id: ($("wr-plan") as HTMLSelectElement).value,
+        customer_id: custId.value || null,
+        variant_id: variantId || null,
+        notes: ($("wr-notes") as HTMLInputElement).value,
+      });
+      lastReg = j.registration;
+      regsById.set(lastReg.id, lastReg);
+      status.textContent = `✓ ${lastReg.warranty_no}`;
+      $("wr-result-no").textContent = `${lastReg.warranty_no} · ${lastReg.item_title}`;
+      $("wr-result-preview").innerHTML = renderLabelSvg(defTpl, stickerItem(lastReg), { preview: true });
+      $("wr-result").hidden = false;
+      prependRow(lastReg);
+      if (print) printReg(lastReg);
+      // Clear the item fields for the next sale; keep date + plan.
+      titleEl.value = ""; ($("wr-platform") as HTMLInputElement).value = ""; ($("wr-cond") as HTMLInputElement).value = ""; ($("wr-serial") as HTMLInputElement).value = ""; ($("wr-notes") as HTMLInputElement).value = "";
+      custEl.value = ""; custId.value = ""; variantId = "";
+      titleEl.focus();
+    } catch (e: any) { status.textContent = "✗ " + e.message; }
+    finally { ($("wr-go") as HTMLButtonElement).disabled = false; }
+  }
+  $("wr-form").addEventListener("submit", (e) => { e.preventDefault(); generate(true); });
+  $("wr-go-only").addEventListener("click", () => generate(false));
+  $("wr-result-print").addEventListener("click", () => lastReg && printReg(lastReg));
+  $("wr-result-copy").addEventListener("click", (e) => lastReg && copyLink(lastReg, e.currentTarget as HTMLElement));
+  $("wr-result-show").addEventListener("click", () => lastReg && showQr(lastReg));
+
+  // ---- Registrations table ----
+  const body = $("wr-rows") as HTMLTableSectionElement;
+  const fmt = (iso: string) => { const [y, m, dd] = iso.split("-").map(Number); return new Date(Date.UTC(y, m - 1, dd)).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }); };
+  function prependRow(reg: any) {
+    const left = Math.round((Date.parse(reg.coverage_end) - Date.now()) / 86400000);
+    const tr = document.createElement("tr");
+    tr.dataset.id = reg.id; tr.dataset.status = reg.status;
+    tr.innerHTML = `
+      <td><strong>${esc(reg.warranty_no)}</strong><span class="muted-2" style="display:block;font-size:0.72rem;">label</span></td>
+      <td><span class="pill cyan st">Awaiting customer</span></td>
+      <td style="max-width:18rem;"><strong>${esc(reg.item_title)}</strong><span class="muted-2" style="display:block;font-size:0.8rem;">${esc([reg.item_condition, reg.item_platform, reg.serial ? "S/N " + reg.serial : ""].filter(Boolean).join(" · "))}</span><span class="muted-2" style="display:block;font-size:0.76rem;">${esc(reg.plan_snapshot?.name ?? "")}</span></td>
+      <td>${reg.first_name ? `<strong>${esc((reg.first_name + " " + (reg.last_name || "")).trim())}</strong>` : `<span class="muted-2">—</span>`}</td>
+      <td style="white-space:nowrap;">${fmt(reg.sale_date)}</td>
+      <td style="white-space:nowrap;"><span>${fmt(reg.coverage_end)}</span><span class="muted-2" style="display:block;font-size:0.76rem;">${left}d left</span></td>
+      <td style="white-space:nowrap;"><div class="wr-acts">
+        <button class="btn btn-ghost btn-sm act" data-act="print" title="Reprint the QR sticker">🖨</button>
+        <button class="btn btn-ghost btn-sm act" data-act="show" title="Show the QR on screen">📱</button>
+        <button class="btn btn-ghost btn-sm act" data-act="copy" title="Copy the registration link">🔗</button>
+        ${data.canManage ? `<button class="link-btn act" data-act="void">Void</button>` : ""}
+      </div></td>`;
+    body.prepend(tr);
+    applyFilter();
+  }
+  body.addEventListener("click", async (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLElement>(".act");
+    if (!btn) return;
+    const tr = btn.closest("tr")!;
+    const reg = regsById.get(tr.dataset.id!);
+    if (!reg) return;
+    const act = btn.dataset.act;
+    if (act === "print") return printReg(reg);
+    if (act === "show") return showQr(reg);
+    if (act === "copy") return copyLink(reg, btn);
+    const setStatus = (s: string, label: string, pill: string) => {
+      reg.status = s; tr.dataset.status = s;
+      const p = tr.querySelector(".st")!; p.className = `pill ${pill} st`; p.textContent = label;
+      applyFilter();
+    };
+    try {
+      if (act === "resend") { btn.textContent = "…"; await call({ action: "resend", id: reg.id }); btn.textContent = "✓ Sent"; setTimeout(() => (btn.textContent = "✉️"), 1500); }
+      else if (act === "approve") { if (!confirm(`Approve ${reg.warranty_no}? This activates the warranty and emails the customer their proof.`)) return; await call({ action: "approve", id: reg.id }); setStatus("active", "Active", "green"); btn.remove(); }
+      else if (act === "void") { const reason = prompt(`Void ${reg.warranty_no}? Reason (optional):`); if (reason === null) return; await call({ action: "void", id: reg.id, reason }); setStatus("void", "Void", "muted"); btn.textContent = "Restore"; btn.dataset.act = "unvoid"; }
+      else if (act === "unvoid") { const j = await call({ action: "unvoid", id: reg.id }); setStatus(j.status, j.status === "active" ? "Active" : "Awaiting customer", j.status === "active" ? "green" : "cyan"); btn.textContent = "Void"; btn.dataset.act = "void"; }
+    } catch (err: any) { alert(err.message); }
+  });
+
+  // ---- Filter + server search ----
+  let filt = "";
+  function applyFilter() {
+    body.querySelectorAll<HTMLTableRowElement>("tr").forEach((tr) => { tr.style.display = !filt || tr.dataset.status === filt ? "" : "none"; });
+  }
+  document.querySelectorAll<HTMLElement>(".chip.filt").forEach((chip) => chip.addEventListener("click", () => {
+    document.querySelectorAll(".chip.filt").forEach((c) => c.classList.remove("active"));
+    chip.classList.add("active"); filt = chip.dataset.filt || ""; applyFilter();
+  }));
+  let searchT: any;
+  ($("wr-search") as HTMLInputElement).addEventListener("input", (e) => {
+    clearTimeout(searchT);
+    const q = (e.target as HTMLInputElement).value.trim();
+    searchT = setTimeout(() => { location.href = q ? `/warranties?q=${encodeURIComponent(q)}` : "/warranties"; }, 500);
+  });
+  // A deep link (?reg=) scrolls the row into view; a ?q= runs the search.
+  const focus = body.querySelector<HTMLElement>("tr.focus");
+  if (focus) focus.scrollIntoView({ block: "center" });
+</script>

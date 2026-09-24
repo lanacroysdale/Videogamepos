@@ -32,7 +32,10 @@ export const onRequest = defineMiddleware(async (context, next) => {
   if (!isMarketing) {
     const isAsset = pathname.startsWith("/_") || pathname.includes(".");
     const isApiOrShop = pathname.startsWith("/api") || pathname === "/shop" || pathname.startsWith("/shop/");
-    if (!pathname.startsWith("/app") && !isApiOrShop && !isAsset) {
+    // Customer-facing warranty pages are public on ANY host (a scanned sticker
+    // must work even if a licensee's POS host is what's printed on it).
+    const isPublicWarranty = pathname === "/warranty" || pathname.startsWith("/w/");
+    if (!pathname.startsWith("/app") && !isApiOrShop && !isAsset && !isPublicWarranty) {
       pathname = pathname === "/" || pathname === "/dashboard" ? "/app" : "/app" + pathname;
       rewritten = true;
     }

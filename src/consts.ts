@@ -82,6 +82,13 @@ export const NAV: NavItem[] = [
   { label: 'Contact', href: '/#contact' },
 ];
 
+// Extra footer-only links (policies + customer services) — kept out of the
+// header so the primary nav stays short.
+export const FOOTER_LINKS: NavItem[] = [
+  { label: 'Register a Warranty', href: '/warranty' },
+  { label: 'Privacy Policy', href: '/privacy' },
+];
+
 // Anchor target for the "Find Us" header pill (the Eat·Play·Connect section).
 export const FIND_US_HREF = '/#journey';
 
