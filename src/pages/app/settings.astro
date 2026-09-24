@@ -716,6 +716,36 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       </div>
 
       <div class="set-row" style="display:block;">
+        <strong>Move photos to Cloudflare R2</strong><br />
+        <span class="muted">
+          Copies every product and menu photo from Supabase to R2 (shrinking them on the way),
+          points all saved links at R2, then deletes the Supabase copies to free space. Needs the
+          R2 settings added in Vercel first. Safe to re-run; it picks up where it left off.
+          Keep this tab open until it finishes.
+        </span>
+        <div class="set-actions" style="flex-wrap:wrap;">
+          <button id="dz-r2" class="btn" disabled>☁️ Move photos to R2</button>
+          <span id="dz-r2-status" class="muted">Checking R2 setup…</span>
+        </div>
+      </div>
+
+      <div class="set-row" style="display:block;">
+        <strong>Delete eBay photos</strong><br />
+        <span class="muted">
+          Permanently deletes every photo copied in by the eBay import: the main photo of each
+          eBay-imported product and all product gallery photos. Those products will show no
+          photo until you add one. Photos you uploaded yourself, IGDB covers and menu photos are
+          kept. Not part of the JSON backup and cannot be undone.
+        </span>
+        <div class="set-actions" style="flex-wrap:wrap;">
+          <input id="dz-ebay-confirm" type="text" autocomplete="off" placeholder='Type DELETE to enable'
+            style="max-width:200px;text-transform:uppercase;" />
+          <button id="dz-ebay" class="btn" disabled>🗑 Delete eBay photos</button>
+          <span id="dz-ebay-status" class="muted"></span>
+        </div>
+      </div>
+
+      <div class="set-row" style="display:block;">
         <strong>Reset inventory</strong><br />
         <span class="muted">
           Deletes all products, variants, SKUs, barcodes, price history, stock movements, and
@@ -1503,6 +1533,81 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
         dzShrinkStatus.textContent = `✗ ${err.message} — click again to resume`;
       } finally {
         dzShrink.disabled = false;
+      }
+    });
+
+    // Call a photo-storage action repeatedly until the server reports done.
+    const photoLoop = async (body: Record<string, unknown>, onStep: (j: any) => void) => {
+      let after = "";
+      for (;;) {
+        const res = await fetch("/api/pos/photo-storage", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ...body, after }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok || !j.ok) throw new Error(j.error || `Failed (${res.status})`);
+        onStep(j);
+        if (j.done) return;
+        after = j.after ?? "";
+      }
+    };
+
+    const dzR2 = document.getElementById("dz-r2") as HTMLButtonElement;
+    const dzR2Status = document.getElementById("dz-r2-status")!;
+    fetch("/api/pos/photo-storage").then((r) => r.json()).then((j) => {
+      dzR2.disabled = !j.r2;
+      dzR2Status.textContent = j.r2 ? "R2 is set up — ready to move." : "R2 isn't set up yet (add the R2 settings in Vercel, then redeploy).";
+    }).catch(() => { dzR2Status.textContent = ""; });
+    dzR2.addEventListener("click", async () => {
+      dzR2.disabled = true;
+      let copied = 0, failed = 0, relinked = 0, removed = 0, freed = 0;
+      try {
+        dzR2Status.textContent = "Step 1 of 3: copying photos…";
+        await photoLoop({ action: "move-to-r2", phase: "copy" }, (j) => {
+          copied += j.copied; failed += j.failed;
+          dzR2Status.textContent = `Step 1 of 3: copied ${copied}, ${j.remaining} to go…`;
+        });
+        dzR2Status.textContent = "Step 2 of 3: updating links…";
+        await photoLoop({ action: "move-to-r2", phase: "relink" }, (j) => {
+          relinked += j.updated;
+          dzR2Status.textContent = `Step 2 of 3: updated ${relinked} links, ${j.remaining} to go…`;
+        });
+        dzR2Status.textContent = "Step 3 of 3: freeing Supabase space…";
+        await photoLoop({ action: "move-to-r2", phase: "cleanup" }, (j) => {
+          removed += j.removed; freed += j.freed;
+          dzR2Status.textContent = `Step 3 of 3: removed ${removed}, ${j.remaining} to go — ${mb(freed)} freed…`;
+        });
+        const fails = failed ? ` · ${failed} couldn't be copied (left in Supabase)` : "";
+        dzR2Status.textContent = `✓ Done — ${copied} copied, ${relinked} links updated, ${mb(freed)} freed in Supabase${fails}`;
+      } catch (err: any) {
+        dzR2Status.textContent = `✗ ${err.message} — click again to resume`;
+      } finally {
+        dzR2.disabled = false;
+      }
+    });
+
+    const dzEbay = document.getElementById("dz-ebay") as HTMLButtonElement;
+    const dzEbayConfirm = document.getElementById("dz-ebay-confirm") as HTMLInputElement;
+    const dzEbayStatus = document.getElementById("dz-ebay-status")!;
+    dzEbayConfirm.addEventListener("input", () => {
+      dzEbay.disabled = dzEbayConfirm.value.trim().toUpperCase() !== "DELETE";
+    });
+    dzEbay.addEventListener("click", async () => {
+      if (!confirm("Permanently delete all eBay-imported photos? This cannot be undone.")) return;
+      dzEbay.disabled = true;
+      let removed = 0, cleared = 0;
+      dzEbayStatus.textContent = "Deleting…";
+      try {
+        await photoLoop({ action: "delete-ebay", confirm: "DELETE" }, (j) => {
+          removed += j.removed; cleared += j.linksCleared;
+          dzEbayStatus.textContent = `Deleted ${removed} photos, ${j.remaining} to go…`;
+        });
+        dzEbayStatus.textContent = `✓ Deleted ${removed} eBay photos · ${cleared} products now have no photo`;
+        dzEbayConfirm.value = "";
+      } catch (err: any) {
+        dzEbayStatus.textContent = `✗ ${err.message} — click again to resume`;
+        dzEbay.disabled = false;
       }
     });
 

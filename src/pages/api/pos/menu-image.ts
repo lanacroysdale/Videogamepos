@@ -1,12 +1,13 @@
 import type { APIRoute } from "astro";
 import { createSupabaseAdminClient } from "../../../lib/supabase";
 import { shrinkImage } from "../../../lib/imageShrink";
+import { putImage } from "../../../lib/imageStore";
 
 export const prerender = false;
 const json = (d: unknown, s = 200) => new Response(JSON.stringify(d), { status: s, headers: { "content-type": "application/json" } });
 const MAX_BYTES = 6 * 1024 * 1024;
 
-// Upload a menu-item photo into the public product-images bucket (under menu/),
+// Upload a menu-item photo into photo storage (R2 or Supabase, under menu/),
 // return its public URL. Managers/owners only. The URL is stored on
 // menu_items.image_url via the item-save action.
 export const POST: APIRoute = async ({ locals, request }) => {
@@ -23,7 +24,9 @@ export const POST: APIRoute = async ({ locals, request }) => {
   const { bytes, contentType, shrunk } = await shrinkImage(new Uint8Array(await file.arrayBuffer()), file.type);
   const ext = shrunk ? "webp" : (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
   const path = `menu/${crypto.randomUUID()}.${ext}`;
-  const { error } = await admin.storage.from("product-images").upload(path, bytes, { contentType, upsert: false });
-  if (error) return json({ error: error.message }, 500);
-  return json({ ok: true, url: admin.storage.from("product-images").getPublicUrl(path).data.publicUrl });
+  try {
+    return json({ ok: true, url: await putImage(admin, path, bytes, contentType) });
+  } catch (e: any) {
+    return json({ error: e.message ?? String(e) }, 500);
+  }
 };

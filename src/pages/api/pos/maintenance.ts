@@ -1,6 +1,7 @@
 import type { APIRoute } from "astro";
 import { createSupabaseAdminClient } from "../../../lib/supabase";
 import { shrinkImage } from "../../../lib/imageShrink";
+import { listSupabase, r2Configured, r2List, r2Delete, type StoredFile } from "../../../lib/imageStore";
 
 export const prerender = false;
 const json = (d: unknown, s = 200) =>
@@ -88,27 +89,6 @@ export const GET: APIRoute = async ({ locals }) => {
 };
 
 type Admin = ReturnType<typeof createSupabaseAdminClient>;
-type StoredFile = { path: string; size: number; mimetype: string };
-
-// Every file in the product-images bucket (folders walked, pages followed).
-async function listBucket(admin: Admin): Promise<StoredFile[]> {
-  const out: StoredFile[] = [];
-  const walk = async (prefix: string) => {
-    for (let offset = 0; ; offset += 1000) {
-      const { data, error } = await admin.storage.from("product-images")
-        .list(prefix, { limit: 1000, offset, sortBy: { column: "name", order: "asc" } });
-      if (error) throw new Error(`storage list: ${error.message}`);
-      for (const item of data ?? []) {
-        const p = prefix ? `${prefix}/${item.name}` : item.name;
-        if (item.id === null) await walk(p);
-        else out.push({ path: p, size: item.metadata?.size ?? 0, mimetype: item.metadata?.mimetype ?? "" });
-      }
-      if ((data?.length ?? 0) < 1000) break;
-    }
-  };
-  await walk("");
-  return out.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-}
 
 // Photos uploaded before resizing existed: anything that isn't already a
 // web-sized WebP. Fonts, GIFs, SVGs etc. are left alone.
@@ -121,7 +101,7 @@ const needsShrink = (f: StoredFile) =>
 // Works in short batches so each request fits the serverless time limit; the
 // client calls again with the returned `after` cursor until `done`.
 async function shrinkBatch(admin: Admin, after: string) {
-  const all = await listBucket(admin);
+  const all = await listSupabase(admin);
   const todo = all.filter((f) => f.path > after && needsShrink(f));
   const deadline = Date.now() + 6000;
   let processed = 0, saved = 0, failed = 0;
@@ -219,6 +199,11 @@ export const POST: APIRoute = async ({ locals, request }) => {
         }
       };
       await walk("");
+      if (r2Configured()) {
+        const keys = (await r2List("")).map((o) => o.key);
+        await r2Delete(keys);
+        photosDeleted += keys.length;
+      }
     }
 
     await admin.from("store_settings")

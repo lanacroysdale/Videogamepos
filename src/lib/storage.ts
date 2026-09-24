@@ -1,11 +1,13 @@
 import { shrinkImage } from "./imageShrink";
+import { putImage, listFolder, publicUrlFor, removeImages } from "./imageStore";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const extFor = (ct: string) => (ct.includes("png") ? "png" : ct.includes("webp") ? "webp" : "jpg");
 
-// Copy an external image into our own Supabase Storage bucket so we own a
-// stable URL (external hosts like eBay/IGDB can rotate or expire links).
-// Shrunk to web size (see imageShrink.ts) before upload so the bucket stays
+// Copy an external image into our own photo storage (R2, or the Supabase
+// bucket if R2 isn't configured — see imageStore.ts) so we own a stable URL
+// (external hosts like eBay/IGDB can rotate or expire links).
+// Shrunk to web size (see imageShrink.ts) before upload so storage stays
 // small. Retries on transient network failures. Returns the public URL, or null.
 export async function copyImageToStorage(
   admin: any,
@@ -19,9 +21,7 @@ export async function copyImageToStorage(
       const { bytes, contentType: ct } = await shrinkImage(
         new Uint8Array(await res.arrayBuffer()), res.headers.get("content-type") || "image/jpeg");
       const path = `products/${prefix}-${crypto.randomUUID()}.${extFor(ct)}`;
-      const { error } = await admin.storage.from("product-images").upload(path, bytes, { contentType: ct });
-      if (error) { await sleep(600); continue; }
-      return admin.storage.from("product-images").getPublicUrl(path).data.publicUrl;
+      return await putImage(admin, path, bytes, ct);
     } catch {
       await sleep(700);
     }
@@ -36,11 +36,8 @@ export const galleryFolder = (productId: string) => `products/gallery/${productI
 // List a product's gallery image URLs (ordered). Returns [] if none.
 export async function listGallery(admin: any, productId: string): Promise<string[]> {
   const folder = galleryFolder(productId);
-  const { data } = await admin.storage.from("product-images")
-    .list(folder, { limit: 50, sortBy: { column: "name", order: "asc" } });
-  return (data || [])
-    .filter((f: any) => f.name && !f.name.startsWith("."))
-    .map((f: any) => admin.storage.from("product-images").getPublicUrl(`${folder}/${f.name}`).data.publicUrl);
+  const { names, inR2 } = await listFolder(admin, folder).catch(() => ({ names: [] as string[], inR2: false }));
+  return names.map((n) => publicUrlFor(admin, `${folder}/${n}`, inR2));
 }
 
 // Copy up to `max` images into the product's gallery folder, named 00,01,…
@@ -67,10 +64,8 @@ export async function copyGallery(
           const { bytes, contentType: ct } = await shrinkImage(
             new Uint8Array(await res.arrayBuffer()), res.headers.get("content-type") || "image/jpeg");
           const file = `${name}.${extFor(ct)}`;
-          const { error } = await admin.storage.from("product-images")
-            .upload(`${folder}/${file}`, bytes, { contentType: ct, upsert: true });
-          if (!error) { copied++; written.add(file); return; }
-          await sleep(400);
+          await putImage(admin, `${folder}/${file}`, bytes, ct, true);
+          copied++; written.add(file); return;
         } catch { await sleep(500); }
       }
     });
@@ -79,14 +74,13 @@ export async function copyGallery(
   // A re-import can write 00.webp where 00.jpg already exists — drop the old
   // same-index copy so the gallery doesn't show it twice.
   if (written.size) {
-    const { data } = await admin.storage.from("product-images").list(folder, { limit: 100 });
+    const { names } = await listFolder(admin, folder).catch(() => ({ names: [] as string[] }));
     const indexOf = (f: string) => f.split(".")[0];
     const newIdx = new Set([...written].map(indexOf));
-    const stale = (data || [])
-      .map((f: any) => f.name as string)
-      .filter((n: string) => n && newIdx.has(indexOf(n)) && !written.has(n))
-      .map((n: string) => `${folder}/${n}`);
-    if (stale.length) await admin.storage.from("product-images").remove(stale);
+    const stale = names
+      .filter((n) => newIdx.has(indexOf(n)) && !written.has(n))
+      .map((n) => `${folder}/${n}`);
+    await removeImages(admin, stale).catch(() => {});
   }
   return copied;
 }
