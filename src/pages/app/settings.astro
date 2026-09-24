@@ -702,6 +702,20 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       </div>
 
       <div class="set-row" style="display:block;">
+        <strong>Shrink existing photos</strong><br />
+        <span class="muted">
+          One-time cleanup for photo storage. Re-saves every product and menu photo at web size
+          (1200px, WebP) — no visible difference on the site, typically 5–10× smaller. Photos keep
+          their links, so nothing needs re-attaching. Safe to re-run; already-small photos are skipped.
+          Keep this tab open until it finishes.
+        </span>
+        <div class="set-actions" style="flex-wrap:wrap;">
+          <button id="dz-shrink" class="btn">🗜 Shrink photos</button>
+          <span id="dz-shrink-status" class="muted"></span>
+        </div>
+      </div>
+
+      <div class="set-row" style="display:block;">
         <strong>Reset inventory</strong><br />
         <span class="muted">
           Deletes all products, variants, SKUs, barcodes, price history, stock movements, and
@@ -1459,6 +1473,36 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
         dzBackupStatus.textContent = `✗ ${err.message}`;
       } finally {
         dzBackup.disabled = false;
+      }
+    });
+
+    const dzShrink = document.getElementById("dz-shrink") as HTMLButtonElement;
+    const dzShrinkStatus = document.getElementById("dz-shrink-status")!;
+    const mb = (n: number) => `${(n / 1048576).toFixed(1)} MB`;
+    dzShrink.addEventListener("click", async () => {
+      dzShrink.disabled = true;
+      let after = "", processed = 0, failed = 0, saved = 0;
+      dzShrinkStatus.textContent = "Scanning photos…";
+      try {
+        for (;;) {
+          const res = await fetch("/api/pos/maintenance", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ action: "shrink-images", after }),
+          });
+          const j = await res.json().catch(() => ({}));
+          if (!res.ok || !j.ok) throw new Error(j.error || `Shrink failed (${res.status})`);
+          processed += j.processed; failed += j.failed; saved += j.saved; after = j.after;
+          dzShrinkStatus.textContent =
+            `${processed} done, ${j.remaining} to go — ${mb(saved)} freed (bucket now ~${mb(j.bucketBytes)})`;
+          if (j.done) break;
+        }
+        const fails = failed ? ` · ${failed} couldn't be processed` : "";
+        dzShrinkStatus.textContent = `✓ Done — ${processed} photos, ${mb(saved)} freed${fails}`;
+      } catch (err: any) {
+        dzShrinkStatus.textContent = `✗ ${err.message} — click again to resume`;
+      } finally {
+        dzShrink.disabled = false;
       }
     });
 

@@ -1,5 +1,6 @@
 import type { APIRoute } from "astro";
 import { createSupabaseAdminClient } from "../../../lib/supabase";
+import { shrinkImage } from "../../../lib/imageShrink";
 
 export const prerender = false;
 const json = (d: unknown, s = 200) =>
@@ -86,6 +87,72 @@ export const GET: APIRoute = async ({ locals }) => {
   }
 };
 
+type Admin = ReturnType<typeof createSupabaseAdminClient>;
+type StoredFile = { path: string; size: number; mimetype: string };
+
+// Every file in the product-images bucket (folders walked, pages followed).
+async function listBucket(admin: Admin): Promise<StoredFile[]> {
+  const out: StoredFile[] = [];
+  const walk = async (prefix: string) => {
+    for (let offset = 0; ; offset += 1000) {
+      const { data, error } = await admin.storage.from("product-images")
+        .list(prefix, { limit: 1000, offset, sortBy: { column: "name", order: "asc" } });
+      if (error) throw new Error(`storage list: ${error.message}`);
+      for (const item of data ?? []) {
+        const p = prefix ? `${prefix}/${item.name}` : item.name;
+        if (item.id === null) await walk(p);
+        else out.push({ path: p, size: item.metadata?.size ?? 0, mimetype: item.metadata?.mimetype ?? "" });
+      }
+      if ((data?.length ?? 0) < 1000) break;
+    }
+  };
+  await walk("");
+  return out.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+}
+
+// Photos uploaded before resizing existed: anything that isn't already a
+// web-sized WebP. Fonts, GIFs, SVGs etc. are left alone.
+const needsShrink = (f: StoredFile) =>
+  /^image\/(jpe?g|png|webp|avif|heic|heif|tiff)$/i.test(f.mimetype) &&
+  (f.mimetype !== "image/webp" || f.size > 400_000);
+
+// POST { action: "shrink-images", after?: string } → re-encode existing photos
+// in place (same path, so every saved URL keeps working; served as WebP).
+// Works in short batches so each request fits the serverless time limit; the
+// client calls again with the returned `after` cursor until `done`.
+async function shrinkBatch(admin: Admin, after: string) {
+  const all = await listBucket(admin);
+  const todo = all.filter((f) => f.path > after && needsShrink(f));
+  const deadline = Date.now() + 6000;
+  let processed = 0, saved = 0, failed = 0;
+  let cursor = after;
+  const CONC = 4;
+  for (let i = 0; i < todo.length && Date.now() < deadline; i += CONC) {
+    const batch = todo.slice(i, i + CONC);
+    await Promise.all(batch.map(async (f) => {
+      try {
+        const { data: blob, error } = await admin.storage.from("product-images").download(f.path);
+        if (error || !blob) throw new Error(error?.message);
+        const orig = new Uint8Array(await blob.arrayBuffer());
+        const { bytes, contentType, shrunk } = await shrinkImage(orig, f.mimetype);
+        if (shrunk) {
+          const { error: upErr } = await admin.storage.from("product-images")
+            .upload(f.path, bytes, { contentType, upsert: true });
+          if (upErr) throw new Error(upErr.message);
+          saved += orig.byteLength - bytes.byteLength;
+        }
+        processed++;
+      } catch {
+        failed++;
+      }
+    }));
+    cursor = batch[batch.length - 1].path;
+  }
+  const remaining = all.filter((f) => f.path > cursor && needsShrink(f)).length;
+  const bucketBytes = all.reduce((a, f) => a + f.size, 0) - saved;
+  return { ok: true, processed, failed, saved, remaining, done: remaining === 0, after: cursor, bucketBytes };
+}
+
 // POST { confirm: "WIPE", deletePhotos?: boolean } → wipe inventory tables.
 // Owners only, requires the typed confirmation AND a backup within 24h.
 // Sales history keeps its name/price snapshots; line items are unlinked from
@@ -95,6 +162,13 @@ export const POST: APIRoute = async ({ locals, request }) => {
   if (!locals.can("maintenance.manage")) return json({ error: "You don't have permission for the danger zone" }, 403);
 
   const b = await request.json().catch(() => ({}));
+  if (b.action === "shrink-images") {
+    try {
+      return json(await shrinkBatch(createSupabaseAdminClient(), typeof b.after === "string" ? b.after : ""));
+    } catch (e: any) {
+      return json({ error: e.message ?? String(e) }, 500);
+    }
+  }
   if (b.confirm !== "WIPE") return json({ error: 'Type WIPE to confirm.' }, 400);
 
   const admin = createSupabaseAdminClient();

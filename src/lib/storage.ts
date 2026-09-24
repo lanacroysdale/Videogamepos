@@ -1,9 +1,12 @@
+import { shrinkImage } from "./imageShrink";
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const extFor = (ct: string) => (ct.includes("png") ? "png" : ct.includes("webp") ? "webp" : "jpg");
 
 // Copy an external image into our own Supabase Storage bucket so we own a
 // stable URL (external hosts like eBay/IGDB can rotate or expire links).
-// Retries on transient network failures. Returns the public URL, or null.
+// Shrunk to web size (see imageShrink.ts) before upload so the bucket stays
+// small. Retries on transient network failures. Returns the public URL, or null.
 export async function copyImageToStorage(
   admin: any,
   url: string,
@@ -13,8 +16,8 @@ export async function copyImageToStorage(
     try {
       const res = await fetch(url);
       if (!res.ok) { await sleep(600); continue; }
-      const ct = res.headers.get("content-type") || "image/jpeg";
-      const bytes = new Uint8Array(await res.arrayBuffer());
+      const { bytes, contentType: ct } = await shrinkImage(
+        new Uint8Array(await res.arrayBuffer()), res.headers.get("content-type") || "image/jpeg");
       const path = `products/${prefix}-${crypto.randomUUID()}.${extFor(ct)}`;
       const { error } = await admin.storage.from("product-images").upload(path, bytes, { contentType: ct });
       if (error) { await sleep(600); continue; }
@@ -51,6 +54,7 @@ export async function copyGallery(
   const folder = galleryFolder(productId);
   const list = urls.slice(0, max);
   let copied = 0;
+  const written = new Set<string>();
   // Small concurrency keeps it quick without hammering eBay/storage.
   const CONC = 3;
   for (let i = 0; i < list.length; i += CONC) {
@@ -60,16 +64,29 @@ export async function copyGallery(
         try {
           const res = await fetch(url);
           if (!res.ok) { await sleep(400); continue; }
-          const ct = res.headers.get("content-type") || "image/jpeg";
-          const bytes = new Uint8Array(await res.arrayBuffer());
+          const { bytes, contentType: ct } = await shrinkImage(
+            new Uint8Array(await res.arrayBuffer()), res.headers.get("content-type") || "image/jpeg");
+          const file = `${name}.${extFor(ct)}`;
           const { error } = await admin.storage.from("product-images")
-            .upload(`${folder}/${name}.${extFor(ct)}`, bytes, { contentType: ct, upsert: true });
-          if (!error) { copied++; return; }
+            .upload(`${folder}/${file}`, bytes, { contentType: ct, upsert: true });
+          if (!error) { copied++; written.add(file); return; }
           await sleep(400);
         } catch { await sleep(500); }
       }
     });
     await Promise.all(batch);
+  }
+  // A re-import can write 00.webp where 00.jpg already exists — drop the old
+  // same-index copy so the gallery doesn't show it twice.
+  if (written.size) {
+    const { data } = await admin.storage.from("product-images").list(folder, { limit: 100 });
+    const indexOf = (f: string) => f.split(".")[0];
+    const newIdx = new Set([...written].map(indexOf));
+    const stale = (data || [])
+      .map((f: any) => f.name as string)
+      .filter((n: string) => n && newIdx.has(indexOf(n)) && !written.has(n))
+      .map((n: string) => `${folder}/${n}`);
+    if (stale.length) await admin.storage.from("product-images").remove(stale);
   }
   return copied;
 }

@@ -1,5 +1,6 @@
 import type { APIRoute } from "astro";
 import { createSupabaseAdminClient } from "../../../lib/supabase";
+import { shrinkImage } from "../../../lib/imageShrink";
 
 export const prerender = false;
 const json = (d: unknown, s = 200) => new Response(JSON.stringify(d), { status: s, headers: { "content-type": "application/json" } });
@@ -19,10 +20,10 @@ export const POST: APIRoute = async ({ locals, request }) => {
   if (file.size > MAX_BYTES) return json({ error: "Image too large (6MB max)" }, 400);
 
   const admin = createSupabaseAdminClient();
-  const ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
+  const { bytes, contentType, shrunk } = await shrinkImage(new Uint8Array(await file.arrayBuffer()), file.type);
+  const ext = shrunk ? "webp" : (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
   const path = `menu/${crypto.randomUUID()}.${ext}`;
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  const { error } = await admin.storage.from("product-images").upload(path, bytes, { contentType: file.type, upsert: false });
+  const { error } = await admin.storage.from("product-images").upload(path, bytes, { contentType, upsert: false });
   if (error) return json({ error: error.message }, 500);
   return json({ ok: true, url: admin.storage.from("product-images").getPublicUrl(path).data.publicUrl });
 };
