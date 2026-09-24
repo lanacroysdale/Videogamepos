@@ -6,7 +6,8 @@
 // optional "all copies" toggle + a 1-label test print. Self-contained styling
 // (CSS vars from app.css only), so it drops into any POS page.
 import { renderLabelSvg, ensureLabelFont, DEFAULT_TEMPLATE, type LabelTemplate, type LabelItem } from "./labels";
-import { labelsToPdf, fontStyleTag, inlineLogo, escAttr } from "./labelPdf";
+import { labelsToPdf, fontStyleTag, inlineLogo, escAttr, snapToInchGrid } from "./labelPdf";
+import { findZebraPrinter, printDirect } from "./zebraDirect";
 
 export type PrintJob = { item: LabelItem; copies: number };
 
@@ -14,7 +15,7 @@ export type PrintJob = { item: LabelItem; copies: number };
 // margins, and feed directions no web page can detect, so the user dials
 // these in once from a test label and they stick (localStorage).
 export type RotateDeg = 0 | 90 | 180 | 270;
-export type PrintTune = { rotateDeg?: RotateDeg; scalePct?: number; nudgeXMm?: number; nudgeYMm?: number };
+export type PrintTune = { rotateDeg?: RotateDeg; scalePct?: number; nudgeXMm?: number; nudgeYMm?: number; dpi?: number };
 
 export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: PrintTune): Promise<void> {
   const real = jobs.filter((j) => j.copies > 0);
@@ -27,11 +28,13 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: P
   // the dialog remembers the answer per station.
   const deg = ([0, 90, 180, 270] as const).includes(opts?.rotateDeg as any) ? (opts!.rotateDeg as RotateDeg) : 0;
   const sideways = deg === 90 || deg === 270;
-  const pw = sideways ? tpl.heightMm : tpl.widthMm;  // page width
-  const ph = sideways ? tpl.widthMm : tpl.heightMm;  // page height
+  // Page = the driver's inch-defined paper exactly (see snapToInchGrid in
+  // labelPdf) so nothing gets shrink-to-fitted; the label centers inside.
+  const pw = snapToInchGrid(sideways ? tpl.heightMm : tpl.widthMm);  // page width
+  const ph = snapToInchGrid(sideways ? tpl.widthMm : tpl.heightMm);  // page height
   const scale = Math.min(100, Math.max(60, Math.round(Number(opts?.scalePct) || 100)));
-  const nx = Math.min(8, Math.max(-8, Number(opts?.nudgeXMm) || 0));
-  const ny = Math.min(8, Math.max(-8, Number(opts?.nudgeYMm) || 0));
+  const nx = Math.min(30, Math.max(-30, Number(opts?.nudgeXMm) || 0));
+  const ny = Math.min(30, Math.max(-30, Number(opts?.nudgeYMm) || 0));
 
   // Rotation happens INSIDE the SVG (a natively-oriented image), and each
   // label ships as an <img> — an ATOMIC replaced element that print
@@ -48,19 +51,29 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: P
     const ow = sideways ? H : W, oh = sideways ? W : H;
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${ow}mm" height="${oh}mm" viewBox="0 0 ${ow} ${oh}"><g transform="${g}">${inner}</g></svg>`;
   };
-  // An <img>'s SVG is an isolated document: no external fetches — inline the
-  // web font and logo as data: URLs (same treatment the PDF path uses).
+  // This path prints from Chrome (the dialog labels it so): the label goes in
+  // as INLINE VECTOR SVG — shapes and text, no bitmap anywhere — so the print
+  // chain draws it at whatever resolution the device has. Nothing to
+  // pixelate, nothing to rescale. (Safari mangles inline-SVG pagination; its
+  // path is the PDF button.) Fonts and the logo inline as data: URLs so the
+  // isolated iframe needs no network.
   const styleTag = await fontStyleTag(tpl);
   const logoData = tpl.logoUrl ? await inlineLogo(tpl.logoUrl) : "";
+  const lw = sideways ? tpl.heightMm : tpl.widthMm;  // label width on the page
+  const lh = sideways ? tpl.widthMm : tpl.heightMm;
+  // Alignment math in plain mm — no grid/object-fit/percent CSS for the print
+  // engine to resolve: the svg gets explicit size and margins. The label
+  // keeps its true size, centered on the (inch-exact) page.
+  const imgW = (lw * scale) / 100, imgH = (lh * scale) / 100;
+  const offX = (pw - imgW) / 2 + nx, offY = (ph - imgH) / 2 + ny;
   const pages: string[] = [];
   for (const j of real) {
     let svg = renderLabelSvg(tpl, j.item);
     if (styleTag) svg = svg.replace(/(<svg[^>]*>)/, `$1${styleTag}`);
     if (tpl.logoUrl && logoData) svg = svg.split(escAttr(tpl.logoUrl)).join(logoData).split(tpl.logoUrl).join(logoData);
     svg = rotateSvg(svg);
-    const src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
     for (let i = 0; i < Math.min(500, j.copies); i++) {
-      pages.push(`<div class="label-page"><img src="${src}" alt=""></div>`);
+      pages.push(`<div class="label-page">${svg}</div>`);
     }
   }
 
@@ -72,12 +85,12 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: P
     @page { size: ${pw}mm ${ph}mm; margin: 0; }
     html, body { margin: 0; padding: 0; width: ${pw}mm; background: #fff; }
     body { line-height: 0; font-size: 0; }
-    /* Composed 1mm shy of the page and contain-fitted: if the driver's page
-       box is a hair smaller than the paper (hidden margins, mm rounding),
-       the label scales down a percent instead of spilling to a second page. */
-    .label-page { width: ${pw}mm; height: calc(${ph}mm - 1mm); overflow: hidden; display: grid; place-items: center; break-after: page; page-break-after: always; break-inside: avoid; page-break-inside: avoid; }
+    /* Composed 1mm shy of the page: if the driver's page box is a hair
+       smaller than the paper (hidden margins, mm rounding), the label clips
+       a fraction instead of spilling to a second page. */
+    .label-page { width: ${pw}mm; height: calc(${ph}mm - 1mm); overflow: hidden; break-after: page; page-break-after: always; break-inside: avoid; page-break-inside: avoid; }
     .label-page:last-child { break-after: auto; page-break-after: auto; }
-    .label-page img { display: block; width: ${scale}%; height: ${scale}%; object-fit: contain; position: relative; left: ${nx}mm; top: ${ny}mm; }
+    .label-page svg { display: block; width: ${imgW.toFixed(2)}mm; height: ${imgH.toFixed(2)}mm; margin: ${offY.toFixed(2)}mm 0 0 ${offX.toFixed(2)}mm; }
   </style></head><body>${pages.join("")}</body></html>`;
 
   document.getElementById("label-print-frame")?.remove();
@@ -88,14 +101,8 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: P
   frame.srcdoc = html;
   await new Promise<void>((res) => { frame.onload = () => res(); document.body.appendChild(frame); });
   const cw = frame.contentWindow!;
-  // Every label <img> must be decoded before print or pages come out empty.
-  try {
-    const imgs = [...cw.document.images];
-    await Promise.race([
-      Promise.all(imgs.map((im) => im.decode().catch(() => undefined))),
-      new Promise((r) => setTimeout(r, 3000)),
-    ]);
-  } catch { /* print what we have */ }
+  // Fonts must be ready in the iframe before print, or text falls back.
+  try { await Promise.race([(cw.document as any).fonts?.ready, new Promise((r) => setTimeout(r, 2500))]); } catch { /* fallback font ok */ }
   await new Promise((r) => setTimeout(r, 50)); // one layout tick
   const cleanup = () => frame.remove();
   cw.addEventListener("afterprint", () => setTimeout(cleanup, 500));
@@ -157,23 +164,31 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
       <details id="lp-tune-wrap" style="font-size:0.78rem;color:var(--muted,#999);">
         <summary style="cursor:pointer;">🎛 Fine-tune alignment (if the printed label is clipped or off-center — saves on this station)</summary>
         <div style="display:flex;gap:0.9rem;align-items:center;flex-wrap:wrap;margin-top:0.5rem;">
+          <label style="display:flex;align-items:center;gap:0.35rem;" title="Match your printer's head — sharpest output is one pixel per printer dot">Printer
+            <select id="lp-dpi" style="font:inherit;padding:0.25rem 0.35rem;background:var(--bg,#000);color:var(--text,#eee);border:1px solid var(--border-strong,#444);">
+              <option value="203">203 dpi (most thermal printers)</option>
+              <option value="300">300 dpi</option>
+              <option value="600">600 dpi</option>
+            </select>
+          </label>
           <label style="display:flex;align-items:center;gap:0.35rem;">Size
             <input id="lp-scale" type="number" min="60" max="100" step="1" value="100" style="width:4.2rem;font:inherit;padding:0.25rem 0.35rem;background:var(--bg,#000);color:var(--text,#eee);border:1px solid var(--border-strong,#444);">%
           </label>
           <label style="display:flex;align-items:center;gap:0.35rem;" title="Positive moves the label right on the page">Nudge →
-            <input id="lp-nx" type="number" min="-8" max="8" step="0.5" value="0" style="width:4.2rem;font:inherit;padding:0.25rem 0.35rem;background:var(--bg,#000);color:var(--text,#eee);border:1px solid var(--border-strong,#444);">mm
+            <input id="lp-nx" type="number" min="-30" max="30" step="0.5" value="0" style="width:4.2rem;font:inherit;padding:0.25rem 0.35rem;background:var(--bg,#000);color:var(--text,#eee);border:1px solid var(--border-strong,#444);">mm
           </label>
           <label style="display:flex;align-items:center;gap:0.35rem;" title="Positive moves the label down the page">Nudge ↓
-            <input id="lp-ny" type="number" min="-8" max="8" step="0.5" value="0" style="width:4.2rem;font:inherit;padding:0.25rem 0.35rem;background:var(--bg,#000);color:var(--text,#eee);border:1px solid var(--border-strong,#444);">mm
+            <input id="lp-ny" type="number" min="-30" max="30" step="0.5" value="0" style="width:4.2rem;font:inherit;padding:0.25rem 0.35rem;background:var(--bg,#000);color:var(--text,#eee);border:1px solid var(--border-strong,#444);">mm
           </label>
         </div>
       </details>
-      <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;border-top:1px solid var(--border,#333);padding-top:0.7rem;">
-        <button id="lp-browser" type="button" style="font:inherit;font-weight:700;padding:0.45rem 0.9rem;background:var(--cyan,#2ce6e0);color:#04222a;border:1px solid var(--cyan,#2ce6e0);cursor:pointer;">🖨 Print</button>
-        <button id="lp-print" type="button" title="Build a PDF with exactly label-sized pages — prints identically from any device or viewer at 100%" style="font:inherit;padding:0.45rem 0.7rem;background:transparent;color:var(--text,#eee);border:1px solid var(--border-strong,#444);cursor:pointer;">📄 PDF</button>
-        <button id="lp-test" type="button" title="Print a single label to check printer alignment" style="font:inherit;padding:0.45rem 0.7rem;background:transparent;color:var(--muted,#999);border:1px solid var(--border,#333);cursor:pointer;">1 test label</button>
+      <div id="lp-buttons" style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;border-top:1px solid var(--border,#333);padding-top:0.7rem;">
+        <button id="lp-browser" type="button" title="Opens a print-ready PDF — the reliable way to print labels from a browser" style="font:inherit;font-weight:700;padding:0.45rem 0.9rem;background:var(--cyan,#2ce6e0);color:#04222a;border:1px solid var(--cyan,#2ce6e0);cursor:pointer;">🖨 Print</button>
+        <button id="lp-print" type="button" title="Sharpest output — prints the labels as vectors straight from this tab. Use in Chrome; Safari's print engine mangles it" style="font:inherit;padding:0.45rem 0.7rem;background:transparent;color:var(--muted,#999);border:1px solid var(--border,#333);cursor:pointer;">⚡ Vector print (Chrome)</button>
+        <button id="lp-test" type="button" title="One-label PDF to check printer alignment" style="font:inherit;padding:0.45rem 0.7rem;background:transparent;color:var(--muted,#999);border:1px solid var(--border,#333);cursor:pointer;">1 test label</button>
         <button id="lp-cancel" type="button" style="font:inherit;padding:0.45rem 0.7rem;background:transparent;color:var(--muted,#999);border:1px solid var(--border,#333);cursor:pointer;margin-left:auto;">Cancel</button>
       </div>
+      <p style="margin:0;color:var(--muted-2,#888);font-size:0.72rem;">Print opens a ready-made PDF in a new tab — press <b>⌘P</b> there and print at 100%. Every page is exactly one label; what you see is what prints.</p>
     </div>`;
 
   const close = () => overlay.remove();
@@ -208,21 +223,29 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
   // Physical-alignment tune values persist per station; the details block
   // opens automatically when a saved value is in play so it's never hidden.
   const tuneEls = {
+    dpi: overlay.querySelector<HTMLSelectElement>("#lp-dpi")!,
     scale: overlay.querySelector<HTMLInputElement>("#lp-scale")!,
     nx: overlay.querySelector<HTMLInputElement>("#lp-nx")!,
     ny: overlay.querySelector<HTMLInputElement>("#lp-ny")!,
   };
   try {
+    tuneEls.dpi.value = ["203", "300", "600"].includes(localStorage.getItem("tl-print-dpi") ?? "") ? localStorage.getItem("tl-print-dpi")! : "203";
     tuneEls.scale.value = localStorage.getItem("tl-print-scale") || "100";
     tuneEls.nx.value = localStorage.getItem("tl-print-nx") || "0";
     tuneEls.ny.value = localStorage.getItem("tl-print-ny") || "0";
   } catch { /* private mode */ }
-  if (tuneEls.scale.value !== "100" || tuneEls.nx.value !== "0" || tuneEls.ny.value !== "0") {
+  if (tuneEls.scale.value !== "100" || tuneEls.nx.value !== "0" || tuneEls.ny.value !== "0" || tuneEls.dpi.value !== "203") {
     overlay.querySelector<HTMLDetailsElement>("#lp-tune-wrap")!.open = true;
   }
-  const tune = (): { scalePct: number; nudgeXMm: number; nudgeYMm: number } => {
-    const t = { scalePct: Number(tuneEls.scale.value) || 100, nudgeXMm: Number(tuneEls.nx.value) || 0, nudgeYMm: Number(tuneEls.ny.value) || 0 };
+  const tune = (): { scalePct: number; nudgeXMm: number; nudgeYMm: number; dpi: number } => {
+    const t = {
+      scalePct: Number(tuneEls.scale.value) || 100,
+      nudgeXMm: Number(tuneEls.nx.value) || 0,
+      nudgeYMm: Number(tuneEls.ny.value) || 0,
+      dpi: Number(tuneEls.dpi.value) || 203,
+    };
     try {
+      localStorage.setItem("tl-print-dpi", String(t.dpi));
       localStorage.setItem("tl-print-scale", String(t.scalePct));
       localStorage.setItem("tl-print-nx", String(t.nudgeXMm));
       localStorage.setItem("tl-print-ny", String(t.nudgeYMm));
@@ -236,11 +259,13 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
   const refreshInfo = () => {
     const t = chosenTpl();
     const sideways = rotDeg() === 90 || rotDeg() === 270;
-    const pw = sideways ? t.heightMm : t.widthMm, ph = sideways ? t.widthMm : t.heightMm;
     const n = lines.reduce((a, _, i) => a + Math.max(0, Math.round(Number(overlay.querySelector<HTMLInputElement>(`[data-lp-copies="${i}"]`)!.value)) || 0), 0);
     overlay.querySelector("#lp-browser")!.textContent = `🖨 Print ${n} label${n === 1 ? "" : "s"}`;
+    // Talk in the LABEL's terms — the driver's paper picker lists it as
+    // W×H (e.g. "2.25x1.25") regardless of which way the page is composed.
     overlay.querySelector("#lp-paper")!.innerHTML =
-      `Printer setup: paper size <b>${pw.toFixed(1)} × ${ph.toFixed(1)} mm</b> (${inch(pw)} × ${inch(ph)}″), orientation <b>${pw > ph ? "Landscape" : "Portrait"}</b>, scale <b>100%</b>. One page = one label.`;
+      `Printer setup: paper size <b>${inch(t.widthMm)} × ${inch(t.heightMm)}″</b> (${t.widthMm}×${t.heightMm}mm — your label size), margins <b>none</b>, scale <b>100%</b>.` +
+      (sideways ? ` Pages are composed sideways to match the roll feed — one page = one label.` : ` One page = one label.`);
   };
   refreshInfo();
   rotSel.addEventListener("change", refreshInfo);
@@ -259,7 +284,7 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
     const orig = btn.textContent;
     btn.disabled = true; btn.textContent = "Rendering…";
     try {
-      const blob = await labelsToPdf(jobs, chosenTpl(), { rotateDeg: rotDeg() });
+      const blob = await labelsToPdf(jobs, chosenTpl(), { rotateDeg: rotDeg(), ...tune() });
       const url = URL.createObjectURL(blob);
       const w = window.open(url, "_blank");
       if (!w) { const a = document.createElement("a"); a.href = url; a.download = "labels.pdf"; a.click(); }
@@ -268,17 +293,49 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
     } catch (e: any) { alert("Couldn't build the PDF: " + e.message); return false; }
     finally { btn.disabled = false; btn.textContent = orig; }
   };
-  overlay.querySelector("#lp-print")!.addEventListener("click", async (ev) => {
+  // PRIMARY: the PDF path — the only browser label-printing approach that is
+  // deterministic across engines (what Shopify/ShipStation-class tools do).
+  // Safari's HTML print pagination mangled every layout we fed it.
+  overlay.querySelector("#lp-browser")!.addEventListener("click", async (ev) => {
     const jobs = gatherJobs();
     if (!jobs) return;
     if (await openPdf(jobs, ev.currentTarget as HTMLButtonElement)) close();
   });
-  // Test label goes through the SAME path as the real print so alignment
-  // tuning is verified on the pipeline it applies to. Dialog stays open.
-  overlay.querySelector("#lp-test")!.addEventListener("click", () => {
-    printLabels([{ item: lines[0].item, copies: 1 }], chosenTpl(), { rotateDeg: rotDeg(), ...tune() });
+
+  // BEST, where available: the Zebra Browser Print agent — ZPL straight to
+  // the printer, no macOS printing, no dialogs, no paper sizes, dot-exact.
+  // Probed async; the button appears only when the agent answers.
+  findZebraPrinter().then((z) => {
+    if (!z || !overlay.isConnected) return;
+    const row = overlay.querySelector("#lp-buttons")!;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.id = "lp-zebra";
+    btn.title = `Sends the labels straight to ${z.name} through Zebra Browser Print — no print dialog, dot-perfect`;
+    btn.style.cssText = "font:inherit;font-weight:700;padding:0.45rem 0.9rem;background:var(--green,#80ff72);color:#0a2506;border:1px solid var(--green,#80ff72);cursor:pointer;";
+    btn.textContent = `⚡ Direct to ${z.name}`;
+    row.prepend(btn);
+    btn.addEventListener("click", async () => {
+      const jobs = gatherJobs();
+      if (!jobs) return;
+      const orig = btn.textContent;
+      btn.disabled = true; btn.textContent = "Printing…";
+      try {
+        const n = await printDirect(z.device, jobs, chosenTpl(), tune());
+        btn.textContent = `✓ Sent ${n} label${n === 1 ? "" : "s"}`;
+        setTimeout(close, 900);
+      } catch (e: any) {
+        alert("Direct print failed: " + e.message + "\n\nIs Zebra Browser Print running on this computer?");
+        btn.disabled = false; btn.textContent = orig;
+      }
+    });
   });
-  overlay.querySelector("#lp-browser")!.addEventListener("click", () => {
+  // Test label: same PDF pipeline, one label, dialog stays open for tuning.
+  overlay.querySelector("#lp-test")!.addEventListener("click", (ev) => {
+    openPdf([{ item: lines[0].item, copies: 1 }], ev.currentTarget as HTMLButtonElement);
+  });
+  // Chrome-only convenience: print straight from the tab, no PDF step.
+  overlay.querySelector("#lp-print")!.addEventListener("click", () => {
     const jobs = gatherJobs();
     if (!jobs) return;
     const opts = { rotateDeg: rotDeg(), ...tune() };

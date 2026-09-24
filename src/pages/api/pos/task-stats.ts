@@ -10,7 +10,12 @@ export const GET: APIRoute = async ({ locals, url }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
   const sb = locals.supabase;
 
-  const cRes = await sb.from("tasks").select("id", { count: "exact", head: true }).eq("status", "open");
+  // Only count tasks in live categories (removed ones are hidden on the page).
+  // Pre-migration there are no categories — count every open task.
+  const lRes = await sb.from("task_lists").select("id").eq("kind", "tasks").is("removed_at", null);
+  let cq = sb.from("tasks").select("id", { count: "exact", head: true }).eq("status", "open");
+  if (!lRes.error) cq = cq.in("list_id", (lRes.data ?? []).map((l: any) => l.id));
+  const cRes = await cq;
   const openCount = cRes.error ? 0 : cRes.count ?? 0;
 
   let fresh: any[] = [];

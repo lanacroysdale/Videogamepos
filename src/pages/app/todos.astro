@@ -1,50 +1,86 @@
 ---
 export const prerender = false;
 import AppLayout from "../../layouts/AppLayout.astro";
-import { PRIORITIES, priorityRank, storeToday } from "../../lib/todos";
+import { PRIORITIES, priorityRank, periodKey, RESET_LABEL, SUGGESTED_LISTS, type TaskList } from "../../lib/todos";
 
 const supabase = Astro.locals.supabase;
-const uid = Astro.locals.user!.id;
 const isManager = Astro.locals.can("tasks.manage");
 const myName = Astro.locals.profile?.full_name ?? "You";
-const today = storeToday();
 
 const { data: roster } = await supabase.from("profiles").select("id, full_name").order("full_name");
 const nameById = new Map((roster ?? []).map((r: any) => [r.id, r.full_name]));
 
-// ---- Daily checklist (v2 tables) -----------------------------------------
+// ---- Categories (task_lists). Pre-migration: the three sections it replaced.
+let listsReady = true;
+let lists: TaskList[] = [];
+const lRes = await supabase
+  .from("task_lists")
+  .select("id, name, kind, recurrence, managers_only, sort_order")
+  .is("removed_at", null)
+  .order("sort_order")
+  .order("created_at");
+if (lRes.error) {
+  listsReady = false;
+  lists = [
+    { id: "", name: "Daily checklist", kind: "recurring", recurrence: "daily", managers_only: false, sort_order: 0 },
+    { id: "", name: "Open", kind: "tasks", recurrence: null, managers_only: false, sort_order: 1 },
+    { id: "", name: "Done", kind: "done", recurrence: null, managers_only: false, sort_order: 2 },
+  ];
+} else lists = ((lRes.data ?? []) as TaskList[]).filter((l) => !l.managers_only || isManager);
+const taskLists = lists.filter((l) => l.kind === "tasks");
+const hasDone = lists.some((l) => l.kind === "done");
+const liveIds = new Set(lists.map((l) => l.id));
+const listName = new Map(lists.map((l) => [l.id, l.name]));
+// Unassigned items land in the first list of their type; items in a removed
+// category resolve to null and stay hidden until it's re-added.
+const listOf = (listId: string | null | undefined, kind: "tasks" | "recurring") =>
+  listId ? (liveIds.has(listId) ? listId : null) : (lists.find((l) => l.kind === kind)?.id ?? null);
+
+// ---- Recurring checklists (v2 tables) ------------------------------------
 let v2Ready = true;
 let templates: any[] = [];
-let completionsToday: any[] = [];
 const tRes = await supabase
   .from("daily_task_templates")
-  .select("id, title, notes, priority, points, active, sort_order")
+  .select(`id, title, notes, priority, points, active, sort_order${listsReady ? ", list_id" : ""}`)
   .eq("active", true)
   .order("sort_order")
   .order("created_at");
 if (tRes.error) v2Ready = false;
 else templates = tRes.data ?? [];
-if (v2Ready) {
-  const c = await supabase.from("daily_task_completions").select("template_id, completed_by, points, created_at").eq("completed_date", today);
-  completionsToday = c.data ?? [];
+// Each checklist's current period (day / Monday / 1st, rolling over at 4 AM).
+const periodByList = new Map(lists.filter((l) => l.kind === "recurring").map((l) => [l.id, periodKey(l.recurrence ?? "daily")]));
+const templatesByList = new Map<string, any[]>();
+for (const t of templates) {
+  const lid = listOf(t.list_id, "recurring");
+  if (lid === null) continue;
+  templatesByList.set(lid, [...(templatesByList.get(lid) ?? []), t]);
 }
-const compByTemplate = new Map(completionsToday.map((c: any) => [c.template_id, c]));
-const dailyDone = completionsToday.length;
+const compByTemplate = new Map<string, any>();
+if (v2Ready && periodByList.size) {
+  const c = await supabase.from("daily_task_completions").select("template_id, completed_date, completed_by").in("completed_date", [...new Set(periodByList.values())]);
+  const periodByTemplate = new Map(templates.map((t) => [t.id, periodByList.get(listOf(t.list_id, "recurring") ?? "")]));
+  for (const r of c.data ?? []) if (periodByTemplate.get(r.template_id) === r.completed_date) compByTemplate.set(r.template_id, r);
+}
 
 // ---- One-off tasks (try v2 columns, fall back) ---------------------------
 let setupNeeded = false;
 let tasks: any[] = [];
 const tk = await supabase
   .from("tasks")
-  .select("id, title, notes, status, assignee_id, due_date, priority, points, completed_by, completed_at, created_at")
+  .select(`id, title, notes, status, assignee_id, due_date, priority, points, completed_by, completed_at, created_at${listsReady ? ", list_id" : ""}`)
   .order("created_at", { ascending: false });
 if (tk.error) {
   const basic = await supabase.from("tasks").select("id, title, notes, status, assignee_id, due_date, created_at").order("created_at", { ascending: false });
   if (basic.error) setupNeeded = true;
   else tasks = basic.data ?? [];
 } else tasks = tk.data ?? [];
+for (const t of tasks) t.list = listOf(t.list_id, "tasks");
+tasks = tasks.filter((t) => t.list !== null);
 
-const openTasks = tasks.filter((t) => t.status !== "done").sort((a, b) => priorityRank(a.priority || "normal") - priorityRank(b.priority || "normal"));
+const openByList = new Map<string, any[]>();
+for (const t of tasks.filter((t) => t.status !== "done").sort((a, b) => priorityRank(a.priority || "normal") - priorityRank(b.priority || "normal"))) {
+  openByList.set(t.list, [...(openByList.get(t.list) ?? []), t]);
+}
 const doneTasks = tasks.filter((t) => t.status === "done");
 
 // ---- Attachment counts per task (degrade if not migrated yet) ------------
@@ -69,10 +105,15 @@ if (v2Ready) {
   leaderboard = [...m.entries()].map(([id, pts]) => ({ name: nameById.get(id) ?? "—", pts })).filter((x) => x.pts > 0).sort((a, b) => b.pts - a.pts);
 }
 
+// ---- Category manager ------------------------------------------------------
+const liveNames = new Set(lists.map((l) => l.name.toLowerCase()));
+const suggestions = SUGGESTED_LISTS.filter((s) => !liveNames.has(s.name.toLowerCase()) && !(s.kind === "done" && hasDone));
+const typeLabel = (l: TaskList) =>
+  l.kind === "done" ? "Completed tasks" : l.kind === "recurring" ? `${(l.recurrence ?? "daily")[0].toUpperCase()}${(l.recurrence ?? "daily").slice(1)} checklist` : "Tasks";
+
 const today2 = new Date(); today2.setHours(0, 0, 0, 0);
 const dueState = (d: string | null) => { if (!d) return ""; const due = new Date(d + "T00:00:00"); if (due < today2) return "over"; if (due.getTime() === today2.getTime()) return "today"; return ""; };
 const fmtDue = (d: string | null) => (d ? new Date(d + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "");
-const tt = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 ---
 
 <AppLayout title="To-dos" active="todos">
@@ -82,45 +123,187 @@ const tt = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "n
       <p class="notice" style="margin-top:0.6rem;">Run migration <code>20260621000002</code> (and <code>20260621000003</code>) in the Supabase SQL editor to enable the to-do list.</p>
     </div>
   ) : (
-    <div class="todo-wrap" data-myname={myName} data-today={today}>
+    <div class="todo-wrap" data-myname={myName} data-period={periodKey("daily")} data-hasdone={hasDone ? "1" : ""}>
       {!v2Ready && (
         <p class="notice" style="margin-bottom:1rem;">Run migration <code>20260621000003</code> to enable the daily checklist, priorities & points.</p>
       )}
+      {v2Ready && !listsReady && isManager && (
+        <p class="notice" style="margin-bottom:1rem;">Run migration <code>20260924000001_task_lists.sql</code> to customize the to-do categories.</p>
+      )}
 
-      {/* Daily checklist */}
-      {v2Ready && (
+      {/* Add one-off task */}
+      {taskLists.length > 0 && (
         <div class="pos-panel">
-          <h2 style="display:flex;align-items:center;gap:0.7rem;">Daily checklist
-            <span class="td-progress" id="daily-progress">{dailyDone}/{templates.length}</span>
-            <span class="muted" style="font-weight:400;font-size:0.85rem;">resets each day</span>
-          </h2>
-          <ul class="td-list" id="daily-list">
-            {templates.map((t: any) => {
-              const c = compByTemplate.get(t.id);
-              return (
-                <li class={`td-item daily${c ? " done" : ""}`} data-tid={t.id}>
-                  <input type="checkbox" class="td-check daily-check" checked={!!c} />
-                  <span class="td-body">
-                    <span class="td-title">{t.title}
-                      {t.priority !== "normal" && <span class={`pr pr-${t.priority}`}>{t.priority}</span>}
-                      {t.points > 0 && <span class="pts">+{t.points}</span>}
+          <h2>Add a task</h2>
+          <div class="td-add">
+            <input id="td-title" placeholder="What needs doing?" autocomplete="off" />
+            <select id="td-list" title="Category" hidden={taskLists.length < 2}>
+              {taskLists.map((l) => <option value={l.id}>{l.name}{l.managers_only ? " 🔒" : ""}</option>)}
+            </select>
+            <select id="td-assignee" title="Assign to"><option value="">Anyone</option>{roster?.map((r: any) => <option value={r.id}>{r.full_name}</option>)}</select>
+            {v2Ready && <select id="td-prio" title="Priority">{PRIORITIES.map((p) => <option value={p.key} selected={p.key === "normal"}>{p.label}</option>)}</select>}
+            <input id="td-due" type="date" title="Due date" />
+            <button id="td-save" class="btn btn-primary btn-sm">Add</button>
+          </div>
+          <div class="td-filter">
+            <select id="td-person" class="td-person" title="Filter by person">
+              <option value="">Everyone</option>
+              {roster?.map((r: any) => <option value={r.id}>{r.full_name}</option>)}
+            </select>
+            <input id="td-search" class="td-search" type="search" placeholder="Search tasks…" autocomplete="off" />
+            <span id="td-noresults" class="muted-2" hidden>No tasks match.</span>
+          </div>
+        </div>
+      )}
+
+      {lists.length === 0 && (
+        <div class="pos-panel"><p class="empty">No to-do categories yet{isManager ? " — add one below." : "."}</p></div>
+      )}
+
+      {lists.map((list) => {
+        // Recurring checklist: items stay put and un-check each period.
+        if (list.kind === "recurring") {
+          if (!v2Ready) return null;
+          const items = templatesByList.get(list.id) ?? [];
+          const done = items.filter((t) => compByTemplate.has(t.id)).length;
+          return (
+            <div class="pos-panel td-section rec-panel" data-list={list.id}>
+              <h2 class="td-h">{list.name}
+                {list.managers_only && <span class="mgr-badge" title="Only managers can see this">🔒 Managers</span>}
+                <span class="td-progress rec-progress">{done}/{items.length}</span>
+                <span class="muted" style="font-weight:400;font-size:0.85rem;">{RESET_LABEL[list.recurrence ?? "daily"]}</span>
+              </h2>
+              <ul class="td-list rec-list">
+                {items.map((t: any) => {
+                  const c = compByTemplate.get(t.id);
+                  return (
+                    <li class={`td-item daily${c ? " done" : ""}`} data-tid={t.id}>
+                      <input type="checkbox" class="td-check daily-check" checked={!!c} />
+                      <span class="td-body">
+                        <span class="td-title">{t.title}
+                          {t.priority !== "normal" && <span class={`pr pr-${t.priority}`}>{t.priority}</span>}
+                          {t.points > 0 && <span class="pts">+{t.points}</span>}
+                        </span>
+                        <span class="td-by" data-by>{c ? `✓ ${nameById.get(c.completed_by) ?? "—"}` : ""}</span>
+                      </span>
+                      {isManager && <button class="td-del" data-tdel title="Remove checklist item" aria-label="Remove">✕</button>}
+                    </li>
+                  );
+                })}
+                {items.length === 0 && <li class="empty">No items yet{isManager ? " — add one below." : "."}</li>}
+              </ul>
+              {isManager && (
+                <div class="td-add daily-add" style="margin-top:0.7rem;">
+                  <input class="dt-title" placeholder="New checklist item…" autocomplete="off" />
+                  <select class="dt-prio">{PRIORITIES.map((p) => <option value={p.key} selected={p.key === "normal"}>{p.label}</option>)}</select>
+                  <span class="td-money">⭐<input class="dt-points" type="number" min="0" max="100" value="1" title="Points" /></span>
+                  <button class="btn btn-ghost btn-sm dt-add">Add item</button>
+                </div>
+              )}
+            </div>
+          );
+        }
+
+        // Completed one-off tasks from every category.
+        if (list.kind === "done") {
+          return (
+            <div class="pos-panel td-section" data-list={list.id}>
+              <h2 class="td-h">{list.name} <span class="muted" style="font-weight:400;">({doneTasks.length})</span></h2>
+              <ul class="td-list td-done">
+                {doneTasks.map((tk: any) => (
+                  <li class="td-item done" data-id={tk.id} data-completer={tk.completed_by ?? ""} data-search={`${tk.title} ${tk.notes ?? ""}`.toLowerCase()}>
+                    <input type="checkbox" class="td-check" checked />
+                    <span class="td-body">
+                      <span class="td-title">{tk.title}{tk.notes && <span class="td-noteflag" title="Has notes">📝</span>}{(fileCountByTask.get(tk.id) ?? 0) > 0 && <span class="td-noteflag" title="Has attachments">📎</span>}</span>
+                      <span class="td-meta">
+                        {taskLists.length > 1 && <span class="td-cat">{listName.get(tk.list)}</span>}
+                        {v2Ready && tk.completed_by && <span class="td-who">✓ {nameById.get(tk.completed_by) ?? "—"}</span>}
+                      </span>
                     </span>
-                    <span class="td-by" data-by>{c ? `✓ ${nameById.get(c.completed_by) ?? "—"}` : ""}</span>
+                    <button class="td-del" title="Delete" aria-label="Delete">✕</button>
+                  </li>
+                ))}
+                {doneTasks.length === 0 && <li class="empty">Nothing completed yet.</li>}
+              </ul>
+            </div>
+          );
+        }
+
+        // One-off tasks.
+        const open = openByList.get(list.id) ?? [];
+        return (
+          <div class="pos-panel td-section" data-list={list.id}>
+            <h2 class="td-h">{list.name}
+              {list.managers_only && <span class="mgr-badge" title="Only managers can see this">🔒 Managers</span>}
+              <span class="muted" style="font-weight:400;">({open.length})</span>
+            </h2>
+            <ul class="td-list td-open">
+              {open.map((tk: any) => (
+                <li class={`td-item pr-row-${tk.priority || "normal"}`} data-id={tk.id} data-list={tk.list}
+                    data-title={tk.title} data-notes={tk.notes ?? ""} data-priority={tk.priority ?? "normal"}
+                    data-points={tk.points ?? 0} data-assignee={tk.assignee_id ?? ""} data-due={tk.due_date ?? ""}
+                    data-search={`${tk.title} ${tk.notes ?? ""}`.toLowerCase()}>
+                  <input type="checkbox" class="td-check" />
+                  <span class="td-body">
+                    <span class="td-title">{tk.title}
+                      {v2Ready && tk.priority && tk.priority !== "normal" && <span class={`pr pr-${tk.priority}`}>{tk.priority}</span>}
+                      {v2Ready && tk.points > 0 && <span class="pts">+{tk.points}</span>}
+                      {tk.notes && <span class="td-noteflag" title="Has notes">📝</span>}
+                      {(fileCountByTask.get(tk.id) ?? 0) > 0 && <span class="td-noteflag" title="Has attachments">📎</span>}
+                    </span>
+                    <span class="td-meta">
+                      {tk.assignee_id && <span class="td-who">{nameById.get(tk.assignee_id) ?? "—"}</span>}
+                      {tk.due_date && <span class={`td-due td-due--${dueState(tk.due_date)}`}>{fmtDue(tk.due_date)}</span>}
+                    </span>
                   </span>
-                  {isManager && <button class="td-del" data-tdel title="Remove daily item" aria-label="Remove">✕</button>}
+                  <button class="td-edit" title="Edit" aria-label="Edit">✎</button>
+                  <button class="td-del" title="Delete" aria-label="Delete">✕</button>
                 </li>
-              );
-            })}
-            {templates.length === 0 && <li class="empty">No daily items yet{isManager ? " — add one below." : "."}</li>}
+              ))}
+              {open.length === 0 && <li class="empty">Nothing open — nice. 🎉</li>}
+            </ul>
+          </div>
+        );
+      })}
+
+      {/* Category manager (managers and up) */}
+      {isManager && listsReady && (
+        <div class="pos-panel cat-panel">
+          <h2>Categories</h2>
+          <p class="muted" style="margin:0.2rem 0 0.7rem;font-size:0.85rem;">
+            Checklists keep their items and un-check them each period. Without a “Done” category, completed tasks disappear from the page.
+          </p>
+          <ul class="cat-list">
+            {lists.map((l) => (
+              <li data-lid={l.id} data-name={l.name}>
+                <span class="cat-name">{l.name}</span>
+                <span class="cat-type">{typeLabel(l)}</span>
+                {l.managers_only && <span class="mgr-badge">🔒 Managers</span>}
+                <button class="td-del" data-cat-del title="Remove category" aria-label={`Remove ${l.name}`}>✕</button>
+              </li>
+            ))}
           </ul>
-          {isManager && (
-            <div class="td-add daily-add" style="margin-top:0.7rem;">
-              <input id="dt-title" placeholder="New daily item…" autocomplete="off" />
-              <select id="dt-prio">{PRIORITIES.map((p) => <option value={p.key} selected={p.key === "normal"}>{p.label}</option>)}</select>
-              <span class="td-money">⭐<input id="dt-points" type="number" min="0" max="100" value="1" title="Points" /></span>
-              <button id="dt-add" class="btn btn-ghost btn-sm">Add daily</button>
+          {suggestions.length > 0 && (
+            <div class="cat-sugg">
+              <span class="muted-2">Suggested:</span>
+              {suggestions.map((s) => (
+                <button class="cat-chip" type="button" data-name={s.name} data-kind={s.kind} data-rec={s.recurrence ?? ""} data-mgr={s.managersOnly ? "1" : ""}>+ {s.name}</button>
+              ))}
             </div>
           )}
+          <div class="cat-add">
+            <input id="cat-name" list="cat-suggest" placeholder="Type any category…" autocomplete="off" maxlength="60" />
+            <datalist id="cat-suggest">{SUGGESTED_LISTS.map((s) => <option value={s.name} />)}</datalist>
+            <select id="cat-type" title="Type">
+              <option value="tasks">One-off tasks</option>
+              <option value="recurring:daily">Daily checklist</option>
+              <option value="recurring:weekly">Weekly checklist</option>
+              <option value="recurring:monthly">Monthly checklist</option>
+              {!hasDone && <option value="done">Completed tasks (Done)</option>}
+            </select>
+            <label class="cat-mgr"><input type="checkbox" id="cat-mgr" /> Managers only</label>
+            <button id="cat-add" class="btn btn-ghost btn-sm">Add category</button>
+          </div>
         </div>
       )}
 
@@ -136,82 +319,13 @@ const tt = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "n
         </div>
       )}
 
-      {/* Add one-off task */}
-      <div class="pos-panel" style="margin-top:1rem;">
-        <h2>Add a task</h2>
-        <div class="td-add">
-          <input id="td-title" placeholder="What needs doing?" autocomplete="off" />
-          <select id="td-assignee" title="Assign to"><option value="">Anyone</option>{roster?.map((r: any) => <option value={r.id}>{r.full_name}</option>)}</select>
-          {v2Ready && <select id="td-prio" title="Priority">{PRIORITIES.map((p) => <option value={p.key} selected={p.key === "normal"}>{p.label}</option>)}</select>}
-          <input id="td-due" type="date" title="Due date" />
-          <button id="td-save" class="btn btn-primary btn-sm">Add</button>
-        </div>
-      </div>
-
-      {/* Open */}
-      <div class="pos-panel" style="margin-top:1rem;">
-        <h2 style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;">Open <span class="muted" style="font-weight:400;">({openTasks.length})</span>
-          <span style="margin-left:auto;display:flex;gap:0.5rem;">
-            <select id="td-person" class="td-person" title="Filter by person">
-              <option value="">Everyone</option>
-              {roster?.map((r: any) => <option value={r.id}>{r.full_name}</option>)}
-            </select>
-            <input id="td-search" class="td-search" type="search" placeholder="Search…" autocomplete="off" />
-          </span>
-        </h2>
-        <p id="td-noresults" class="empty" hidden>No tasks match.</p>
-        <ul class="td-list" id="td-open">
-          {openTasks.map((tk: any) => (
-            <li class={`td-item pr-row-${tk.priority || "normal"}`} data-id={tk.id}
-                data-title={tk.title} data-notes={tk.notes ?? ""} data-priority={tk.priority ?? "normal"}
-                data-points={tk.points ?? 0} data-assignee={tk.assignee_id ?? ""} data-due={tk.due_date ?? ""}
-                data-search={`${tk.title} ${tk.notes ?? ""}`.toLowerCase()}>
-              <input type="checkbox" class="td-check" />
-              <span class="td-body">
-                <span class="td-title">{tk.title}
-                  {v2Ready && tk.priority && tk.priority !== "normal" && <span class={`pr pr-${tk.priority}`}>{tk.priority}</span>}
-                  {v2Ready && tk.points > 0 && <span class="pts">+{tk.points}</span>}
-                  {tk.notes && <span class="td-noteflag" title="Has notes">📝</span>}
-                  {(fileCountByTask.get(tk.id) ?? 0) > 0 && <span class="td-noteflag" title="Has attachments">📎</span>}
-                </span>
-                <span class="td-meta">
-                  {tk.assignee_id && <span class="td-who">{nameById.get(tk.assignee_id) ?? "—"}</span>}
-                  {tk.due_date && <span class={`td-due td-due--${dueState(tk.due_date)}`}>{fmtDue(tk.due_date)}</span>}
-                </span>
-              </span>
-              <button class="td-edit" title="Edit" aria-label="Edit">✎</button>
-              <button class="td-del" title="Delete" aria-label="Delete">✕</button>
-            </li>
-          ))}
-          {openTasks.length === 0 && <li class="empty">Nothing open — nice. 🎉</li>}
-        </ul>
-      </div>
-
-      {/* Done */}
-      {doneTasks.length > 0 && (
-        <div class="pos-panel" style="margin-top:1rem;">
-          <h2>Done <span class="muted" style="font-weight:400;">({doneTasks.length})</span></h2>
-          <ul class="td-list" id="td-done">
-            {doneTasks.map((tk: any) => (
-              <li class="td-item done" data-id={tk.id} data-completer={tk.completed_by ?? ""} data-search={`${tk.title} ${tk.notes ?? ""}`.toLowerCase()}>
-                <input type="checkbox" class="td-check" checked />
-                <span class="td-body">
-                  <span class="td-title">{tk.title}{tk.notes && <span class="td-noteflag" title="Has notes">📝</span>}{(fileCountByTask.get(tk.id) ?? 0) > 0 && <span class="td-noteflag" title="Has attachments">📎</span>}</span>
-                  {v2Ready && tk.completed_by && <span class="td-meta"><span class="td-who">✓ {nameById.get(tk.completed_by) ?? "—"}</span></span>}
-                </span>
-                <button class="td-del" title="Delete" aria-label="Delete">✕</button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
       {/* Edit task modal */}
       <div class="td-modal" id="td-modal" hidden>
         <div class="td-modal-card">
           <h3 style="margin-bottom:0.8rem;">Edit task</h3>
           <label class="ed-field">Title<input id="ed-title" /></label>
           <div class="ed-grid">
+            {taskLists.length > 1 && <label class="ed-field">Category<select id="ed-list">{taskLists.map((l) => <option value={l.id}>{l.name}{l.managers_only ? " 🔒" : ""}</option>)}</select></label>}
             <label class="ed-field">Priority<select id="ed-prio">{PRIORITIES.map((p) => <option value={p.key}>{p.label}</option>)}</select></label>
             <label class="ed-field">Points<span class="td-money">⭐<input id="ed-points" type="number" min="0" max="100" /></span></label>
             <label class="ed-field">Assign<select id="ed-assignee"><option value="">Anyone</option>{roster?.map((r: any) => <option value={r.id}>{r.full_name}</option>)}</select></label>
@@ -239,9 +353,25 @@ const tt = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "n
 
 <style>
   .todo-wrap { max-width: 720px; }
-  .td-add { display: grid; grid-template-columns: 1fr auto auto auto auto; gap: 0.5rem; }
-  .daily-add { grid-template-columns: 1fr auto auto auto; }
-  @media (max-width: 640px) { .td-add { grid-template-columns: 1fr; } }
+  .todo-wrap > .pos-panel + .pos-panel { margin-top: 1rem; }
+  .td-add { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+  .td-add > input:first-child { flex: 1 1 200px; min-width: 0; }
+  .td-add [hidden] { display: none; }
+  @media (max-width: 640px) { .td-add > * { flex: 1 1 100%; } }
+  .td-h { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+  .td-filter { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.7rem; flex-wrap: wrap; }
+  .mgr-badge { font-size: 0.68rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; color: var(--yellow); padding: 0.05rem 0.45rem; border: 1px solid var(--border-strong); }
+  .td-cat { font-size: 0.72rem; color: var(--muted-2); }
+  .cat-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.35rem; }
+  .cat-list li { display: flex; align-items: center; gap: 0.6rem; padding: 0.45rem 0.7rem; border: 1px solid var(--border); }
+  .cat-name { font-weight: 700; }
+  .cat-type { font-size: 0.76rem; color: var(--muted-2); flex: 1; }
+  .cat-sugg { display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; margin-top: 0.8rem; font-size: 0.82rem; }
+  .cat-chip { background: none; border: 1px dashed var(--border-strong); color: var(--cyan); padding: 0.2rem 0.6rem; font-size: 0.82rem; cursor: pointer; }
+  .cat-chip:hover { border-style: solid; }
+  .cat-add { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.8rem; }
+  .cat-add #cat-name { flex: 1 1 200px; min-width: 0; }
+  .cat-mgr { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.85rem; white-space: nowrap; }
   .td-list { list-style: none; padding: 0; margin: 0.4rem 0 0; display: grid; gap: 0.4rem; }
   .td-item { display: flex; align-items: center; gap: 0.7rem; padding: 0.6rem 0.7rem; border: 1px solid var(--border); background: rgba(255,255,255,.02); }
   .td-item.pr-row-high { border-left: 3px solid var(--magenta); }
@@ -249,6 +379,7 @@ const tt = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "n
   .td-body { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 0.8rem; }
   .td-title { font-weight: 600; display: inline-flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; }
   .td-item.done .td-title { text-decoration: line-through; color: var(--muted-2); }
+  .td-item.leaving { opacity: 0; transition: opacity 0.4s; }
   .td-by { font-size: 0.76rem; font-weight: 700; color: var(--green); flex: none; }
   .td-meta { display: flex; align-items: center; gap: 0.5rem; flex: none; }
   .td-who { font-size: 0.74rem; font-weight: 700; color: var(--muted); padding: 0.1rem 0.5rem; border: 1px solid var(--border-strong); }
@@ -297,9 +428,11 @@ const tt = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "n
 </style>
 
 <script>
+  import { inferList, periodKey } from "../../lib/todos";
   const $ = (id: string) => document.getElementById(id);
   const wrap = document.querySelector(".todo-wrap") as HTMLElement | null;
   const myName = wrap?.dataset.myname || "You";
+  const hasDone = !!wrap?.dataset.hasdone;
   async function api(body: any) {
     const r = await fetch("/api/pos/tasks", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
     const j = await r.json().catch(() => ({}));
@@ -307,36 +440,49 @@ const tt = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "n
     return j;
   }
 
-  // ---- Daily checklist ----
-  function refreshProgress() {
-    const list = $("daily-list"); const prog = $("daily-progress");
-    if (!list || !prog) return;
-    const items = list.querySelectorAll(".td-item.daily");
-    const done = [...items].filter((li) => li.classList.contains("done")).length;
-    prog.textContent = `${done}/${items.length}`;
-  }
-  document.querySelectorAll<HTMLElement>(".td-item.daily").forEach((li) => {
-    const tid = li.dataset.tid!;
-    li.querySelector<HTMLInputElement>(".daily-check")?.addEventListener("change", async (e) => {
-      const done = (e.target as HTMLInputElement).checked;
-      li.classList.toggle("done", done);
-      const by = li.querySelector("[data-by]"); if (by) by.textContent = done ? `✓ ${myName}` : "";
-      refreshProgress();
-      try { await api({ action: "daily-toggle", templateId: tid, done }); }
-      catch (err: any) { alert(err.message); (e.target as HTMLInputElement).checked = !done; li.classList.toggle("done", !done); if (by) by.textContent = !done ? `✓ ${myName}` : ""; refreshProgress(); }
+  // Checklists roll over at 4 AM — reload an idle page when the day turns.
+  setInterval(() => {
+    if (wrap && periodKey("daily") !== wrap.dataset.period && $("td-modal")?.hidden !== false) location.reload();
+  }, 60_000);
+
+  // ---- Recurring checklists ----
+  document.querySelectorAll<HTMLElement>(".rec-panel").forEach((panel) => {
+    const listId = panel.dataset.list || "";
+    const refreshProgress = () => {
+      const items = panel.querySelectorAll(".td-item.daily");
+      const done = [...items].filter((li) => li.classList.contains("done")).length;
+      const prog = panel.querySelector(".rec-progress"); if (prog) prog.textContent = `${done}/${items.length}`;
+    };
+    panel.querySelectorAll<HTMLElement>(".td-item.daily").forEach((li) => {
+      const tid = li.dataset.tid!;
+      li.querySelector<HTMLInputElement>(".daily-check")?.addEventListener("change", async (e) => {
+        const done = (e.target as HTMLInputElement).checked;
+        li.classList.toggle("done", done);
+        const by = li.querySelector("[data-by]"); if (by) by.textContent = done ? `✓ ${myName}` : "";
+        refreshProgress();
+        try { await api({ action: "daily-toggle", templateId: tid, done }); }
+        catch (err: any) { alert(err.message); (e.target as HTMLInputElement).checked = !done; li.classList.toggle("done", !done); if (by) by.textContent = !done ? `✓ ${myName}` : ""; refreshProgress(); }
+      });
+      li.querySelector<HTMLButtonElement>("[data-tdel]")?.addEventListener("click", async () => {
+        if (!confirm("Remove this checklist item for everyone?")) return;
+        try { await api({ action: "template-delete", id: tid }); location.reload(); } catch (err: any) { alert(err.message); }
+      });
     });
-    li.querySelector<HTMLButtonElement>("[data-tdel]")?.addEventListener("click", async () => {
-      if (!confirm("Remove this daily item for everyone?")) return;
-      try { await api({ action: "template-delete", id: tid }); location.reload(); } catch (err: any) { alert(err.message); }
+    const addBtn = panel.querySelector<HTMLButtonElement>(".dt-add");
+    const titleIn = panel.querySelector<HTMLInputElement>(".dt-title");
+    addBtn?.addEventListener("click", async () => {
+      const title = titleIn?.value.trim();
+      if (!title) return;
+      try {
+        await api({
+          action: "template-create", listId, title,
+          priority: panel.querySelector<HTMLSelectElement>(".dt-prio")?.value,
+          points: panel.querySelector<HTMLInputElement>(".dt-points")?.value,
+        });
+        location.reload();
+      } catch (err: any) { alert(err.message); }
     });
-  });
-  $("dt-add")?.addEventListener("click", async () => {
-    const title = ($("dt-title") as HTMLInputElement).value.trim();
-    if (!title) return;
-    try {
-      await api({ action: "template-create", title, priority: ($("dt-prio") as HTMLSelectElement).value, points: ($("dt-points") as HTMLInputElement).value });
-      location.reload();
-    } catch (err: any) { alert(err.message); }
+    titleIn?.addEventListener("keydown", (e) => { if (e.key === "Enter") addBtn?.click(); });
   });
 
   // ---- One-off tasks ----
@@ -346,6 +492,7 @@ const tt = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "n
     try {
       await api({
         action: "create", title,
+        listId: ($("td-list") as HTMLSelectElement | null)?.value,
         assigneeId: ($("td-assignee") as HTMLSelectElement).value,
         priority: ($("td-prio") as HTMLSelectElement | null)?.value,
         dueDate: ($("td-due") as HTMLInputElement).value,
@@ -355,12 +502,16 @@ const tt = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "n
   });
   $("td-title")?.addEventListener("keydown", (e) => { if ((e as KeyboardEvent).key === "Enter") $("td-save")?.dispatchEvent(new Event("click")); });
 
-  document.querySelectorAll<HTMLElement>("#td-open .td-item, #td-done .td-item").forEach((li) => {
+  document.querySelectorAll<HTMLElement>(".td-open .td-item, .td-done .td-item").forEach((li) => {
     const id = li.dataset.id!;
     li.querySelector<HTMLInputElement>(".td-check")?.addEventListener("change", async (e) => {
       const done = (e.target as HTMLInputElement).checked;
       li.classList.toggle("done", done);
-      try { await api({ action: "toggle", id, done }); }
+      try {
+        await api({ action: "toggle", id, done });
+        // No "Done" category: finished tasks drop off the page.
+        if (done && !hasDone) { li.classList.add("leaving"); setTimeout(() => li.remove(), 400); }
+      }
       catch (err: any) { alert(err.message); (e.target as HTMLInputElement).checked = !done; li.classList.toggle("done", !done); }
     });
     li.querySelector<HTMLButtonElement>(".td-del")?.addEventListener("click", async () => {
@@ -375,12 +526,12 @@ const tt = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "n
     const q = (search?.value || "").trim().toLowerCase();
     const who = person?.value || "";
     let shown = 0;
-    document.querySelectorAll<HTMLElement>("#td-open .td-item").forEach((li) => {
+    document.querySelectorAll<HTMLElement>(".td-open .td-item:not(.empty)").forEach((li) => {
       const hit = (!q || (li.dataset.search || "").includes(q)) && (!who || (li.dataset.assignee || "") === who);
       li.style.display = hit ? "" : "none";
       if (hit) shown++;
     });
-    document.querySelectorAll<HTMLElement>("#td-done .td-item").forEach((li) => {
+    document.querySelectorAll<HTMLElement>(".td-done .td-item").forEach((li) => {
       const hit = (!q || (li.dataset.search || "").includes(q)) && (!who || (li.dataset.completer || "") === who);
       li.style.display = hit ? "" : "none";
     });
@@ -389,12 +540,54 @@ const tt = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "n
   search?.addEventListener("input", applyFilter);
   person?.addEventListener("change", applyFilter);
 
+  // ---- Categories (managers) ----
+  async function addCategory(name: string, type: string, managersOnly: boolean) {
+    const [kind, recurrence] = type.split(":");
+    try {
+      const res = await api({ action: "list-create", name, kind, recurrence, managersOnly });
+      if (res.restored) alert(`"${name}" was restored with its previous items.`);
+      location.reload();
+    } catch (err: any) { alert(err.message); }
+  }
+  const catName = $("cat-name") as HTMLInputElement | null;
+  const catType = $("cat-type") as HTMLSelectElement | null;
+  const catMgr = $("cat-mgr") as HTMLInputElement | null;
+  let catTouched = false; // stop auto-guessing once the manager picks a type
+  catType?.addEventListener("change", () => { catTouched = true; });
+  catMgr?.addEventListener("change", () => { catTouched = true; });
+  catName?.addEventListener("input", () => {
+    if (catTouched || !catType || !catMgr) return;
+    const g = inferList(catName.value);
+    const v = g.kind === "recurring" ? `recurring:${g.recurrence}` : g.kind;
+    if ([...catType.options].some((o) => o.value === v)) catType.value = v;
+    catMgr.checked = g.managersOnly;
+  });
+  $("cat-add")?.addEventListener("click", () => {
+    const name = catName?.value.trim();
+    if (!name) { catName?.focus(); return; }
+    addCategory(name, catType?.value || "tasks", !!catMgr?.checked);
+  });
+  catName?.addEventListener("keydown", (e) => { if (e.key === "Enter") $("cat-add")?.click(); });
+  document.querySelectorAll<HTMLButtonElement>(".cat-chip").forEach((b) => {
+    b.addEventListener("click", () => {
+      const { name = "", kind = "tasks", rec = "", mgr = "" } = b.dataset;
+      addCategory(name, rec ? `${kind}:${rec}` : kind, !!mgr);
+    });
+  });
+  document.querySelectorAll<HTMLElement>(".cat-list li").forEach((li) => {
+    li.querySelector("[data-cat-del]")?.addEventListener("click", async () => {
+      if (!confirm(`Remove the "${li.dataset.name}" category?\n\nIts items are hidden, not deleted — add a category with the same name and type to bring them back.`)) return;
+      try { await api({ action: "list-remove", id: li.dataset.lid }); location.reload(); } catch (err: any) { alert(err.message); }
+    });
+  });
+
   // ---- Edit modal ----
   const modal = $("td-modal");
   let editingId: string | null = null;
   function openEdit(li: HTMLElement) {
     editingId = li.dataset.id!;
     ($("ed-title") as HTMLInputElement).value = li.dataset.title || "";
+    const edList = $("ed-list") as HTMLSelectElement | null; if (edList) edList.value = li.dataset.list || "";
     ($("ed-prio") as HTMLSelectElement).value = li.dataset.priority || "normal";
     ($("ed-points") as HTMLInputElement).value = li.dataset.points || "0";
     ($("ed-assignee") as HTMLSelectElement).value = li.dataset.assignee || "";
@@ -406,7 +599,7 @@ const tt = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "n
     if (modal) modal.hidden = false;
   }
   const closeEdit = () => { if (modal) modal.hidden = true; editingId = null; };
-  document.querySelectorAll<HTMLElement>("#td-open .td-item").forEach((li) => {
+  document.querySelectorAll<HTMLElement>(".td-open .td-item").forEach((li) => {
     li.querySelector<HTMLButtonElement>(".td-edit")?.addEventListener("click", () => openEdit(li));
   });
   $("ed-cancel")?.addEventListener("click", closeEdit);
@@ -418,6 +611,7 @@ const tt = (iso: string) => new Date(iso).toLocaleTimeString("en-US", { hour: "n
     try {
       await api({
         action: "update", id: editingId, title,
+        listId: ($("ed-list") as HTMLSelectElement | null)?.value,
         priority: ($("ed-prio") as HTMLSelectElement).value,
         points: ($("ed-points") as HTMLInputElement).value,
         assigneeId: ($("ed-assignee") as HTMLSelectElement).value,

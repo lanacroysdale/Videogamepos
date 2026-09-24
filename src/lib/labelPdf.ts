@@ -11,8 +11,15 @@ import { renderLabelSvg, ensureLabelFont, LABEL_FONTS, type LabelTemplate, type 
 
 export type PdfJob = { item: LabelItem; copies: number };
 
-const PX_PER_MM = 8; // 203.2 dpi — native for the MUNBYN-class thermal heads
 const PT_PER_MM = 72 / 25.4;
+// One raster pixel per printer dot: oversampling gets averaged back into gray
+// edges by the driver, which its halftoning then speckles. Thermal heads are
+// metric — "203 dpi" is really 8 dots/mm (203.2), "300" is 11.81/mm — so use
+// the exact dot pitch or every bar edge lands between dots and gets smoothed.
+const pxPerMm = (dpi?: number) => {
+  const d = Number(dpi);
+  return d === 600 ? 24 : d === 300 ? 300 / 25.4 : 8; // 203-class default
+};
 
 const b64 = (buf: ArrayBuffer) => {
   const bytes = new Uint8Array(buf);
@@ -70,7 +77,20 @@ export async function fontStyleTag(tpl: LabelTemplate): Promise<string> {
 // esc() in labels.ts entity-encodes the logo URL inside href="…"
 export const escAttr = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
 
-async function rasterize(svg: string, wMm: number, hMm: number, deg: 0 | 90 | 180 | 270): Promise<{ jpeg: Uint8Array; pw: number; ph: number }> {
+export type PdfTune = { scalePct?: number; nudgeXMm?: number; nudgeYMm?: number; dpi?: number };
+
+// Label stock is sold in INCHES but templates store whole millimeters: a
+// "57×32mm" template on 2.25×1.25″ (57.15×31.75mm) driver paper is off by a
+// hair, which makes the print pipeline shrink-to-fit — and rescaling a 1-bit
+// bitmap even 1% smears crisp bars into fuzz. Snap page dimensions to the
+// nearest ⅛-inch when within 0.6mm so page == paper exactly, no scaling ever.
+export const snapToInchGrid = (mm: number) => {
+  const q = Math.round(mm / 3.175) * 3.175;
+  return q > 0 && Math.abs(q - mm) <= 0.6 ? q : mm;
+};
+
+async function rasterize(svg: string, wMm: number, hMm: number, deg: 0 | 90 | 180 | 270, tune?: PdfTune): Promise<{ data: Uint8Array; pw: number; ph: number }> {
+  const PX_PER_MM = pxPerMm(tune?.dpi);
   const img = new Image();
   await new Promise<void>((res, rej) => {
     img.onload = () => res();
@@ -79,25 +99,49 @@ async function rasterize(svg: string, wMm: number, hMm: number, deg: 0 | 90 | 18
   });
   const w = Math.round(wMm * PX_PER_MM), h = Math.round(hMm * PX_PER_MM);
   const sideways = deg === 90 || deg === 270;
+  // Rotate onto a label-size scratch canvas first…
+  const rotated = document.createElement("canvas");
+  rotated.width = sideways ? h : w;
+  rotated.height = sideways ? w : h;
+  const rctx = rotated.getContext("2d")!;
+  rctx.fillStyle = "#fff";
+  rctx.fillRect(0, 0, rotated.width, rotated.height);
+  if (deg === 90) { rctx.translate(rotated.width, 0); rctx.rotate(Math.PI / 2); }
+  else if (deg === 180) { rctx.translate(rotated.width, rotated.height); rctx.rotate(Math.PI); }
+  else if (deg === 270) { rctx.translate(0, rotated.height); rctx.rotate(-Math.PI / 2); }
+  rctx.drawImage(img, 0, 0, w, h);
+  // …then center it on the inch-exact PAGE canvas, applying the per-station
+  // physical alignment (size % + mm nudges) in plain page coordinates.
+  const s = Math.min(100, Math.max(60, Math.round(Number(tune?.scalePct) || 100))) / 100;
+  const nx = Math.min(30, Math.max(-30, Number(tune?.nudgeXMm) || 0)) * PX_PER_MM;
+  const ny = Math.min(30, Math.max(-30, Number(tune?.nudgeYMm) || 0)) * PX_PER_MM;
   const canvas = document.createElement("canvas");
-  canvas.width = sideways ? h : w;
-  canvas.height = sideways ? w : h;
+  canvas.width = Math.round(snapToInchGrid(sideways ? hMm : wMm) * PX_PER_MM);
+  canvas.height = Math.round(snapToInchGrid(sideways ? wMm : hMm) * PX_PER_MM);
   const ctx = canvas.getContext("2d")!;
   ctx.fillStyle = "#fff";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  if (deg === 90) { ctx.translate(canvas.width, 0); ctx.rotate(Math.PI / 2); }
-  else if (deg === 180) { ctx.translate(canvas.width, canvas.height); ctx.rotate(Math.PI); }
-  else if (deg === 270) { ctx.translate(0, canvas.height); ctx.rotate(-Math.PI / 2); }
-  ctx.drawImage(img, 0, 0, w, h);
-  const dataUrl = canvas.toDataURL("image/jpeg", 0.93);
-  const bin = atob(dataUrl.slice(dataUrl.indexOf(",") + 1));
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return { jpeg: bytes, pw: canvas.width, ph: canvas.height };
+  const dw = rotated.width * s, dh = rotated.height * s;
+  ctx.drawImage(rotated, (canvas.width - dw) / 2 + nx, (canvas.height - dh) / 2 + ny, dw, dh);
+  // Thermal heads are binary: gray pixels (JPEG ringing, anti-aliasing) get
+  // dithered by the driver into fuzz. Snap every pixel to pure black/white
+  // and pack 1 bit per pixel (DeviceGray, MSB first, byte-aligned rows) —
+  // LOSSLESS, razor-sharp bars and text, and smaller than JPEG was.
+  const px = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  const rowBytes = Math.ceil(canvas.width / 8);
+  const data = new Uint8Array(rowBytes * canvas.height); // 0 = black, 1 = white
+  for (let y = 0; y < canvas.height; y++) {
+    for (let x = 0; x < canvas.width; x++) {
+      const i = (y * canvas.width + x) * 4;
+      const lum = px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114;
+      if (lum >= 128) data[y * rowBytes + (x >> 3)] |= 0x80 >> (x & 7);
+    }
+  }
+  return { data, pw: canvas.width, ph: canvas.height };
 }
 
 // ---- minimal PDF writer: one image XObject per unique label, one page per copy ----
-function buildPdf(images: { jpeg: Uint8Array; pw: number; ph: number }[], pageOfCopy: number[], wPt: number, hPt: number): Blob {
+function buildPdf(images: { data: Uint8Array; pw: number; ph: number }[], pageOfCopy: number[], wPt: number, hPt: number): Blob {
   const enc = new TextEncoder();
   const parts: (Uint8Array | string)[] = [];
   let offset = 0;
@@ -120,8 +164,8 @@ function buildPdf(images: { jpeg: Uint8Array; pw: number; ph: number }[], pageOf
   obj(2, `<< /Type /Pages /Kids [${pageOfCopy.map((_, i) => `${pageObj(i)} 0 R`).join(" ")}] /Count ${pageOfCopy.length} >>`);
   images.forEach((im, i) => {
     offsets[imgObj(i)] = offset;
-    push(`${imgObj(i)} 0 obj\n<< /Type /XObject /Subtype /Image /Width ${im.pw} /Height ${im.ph} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${im.jpeg.length} >>\nstream\n`);
-    push(im.jpeg);
+    push(`${imgObj(i)} 0 obj\n<< /Type /XObject /Subtype /Image /Width ${im.pw} /Height ${im.ph} /ColorSpace /DeviceGray /BitsPerComponent 1 /Interpolate false /Length ${im.data.length} >>\nstream\n`);
+    push(im.data);
     push("\nendstream\nendobj\n");
   });
   images.forEach((_, i) => {
@@ -142,7 +186,7 @@ function buildPdf(images: { jpeg: Uint8Array; pw: number; ph: number }[], pageOf
 // Render every job to a PDF blob. rotateDeg composes each label at the given
 // orientation (90/270 = sideways on a portrait page, roll-native for
 // portrait-fed drivers; 180 = flat upside down).
-export async function labelsToPdf(jobs: PdfJob[], tpl: LabelTemplate, opts?: { rotateDeg?: 0 | 90 | 180 | 270 }): Promise<Blob> {
+export async function labelsToPdf(jobs: PdfJob[], tpl: LabelTemplate, opts?: { rotateDeg?: 0 | 90 | 180 | 270 } & PdfTune): Promise<Blob> {
   const real = jobs.filter((j) => j.copies > 0);
   if (!real.length) throw new Error("Nothing to print.");
   await ensureLabelFont(tpl);
@@ -151,17 +195,18 @@ export async function labelsToPdf(jobs: PdfJob[], tpl: LabelTemplate, opts?: { r
   const styleTag = await fontStyleTag(tpl);
   const logoData = tpl.logoUrl ? await inlineLogo(tpl.logoUrl) : "";
 
-  const images: { jpeg: Uint8Array; pw: number; ph: number }[] = [];
+  const images: { data: Uint8Array; pw: number; ph: number }[] = [];
   const pageOfCopy: number[] = [];
   for (const j of real) {
     let svg = renderLabelSvg(tpl, j.item);
     if (styleTag) svg = svg.replace(/(<svg[^>]*>)/, `$1${styleTag}`);
     if (tpl.logoUrl && logoData) svg = svg.split(escAttr(tpl.logoUrl)).join(logoData).split(tpl.logoUrl).join(logoData);
-    const im = await rasterize(svg, tpl.widthMm, tpl.heightMm, deg);
+    const im = await rasterize(svg, tpl.widthMm, tpl.heightMm, deg, opts);
     const idx = images.push(im) - 1;
     for (let c = 0; c < Math.min(500, j.copies); c++) pageOfCopy.push(idx);
   }
-  const wPt = (sideways ? tpl.heightMm : tpl.widthMm) * PT_PER_MM;
-  const hPt = (sideways ? tpl.widthMm : tpl.heightMm) * PT_PER_MM;
+  // Page = the driver's inch-defined paper, exactly (see snapToInchGrid).
+  const wPt = snapToInchGrid(sideways ? tpl.heightMm : tpl.widthMm) * PT_PER_MM;
+  const hPt = snapToInchGrid(sideways ? tpl.widthMm : tpl.heightMm) * PT_PER_MM;
   return buildPdf(images, pageOfCopy, wPt, hPt);
 }

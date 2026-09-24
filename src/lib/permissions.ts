@@ -40,7 +40,7 @@ export const PERMISSIONS: PermissionDef[] = [
   { key: "customers.merge", group: "Sales", label: "Merge customers", description: "Merge duplicate customer records." },
   // ---- Staff ----
   { key: "shifts.manage", group: "Staff", label: "Schedule", description: "Add and remove scheduled shifts." },
-  { key: "tasks.manage", group: "Staff", label: "Daily checklist", description: "Edit the daily checklist templates and receive task-completion notifications." },
+  { key: "tasks.manage", group: "Staff", label: "To-do categories & checklists", description: "Add or remove to-do categories, edit recurring checklists, see managers-only lists, and receive task-completion notifications." },
   { key: "sops.manage", group: "Staff", label: "Write SOPs", description: "Create, edit, delete SOPs and attach files. See unapproved drafts." },
   { key: "sops.approve", group: "Staff", label: "Approve SOPs", description: "Publish SOP drafts. Anyone with this permission also publishes their own edits without review." },
   // ---- Administration ----

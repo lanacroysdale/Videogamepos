@@ -36,10 +36,12 @@ export const POST: APIRoute = async ({ locals, request }) => {
 
   const admin = createSupabaseAdminClient();
 
-  // The task must exist (and tells us the migration has been applied).
-  const { data: task, error: taskErr } = await admin.from("tasks").select("id").eq("id", taskId).maybeSingle();
-  if (taskErr) return json({ error: "Task storage isn't set up yet — run migration 20260621000005_task_files.sql." }, 400);
+  // The task must exist and be visible to this user (RLS hides managers-only
+  // categories); the task_files probe tells us that migration has been applied.
+  const { data: task } = await locals.supabase.from("tasks").select("id").eq("id", taskId).maybeSingle();
   if (!task) return json({ error: "Task not found" }, 404);
+  const { error: taskErr } = await admin.from("task_files").select("id").limit(1);
+  if (taskErr) return json({ error: "Task storage isn't set up yet — run migration 20260621000005_task_files.sql." }, 400);
 
   const ext = (file.name.split(".").pop() || "bin").toLowerCase().replace(/[^a-z0-9]/g, "") || "bin";
   const path = `tasks/${taskId}/${crypto.randomUUID()}.${ext}`;
