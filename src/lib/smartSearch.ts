@@ -231,11 +231,12 @@ export function matchScore(p: MatchableProduct, parsed: ParsedQuery): number {
     if (!parsed.title) return 0;
     // The platform word + title IS the name ("Wii Sports Club" on Wii U,
     // "PlayStation Move" on PS3) — a real match whatever the platform.
-    // Compared as whole words, with "&" / "and" and punctuation ignored on both
-    // sides: "game & watch gallery" finds "Game and Watch Gallery 4", while
-    // "nes controller" doesn't find an SNES one and "ds xl" not a 3DS XL.
+    // "&" / "and" and punctuation ignored on both sides, and the phrase must
+    // START on a word ("nes controller" ≠ an SNES one, "ds xl" ≠ a 3DS XL) —
+    // but its LAST word may be partial or singular, so the listing stays put
+    // while staff type ("wii sports clu", "nes controller" → "…Controllers").
     const names = phraseWords(`${p.title} ${(p.altNames || []).join(" ")}`);
-    if (parsed.platformText && names.includes(phraseWords(`${parsed.platformText} ${parsed.title}`))) return 0.85;
+    if (parsed.platformText && names.includes(phraseWords(`${parsed.platformText} ${parsed.title}`).trimEnd())) return 0.85;
     if (resolveStaticPlatform(p.platform)) return 0;
     if (hay.includes(parsed.title)) return 0.8;
     // Only REAL title words count — the platform word alone is not a match.
