@@ -1586,7 +1586,9 @@ const posData = {
         const fileTag = h32(ch.fileName || "sheet", 2166136261);
         const seenPrints = new Map<string, number>();
         const keyFor = (r: any) => {
-          const fp = [r.row.title.toLowerCase().trim(), (r.row.platform || "").toLowerCase(), r.row.completenessCode, r.row.gradeCode, ch.inventoryTypeId || "", r.row.qty, r.row.folder || ""].join("|");
+          // Not the qty: the server keys each COPY (<key>#1, #2, …), so an edited
+          // sheet that goes from 1 to 2 copies adds exactly one.
+          const fp = [r.row.title.toLowerCase().trim(), (r.row.platform || "").toLowerCase(), r.row.completenessCode, r.row.gradeCode, ch.inventoryTypeId || "", r.row.folder || ""].join("|");
           const occ = (seenPrints.get(fp) || 0) + 1; seenPrints.set(fp, occ);
           return `${fileTag}:${h32(fp, 2166136261)}${h32(fp, 5381)}:${occ}`;
         };
@@ -1656,7 +1658,8 @@ const posData = {
         });
         }
         const failed = results.map((res, i) => (res?.ok ? null : `Row ${rows[i].row.n} “${rows[i].row.title}”: ${res?.error || "failed"}`)).filter(Boolean);
-        const replayed = results.map((res, i) => (res?.replay ? `Row ${rows[i].row.n} “${rows[i].row.title}”` : null)).filter(Boolean);
+        const replayed = results.map((res, i) => (res?.replay ? `Row ${rows[i].row.n} “${rows[i].row.title}”`
+          : res?.already ? `Row ${rows[i].row.n} “${rows[i].row.title}”: ${res.already} of ${rows[i].row.qty} copies (the rest were added)` : null)).filter(Boolean);
         progress("Loading the draft…");
         await loadEntry(entryId);
         setEntryMode(true);

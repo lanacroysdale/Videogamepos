@@ -154,17 +154,17 @@ export function resolvePlatform(raw: string, platforms: PlatformAlias[]): { cano
   if (rm) { region = rm[2].toUpperCase().replace("JAPANESE", "JP").replace("JAPAN", "JP").replace("JPN", "JP").replace("NTSC J", "JP"); s = s.replace(REGION_RE, " "); }
   // PriceCharting names Japanese consoles without a "JP" prefix.
   else if (IMPLIED_JP_RE.test(s)) region = "JP";
-  // Built-in platforms (and catalog spellings mapped onto them) match anywhere
-  // in the text. A catalog-ONLY spelling ("Game & Watch", "Amiibo", or a brand
-  // that slipped in) must equal the WHOLE text — as a substring, "nintendo"
-  // would swallow "Switch - Nintendo" and every row would miss its listing.
-  const all: { canonical: string; alias: string; builtin: boolean }[] = [];
-  for (const p of platforms) for (const a of [p.canonical.toLowerCase(), ...p.aliases]) all.push({ canonical: p.canonical, alias: norm(a), builtin: BUILTIN.has(p.canonical) });
-  all.sort((x, y) => Number(y.builtin) - Number(x.builtin) || y.alias.length - x.alias.length);
+  // Built-in platforms first, by their OWN aliases only — a catalog spelling
+  // ("Nintendo Game Boy", "Microsoft Xbox") must never outrank a longer
+  // platform ("… Game Boy Color", "… Xbox 360"). A catalog-ONLY spelling
+  // ("Game & Watch", "Amiibo") must equal the WHOLE text: as a substring, a
+  // stray "nintendo" would swallow "Switch - Nintendo" and every row after it.
+  const builtin = resolveStaticPlatforms(s)[0];
+  if (builtin) return { canonical: builtin, region };
   const whole = s.trim();
-  for (const m of all) {
-    if (!m.alias) continue;
-    if (m.builtin ? s.includes(" " + m.alias + " ") : whole === m.alias) return { canonical: m.canonical, region };
+  for (const p of platforms) {
+    if (BUILTIN.has(p.canonical)) continue;
+    if ([p.canonical, ...p.aliases].some((a) => norm(a) === whole)) return { canonical: p.canonical, region };
   }
   return { canonical: null, region };
 }

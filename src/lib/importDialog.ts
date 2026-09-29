@@ -184,7 +184,9 @@ export function openImportDialog(o: ImportDialogOpts) {
   // No new file while an import is running — it would swap the rows out from
   // under the batches still being staged.
   drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); const f = e.dataTransfer?.files?.[0]; if (f && !busy) loadFile(f); });
-  input.addEventListener("change", () => { const f = input.files?.[0]; if (f && !busy) loadFile(f); });
+  // Clear the picker after reading, so choosing the same (edited) file again
+  // reloads it — browsers only fire "change" when the selection differs.
+  input.addEventListener("change", () => { const f = input.files?.[0]; input.value = ""; if (f && !busy) loadFile(f); });
 
   async function loadFile(f: File) {
     const text = await f.text();

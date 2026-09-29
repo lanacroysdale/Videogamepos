@@ -133,6 +133,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
         useRpc = !rpcErr || !["PGRST202", "42883"].includes(rpcErr.code);
       }
       let rowKey = ""; // the current row's import key while the atomic path stages it
+      let lastAlready = 0; // …and how many of its copies were already staged
       const { error: delErr } = await sb.from("products").select("deleted_at").limit(1);
       // Listings created in THIS request, by the client's group ref, so a Loose +
       // CIB pair of a brand-new game lands on ONE listing even within a batch.
@@ -160,6 +161,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
           });
           if (error) throw new Error(error.code === "23505" ? "This row is being imported by another request — try again in a minute." : error.message);
           if (data?.replay) throw new AlreadyStaged(data);
+          lastAlready = Number(data.already) || 0; // copies of this row already on the draft
           return { itemId: data.item_id as string, merged: !!data.merged };
         }
         const had = lineByVariant.get(variantId);
@@ -282,18 +284,26 @@ export const POST: APIRoute = async ({ locals, request }) => {
       for (const r of rows) {
         const key = !keysErr && r.importKey ? String(r.importKey).slice(0, 200) : "";
         let claimed = false;
-        rowKey = "";
+        rowKey = ""; lastAlready = 0;
         try {
+          if (key && useRpc) {
+            // Every copy (<key>#1…#qty) already staged? Replay without touching
+            // listings. Otherwise stage_import_line claims + stages + records
+            // only the copies that are new, in one transaction.
+            const qty = qtyOf(r.qty);
+            const { data: done } = await sb.from("inventory_entry_import_keys").select("import_key, item_id, variant_id, product_id, created")
+              .eq("entry_id", b.entryId).in("import_key", Array.from({ length: qty }, (_, k) => `${key}#${k + 1}`));
+            const first = (done ?? []).find((d: any) => d.import_key === `${key}#1`);
+            if ((done ?? []).length === qty && (done ?? []).every((d: any) => d.item_id) && first) { await pushReplay(r, first); continue; }
+            rowKey = key;
+            const { res } = await processRow(r);
+            if (lastAlready) res.already = lastAlready;
+            results.push(res);
+            continue;
+          }
           if (key) {
             const { data: done } = await sb.from("inventory_entry_import_keys").select("item_id, variant_id, product_id, created").eq("entry_id", b.entryId).eq("import_key", key).maybeSingle();
             if (done?.item_id) { await pushReplay(r, done); continue; }
-            if (useRpc) {
-              // Atomic path: stage_import_line claims + stages + records together.
-              rowKey = key;
-              const { res } = await processRow(r);
-              results.push(res);
-              continue;
-            }
             // Fallback (pre-20260929000002): claim first; a unique violation = in flight or stale.
             const claim = () => sb.from("inventory_entry_import_keys").insert({ entry_id: b.entryId, import_key: key });
             let { error: claimErr } = await claim();

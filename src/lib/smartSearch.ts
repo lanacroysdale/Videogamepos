@@ -92,6 +92,7 @@ const NOISE = new Set(["condition", "cond", "the", "a", "of"]);
 // "wii …" keeps "Wii" in a new product's title ("wii mario kart" doesn't).
 const NAME_WITH_PLATFORM_RE = /^(wii (sports|fit|play|party|music|chess|u party|u panorama|u sports|u fit)|game ?boy (camera|printer|gallery|wars)|virtual boy wario land)\b/;
 
+const BUILTIN_CANON = new Set(PLATFORM_ALIASES.map((p) => p.canonical));
 const words = (t: string) => " " + String(t ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() + " ";
 const STATIC_ALIASES = PLATFORM_ALIASES
   .flatMap((p) => [p.canonical, ...p.aliases].map((a) => ({ canonical: p.canonical, alias: words(a) })))
@@ -121,10 +122,26 @@ export function resolveStaticPlatforms(name: string | null | undefined): string[
 /** The platform whose alias IS the whole text ("Nintendo Switch", "PS4") —
  *  brand words and colours aside — i.e. a console named after its platform. */
 export function platformNameExact(text: string): string | null {
-  const t = words(text).replace(/ (nintendo|sony|microsoft|sega|black|white|red|blue|neon|gray|grey|pink|purple|green|yellow|orange|clear|gold|silver|atomic|teal|indigo|coral) /g, " ").replace(/\s+/g, " ");
+  const t = words(text);
   if (!t.trim()) return null;
-  return STATIC_ALIASES.find((m) => m.alias === t)?.canonical ?? null;
+  // As written ("Nintendo 64", "Super Nintendo", "Sega CD"), then without a
+  // leading maker/colour ("Sony PlayStation 2", "Neon Nintendo Switch").
+  const lead = t.replace(new RegExp(`^ ((${MAKERS}|${COLOURS}) )+`), " ");
+  for (const c of t === lead ? [t] : [t, lead]) {
+    for (const m of STATIC_ALIASES) {
+      if (!m.alias.trim() || !c.startsWith(m.alias)) continue;
+      // Only colour / finish words may follow: "Gameboy Advance Fuchsia Pink"
+      // is a console, "Wii Sports" / "Game Boy Camera" are not.
+      const rest = c.slice(m.alias.length).trim();
+      if (!rest || rest.split(" ").every((w) => COLOUR_SET.has(w) || MAKER_SET.has(w))) return m.canonical;
+    }
+  }
+  return null;
 }
+const MAKERS = "nintendo|sony|microsoft|sega";
+const COLOURS = "black|white|red|blue|neon|gray|grey|pink|purple|green|yellow|orange|clear|gold|silver|atomic|teal|indigo|coral|fuchsia|glacier|arctic|platinum|dandelion|kiwi|grape|berry|jungle|spice|flame|cobalt|midnight|onyx|pearl|lime|smoke|charcoal|titanium|graphite|ice|emerald|crimson|turquoise|violet|lavender|mint|navy|ocean|sky|light|dark|metallic|matte|glossy|transparent|translucent|limited|edition";
+const COLOUR_SET = new Set(COLOURS.split("|"));
+const MAKER_SET = new Set(MAKERS.split("|"));
 
 // Makers' names that eBay stores as the "platform" when an item has none
 // (amiibo, docks, controllers). Not platforms — never parse them as one.
@@ -144,7 +161,11 @@ export function buildPlatforms(catalogPlatforms: (string | null | undefined)[]):
 
 function peel(s: string, entries: { key: string; canonical?: string; aliases: string[] }[]) {
   const all: { key: string; canonical?: string; alias: string }[] = [];
-  for (const e of entries) for (const a of e.aliases) if (a) all.push({ key: e.key, canonical: e.canonical, alias: a.toLowerCase() });
+  // Aliases get the same clean-up as the query ("game & watch" → "game watch").
+  for (const e of entries) for (const a of e.aliases) {
+    const alias = a.toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
+    if (alias) all.push({ key: e.key, canonical: e.canonical, alias });
+  }
   all.sort((x, y) => y.alias.length - x.alias.length); // longest alias first
   for (const m of all) {
     const re = new RegExp("(^|\\s)" + m.alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "($|\\s)");
@@ -160,7 +181,14 @@ export function parseQuery(
 ): ParsedQuery {
   let s = " " + raw.toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ") + " ";
   const out: ParsedQuery = { platform: null, completenessCode: "", gradeCode: "", title: "", platformText: "", titleForNew: "" };
-  const pm = peel(s, opts.platforms.map((p) => ({ key: p.canonical, canonical: p.canonical, aliases: p.aliases })));
+  // Peel the platform the query names by the BUILT-IN table (longest alias
+  // wins, so "nintendo game boy color" is Game Boy Color, not the catalog's
+  // "Nintendo Game Boy"), using every spelling of that one platform; only when
+  // no built-in platform is named, try catalog-only names ("Game & Watch").
+  const named = resolveStaticPlatform(s);
+  const pm = peel(s, opts.platforms
+    .filter((p) => (named ? p.canonical === named : !BUILTIN_CANON.has(p.canonical)))
+    .map((p) => ({ key: p.canonical, canonical: p.canonical, aliases: [p.canonical.toLowerCase(), ...p.aliases] })));
   if (pm) { out.platform = pm.canonical ?? null; out.platformText = pm.alias; s = pm.rest; }
   const cm = peel(s, opts.completeness.map((c) => ({ key: c.code, aliases: [...c.aliases, c.label, c.code] })));
   if (cm) { out.completenessCode = cm.key; s = cm.rest; }
@@ -197,11 +225,12 @@ export function matchScore(p: MatchableProduct, parsed: ParsedQuery): number {
     // A listing on a DIFFERENT known platform never matches. One whose platform
     // is blank, a brand ("Nintendo", "Capcom") or other unknown text falls back
     // to a weaker title match, as do names that contain the platform word.
-    if (resolveStaticPlatform(p.platform)) return 0;
     if (!parsed.title) return 0;
+    // The platform word + title IS the name ("Wii Sports Club" on Wii U,
+    // "PlayStation Move" on PS3) — a real match whatever the platform.
     const names = `${p.title} ${(p.altNames || []).join(" ")}`.toLowerCase();
-    const inName = !!parsed.platformText && new RegExp("(^|\\W)" + parsed.platformText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(\\W|$)").test(names);
-    if (inName && hay.includes(`${parsed.platformText} ${parsed.title}`)) return 0.85;
+    if (parsed.platformText && names.includes(`${parsed.platformText} ${parsed.title}`)) return 0.85;
+    if (resolveStaticPlatform(p.platform)) return 0;
     if (hay.includes(parsed.title)) return 0.8;
     // Only REAL title words count — the platform word alone is not a match.
     const qt = parsed.title.split(" ").filter(Boolean);
