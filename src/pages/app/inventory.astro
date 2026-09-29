@@ -24,6 +24,8 @@ const hasTypes = !!invTypesSrv;
 const { error: draftProbeErr } = await supabase.from("inventory_entry_items").select("applied").limit(1);
 // Sources + supplier links (migration 20260801000003).
 const { error: srcProbeErr } = await supabase.from("inventory_entries").select("supplier").limit(1);
+// Received-on date per entry (migration 20260924000002).
+const { error: roProbeErr } = await supabase.from("inventory_entries").select("received_on").limit(1);
 const { error: lcProbeErr } = await supabase.from("product_variants").select("label_code").limit(1);
 // Previously-used sources feed the datalist (RLS keeps product_suppliers
 // manager-only; entries are staff-visible anyway).
@@ -75,6 +77,7 @@ const allRows = (products ?? []).map((p: any) => ({
   categoryName: p.category?.name ?? "",
   categoryColor: p.category?.color ?? "#2ce6e0",
   ebayId: (p.tags ?? []).find((t: string) => t.startsWith("ebay:"))?.slice(5) ?? "",
+  pcId: (p.tags ?? []).find((t: string) => t.startsWith("pricecharting:"))?.slice(13) ?? "",
   supplierLinks: p.product_suppliers ?? [], // manager-only via RLS (staff get [])
   variants: (p.product_variants ?? []).map((v: any) => ({
     id: v.id,
@@ -126,6 +129,7 @@ const posData = {
   webBase: import.meta.env.PROD ? `https://${MARKETING_HOSTS[0]}` : "",
   draftsReady: !draftProbeErr,
   sourcesReady: !srcProbeErr,
+  receivedOnReady: !roProbeErr,
 };
 ---
 
@@ -136,6 +140,7 @@ const posData = {
     {isManager && <button id="resync-img" class="btn btn-ghost btn-sm" title="Fetch covers for items with no image (only fills empties)">🔄 Resync images</button>}
     <button id="phone-scan-btn" class="btn btn-ghost btn-sm" title="Pair your phone as a wireless scanner">📱 Phone</button>
     <a href="/entries" class="btn btn-ghost btn-sm" title="Past receiving entries + label reprints">📥 Entries</a>
+    <button id="inv-import" class="btn btn-ghost btn-sm" title="Import a collection .csv (PriceCharting export or any Title / Platform / Condition sheet) as staged lines on an entry">📄 Import CSV</button>
     <button id="recv-toggle" class="btn btn-ghost btn-sm" title="Start a receiving session — new products and received stock get grouped for label printing">▶ Start receiving</button>
     <button id="toggle-add" class="btn btn-primary btn-sm">＋ Add product</button>
   </div>
@@ -146,6 +151,7 @@ const posData = {
         <h2 style="margin:0;">📥 Inventory Entry <span id="ent-num"></span></h2>
         <span class="pill cyan">draft — autosaves</span>
         <label class="ent-src">Source <input id="ent-supplier" list="supplier-list" placeholder="e.g. VGNY, eBay, estate sale…" /></label>
+        <label class="ent-src ent-recv" title="The date the business received these items (for a personal-collection transfer, the transfer date)">Received <input id="ent-received" type="date" /></label>
         <div class="ent-head-actions">
           <button id="ent-exit" class="btn btn-ghost btn-sm" type="button" title="Leave — the draft stays in 📥 Entries">💾 Save &amp; exit</button>
           <button id="ent-delete" class="btn btn-ghost btn-sm ent-del" type="button">🗑 Delete draft</button>
@@ -159,6 +165,7 @@ const posData = {
           <div class="ti-suggest" id="ent-suggest" hidden></div>
         </div>
         <button id="ent-new" class="btn btn-ghost btn-sm" type="button">＋ New product</button>
+        <button id="ent-import" class="btn btn-ghost btn-sm" type="button" title="Import a collection .csv — each row becomes a staged line (matched to existing listings when possible)">📄 Import CSV</button>
       </div>
       <table class="tbl" id="ent-table">
         <thead><tr>
@@ -453,6 +460,7 @@ const posData = {
   .ent-del { color:var(--magenta); border-color:rgba(255,73,208,.4); }
   .ent-src { display:flex; align-items:center; gap:0.4rem; font-size:0.84rem; font-weight:600; color:var(--muted); }
   .ent-src input { width:13rem; padding:0.35rem 0.5rem; }
+  .ent-recv input { width:auto; }
   #ent-table [data-ef="src"] { width:8rem; text-align:left; }
   .sup-row { display:flex; align-items:center; gap:0.6rem; padding:0.3rem 0.1rem; border-bottom:1px solid var(--border); font-size:0.86rem; }
   .sup-row a { color:var(--cyan); }
@@ -496,6 +504,8 @@ const posData = {
   import { openPrintDialog } from "../../lib/labelPrint";
   import { initScanReceiver, openPairDialog } from "../../lib/scanReceive";
   import { barcodeEq } from "../../lib/gtin";
+  import { openImportDialog } from "../../lib/importDialog";
+  import { newListingKey } from "../../lib/collectionImport";
 
   const data = JSON.parse(document.getElementById("pos-data")!.textContent!);
   let items: any[] = data.items;
@@ -562,7 +572,7 @@ const posData = {
     if (!parsed) return;
     const panel = $("add-panel") as HTMLElement;
     panel.hidden = false;
-    ($("np-title") as HTMLInputElement).value = parsed.title.replace(/\b\w/g, (c: string) => c.toUpperCase());
+    ($("np-title") as HTMLInputElement).value = parsed.titleForNew.replace(/\b\w/g, (c: string) => c.toUpperCase());
     ($("np-platform") as HTMLInputElement).value = parsed.platform || "";
     setComp($("np-comp") as HTMLInputElement, parsed.completenessCode || "", $("np-comp-abbr"));
     ($("np-grade") as HTMLSelectElement).value = parsed.gradeCode || "3";
@@ -1238,6 +1248,8 @@ const posData = {
      delete it from 📥 Entries). */
   const draftsReady: boolean = !!(data as any).draftsReady;
   const sourcesReady: boolean = !!(data as any).sourcesReady;
+  const receivedOnReady: boolean = !!(data as any).receivedOnReady;
+  const localDate = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
   let entryId = "";
   let entryHuman = 0;
   let entryMode = false;
@@ -1245,6 +1257,8 @@ const posData = {
   let entOrderTotal: number | null = null;
   let entSupplier = ""; // entry-level source (per-line placeholder default)
   if (!sourcesReady) document.querySelectorAll<HTMLElement>(".ent-src, .ent-srccol").forEach((el) => (el.style.display = "none"));
+  const recvWrap = document.querySelector<HTMLElement>(".ent-recv");
+  if (recvWrap) recvWrap.style.display = receivedOnReady ? "" : "none";
   try { const s = JSON.parse(sessionStorage.getItem("tl-entry") || "null"); if (s?.id) { entryId = s.id; entryHuman = s.h; } } catch {}
 
   function setEntryMode(on: boolean) {
@@ -1352,6 +1366,8 @@ const posData = {
       entSupplier = j.entry.supplier || "";
       const supInp = $("ent-supplier") as HTMLInputElement | null;
       if (supInp) supInp.value = entSupplier;
+      const recvInp = $("ent-received") as HTMLInputElement | null;
+      if (recvInp) recvInp.value = j.entry.received_on || "";
       entRows = (j.items || []).map((it: any) => {
         const v = it.variant || {}; const pr = v.product || {};
         return {
@@ -1368,10 +1384,11 @@ const posData = {
 
   async function ensureEntry() {
     if (entryId) return;
-    const j = await api({ action: "startEntry" });
+    const j = await api({ action: "startEntry", receivedOn: localDate() });
     entryId = j.entry.id; entryHuman = j.entry.human_id;
     try { sessionStorage.setItem("tl-entry", JSON.stringify({ id: entryId, h: entryHuman })); } catch {}
     if (j.resumed) await loadEntry(entryId);
+    else { const ri = $("ent-received") as HTMLInputElement | null; if (ri) ri.value = localDate(); }
     toast(j.resumed ? `📥 Resumed draft Entry #${entryHuman}` : `📥 Started Entry #${entryHuman}`);
   }
 
@@ -1424,6 +1441,11 @@ const posData = {
     entOrderTotal = raw === "" ? null : toCents(raw);
     entTotals();
     try { await api({ action: "setOrderTotal", entryId, orderTotalCents: entOrderTotal }); } catch (err: any) { alert(err.message); }
+  });
+  ($("ent-received") as HTMLInputElement)?.addEventListener("change", async (e) => {
+    const inp = e.target as HTMLInputElement;
+    if (!entryId || !inp.value) return;
+    try { await api({ action: "setEntryReceivedOn", entryId, receivedOn: inp.value }); } catch (err: any) { alert(err.message); }
   });
   ($("ent-supplier") as HTMLInputElement)?.addEventListener("change", async (e) => {
     entSupplier = (e.target as HTMLInputElement).value.trim();
@@ -1498,13 +1520,163 @@ const posData = {
     const parsed = q ? parseQuery(q) : null;
     const panel = $("add-panel") as HTMLElement;
     panel.hidden = false;
-    if (parsed?.title) ($("np-title") as HTMLInputElement).value = parsed.title.replace(/\b\w/g, (c: string) => c.toUpperCase());
+    if (parsed?.title) ($("np-title") as HTMLInputElement).value = parsed.titleForNew.replace(/\b\w/g, (c: string) => c.toUpperCase());
     if (parsed?.platform) ($("np-platform") as HTMLInputElement).value = parsed.platform;
     if (parsed) { setComp($("np-comp") as HTMLInputElement, parsed.completenessCode || "", $("np-comp-abbr")); if (parsed.gradeCode) ($("np-grade") as HTMLSelectElement).value = parsed.gradeCode; }
     ($("np-qty") as HTMLInputElement).value = "1";
     panel.scrollIntoView({ behavior: "smooth", block: "center" });
     ($("np-price") as HTMLInputElement).focus();
   }
+
+  /* ---------- Collection CSV import (PriceCharting export etc.) ----------
+     Rows are matched client-side against the loaded catalog (existing
+     condition → same variant; other condition → new variant on that listing;
+     no listing → new product) and STAGED onto the draft in batches. Nothing
+     applies to stock until Finish, exactly like typed/scanned lines. */
+  const importCatalog = () => items.map((p: any) => ({
+    id: p.id, title: p.title, platform: p.platform || "", franchise: p.franchise || "", altNames: p.altNames || [],
+    categoryId: p.categoryId, pcId: p.pcId || "",
+    variants: (p.variants || []).map((v: any) => ({
+      id: v.id, completenessCode: v.completenessCode || "", gradeCode: v.gradeCode || "", priceCents: v.priceCents || 0,
+      quantity: v.quantity, barcodes: (v.barcodes || []).map((b: any) => b.barcode),
+      inventoryTypeId: v.inventoryTypeId || retailTypeId || "",
+    })),
+  }));
+  const mkImportedVariant = (res: any, p: any) => ({
+    id: res.variantId, condition: p.condition, completeness: null, completenessCode: p.completenessCode, gradeCode: p.gradeCode,
+    sku: null, internalCode: res.internalCode || "", labelCode: "", priceCents: p.priceCents, onlinePriceCents: null, costCents: null,
+    quantity: 0, onlineVisible: false, inventoryTypeId: p.inventoryTypeId || retailTypeId, locationId: "",
+    barcodes: p.barcode ? [{ id: "primary:" + res.variantId, barcode: p.barcode, label: "Primary", primary: true }] : [],
+  });
+  async function enrichInBackground(list: any[]) {
+    let done = 0, added = 0; const CONC = 3;
+    for (let i = 0; i < list.length; i += CONC) {
+      await Promise.all(list.slice(i, i + CONC).map(async (p) => {
+        try {
+          const e = await enrich({ productId: p.id, title: p.title, platform: p.platform });
+          if (e.ok && e.found) { if (e.imageUrl) { p.imageUrl = e.imageUrl; added++; } if (e.altNames?.length) p.altNames = e.altNames; if (e.description) p.description = e.description; }
+        } catch {}
+        done++;
+      }));
+      toast(`🎮 Fetching covers ${done}/${list.length}…`);
+    }
+    render();
+    toast(`🎮 Covers added for ${added} of ${list.length} new listing${list.length === 1 ? "" : "s"}`);
+  }
+  async function openCollectionImport() {
+    if (!draftsReady) { alert("Run supabase/migrations/20260801000002_entry_drafts.sql in the Supabase SQL editor first, then refresh."); return; }
+    try { await ensureEntry(); setEntryMode(true); } catch (e: any) { alert(e.message); return; }
+    openImportDialog({
+      mode: "entry", catalog: importCatalog(), completeness, grades, platforms: PLATFORMS, categories, invTypes,
+      onImport: async (rows, ch, progress) => {
+        const condText = (r: any) => [completeness.find((c) => c.code === r.row.completenessCode)?.label, grades.find((g) => g.code === r.row.gradeCode)?.label].filter(Boolean).join(" ") || "Used";
+        const priceOf = (r: any) => (r.row.priceCents == null ? 0 : Math.round(r.row.priceCents * ch.pricePct / 100));
+        const newProducts: any[] = [];
+        // A brand-new game with several conditions in the sheet (Loose + CIB)
+        // is ONE listing: the first row creates it (ref), the rest become new
+        // conditions on it (productRef). The server resolves refs within a
+        // batch; later batches get the real id from earlier results.
+        const firstOfGroup = new Set<string>();
+        // Import key = the file NAME + the row's CONTENTS (+ folder, + which
+        // occurrence of that content). Retrying — or re-importing an edited copy
+        // of the same sheet — replays rows already on the draft instead of
+        // doubling them; only identical rows of a same-named file can collide,
+        // and those are listed back to the employee after the import.
+        const h32 = (str: string, seed: number) => { let h = seed >>> 0; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h.toString(16).padStart(8, "0"); };
+        const fileTag = h32(ch.fileName || "sheet", 2166136261);
+        const seenPrints = new Map<string, number>();
+        const keyFor = (r: any) => {
+          // Not the qty: the server keys each COPY (<key>#1, #2, …), so an edited
+          // sheet that goes from 1 to 2 copies adds exactly one.
+          const fp = [r.row.title.toLowerCase().trim(), (r.row.platform || "").toLowerCase(), r.row.completenessCode, r.row.gradeCode, ch.inventoryTypeId || "", r.row.folder || ""].join("|");
+          const occ = (seenPrints.get(fp) || 0) + 1; seenPrints.set(fp, occ);
+          return `${fileTag}:${h32(fp, 2166136261)}${h32(fp, 5381)}:${occ}`;
+        };
+        const payload = rows.map((r: any) => {
+          const base = {
+            qty: r.row.qty, costCents: r.row.costCents, tagPcId: r.row.pcId && !(r.product && r.product.pcId) ? r.row.pcId : undefined,
+            importKey: keyFor(r),
+          };
+          if (r.product && r.variant) return { kind: "variant", variantId: r.variant.id, productId: r.product.id, ...base };
+          const v = { completenessCode: r.row.completenessCode, gradeCode: r.row.gradeCode, condition: condText(r), priceCents: priceOf(r), barcode: r.row.upc || null, inventoryTypeId: ch.inventoryTypeId || undefined };
+          if (r.product) return { kind: "newVariant", productId: r.product.id, ...v, ...base };
+          const g = newListingKey(r.row);
+          // title/platform let the server find the listing if its ref row was staged in an earlier attempt.
+          if (firstOfGroup.has(g)) return { kind: "newVariant", productRef: g, title: r.row.title, platform: r.row.platform, ...v, ...base };
+          firstOfGroup.add(g);
+          return { kind: "newProduct", ref: g, title: r.row.title, platform: r.row.platform, categoryId: r.categoryId || ch.categoryId, ...v, ...base };
+        });
+        const refToProduct = new Map<string, string>();
+        const results: any[] = [];
+        // Small batches: each new-listing row is ~7 database round trips, and
+        // a batch must finish well inside the serverless time limit.
+        const STEP = 10;
+        // Does the server have replay protection (migration 20260929000001)?
+        // Decides what we can promise the employee if a batch fails.
+        const idempotent = !!(await api({ action: "importStage", entryId, rows: [] }).catch(() => ({}))).idempotent;
+        try {
+          for (let i = 0; i < payload.length; i += STEP) {
+            progress(`Staging ${Math.min(i + STEP, payload.length)} / ${payload.length}…`);
+            const batch = payload.slice(i, i + STEP).map((p: any) => (p.productRef && refToProduct.has(p.productRef) ? { ...p, productId: refToProduct.get(p.productRef) } : p));
+            const j = await api({ action: "importStage", entryId, rows: batch });
+            results.push(...(j.results || []));
+            batch.forEach((p: any, k: number) => { if (p.ref && j.results?.[k]?.ok) refToProduct.set(p.ref, j.results[k].productId); });
+            // Staged → never re-sent if a later batch fails and the employee retries.
+            rows.slice(i, i + STEP).forEach((r: any, k: number) => { if (j.results?.[k]?.ok) r.skip = true; });
+          }
+        } catch (e) {
+          if (results.length) { await mirrorImported(results); await loadEntry(entryId); setEntryMode(true); render(); }
+          if (newProducts.length) enrichInBackground(newProducts); // covers for what DID get created
+          throw new Error(`${(e as any)?.message || "A batch failed"}. ${idempotent
+            ? "Press Import again: rows that already made it onto the draft are recognized and won't be added twice."
+            : "Rows from the failed batch MAY already be on the draft (look before pressing Import again, or apply migration 20260929000001 for automatic protection)."}`);
+        }
+        await mirrorImported(results);
+        async function mirrorImported(results: any[]) {
+        // Mirror new listings/conditions into the loaded catalog so the
+        // typeahead (and a second import of the same sheet) sees them.
+        results.forEach((res, i) => {
+          if (!res?.ok) return;
+          const r: any = rows[i]; const p: any = payload[i];
+          if (res.newProduct) {
+            if (items.some((x) => x.id === res.productId)) return; // replayed row, already mirrored
+            const cat = categories.find((c: any) => c.id === p.categoryId);
+            const np: any = {
+              id: res.productId, title: r.row.title, slug: res.slug || r.row.title.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""),
+              platform: r.row.platform, franchise: "", genre: "", description: "", imageUrl: "", altNames: [], categoryId: p.categoryId,
+              categoryName: cat?.name ?? "", categoryColor: cat?.color ?? "#2ce6e0", ebayId: "", pcId: r.row.pcId || "", supplierLinks: [],
+              variants: [mkImportedVariant(res, p)],
+            };
+            items.push(np); newProducts.push(np);
+          } else {
+            const lp = items.find((x) => x.id === res.productId);
+            // Only a row that CREATED the condition carries its fields — and a
+            // replay of one the grid already shows must not add it twice.
+            if (lp && res.newVariant && p.kind !== "variant" && !lp.variants.some((x: any) => x.id === res.variantId)) lp.variants.push(mkImportedVariant(res, p));
+            if (lp && p.tagPcId) lp.pcId = p.tagPcId;
+          }
+        });
+        }
+        const failed = results.map((res, i) => (res?.ok ? null : `Row ${rows[i].row.n} “${rows[i].row.title}”: ${res?.error || "failed"}`)).filter(Boolean);
+        const replayed = results.map((res, i) => (res?.replay ? `Row ${rows[i].row.n} “${rows[i].row.title}”`
+          : res?.already ? `Row ${rows[i].row.n} “${rows[i].row.title}”: ${res.already} of ${rows[i].row.qty} copies (the rest were added)` : null)).filter(Boolean);
+        progress("Loading the draft…");
+        await loadEntry(entryId);
+        setEntryMode(true);
+        render();
+        const okN = results.filter((r) => r?.ok).length;
+        const replayN = results.filter((r) => r?.replay).length;
+        toast(`📄 Imported ${okN} line${okN === 1 ? "" : "s"} → Entry #${entryHuman}${replayN ? ` (${replayN} were already on this draft — not added again)` : ""}`);
+        if (failed.length) alert(`${failed.length} row(s) didn't import:\n\n${failed.slice(0, 15).join("\n")}${failed.length > 15 ? "\n…" : ""}`);
+        // Rows recognized as already on this draft (a retry, or the same sheet
+        // again) — say which, so a genuinely new identical row can be added by hand.
+        if (replayed.length) alert(`${replayed.length} row(s) were already on this draft from an earlier import of “${ch.fileName}”, so they weren't added again:\n\n${replayed.slice(0, 15).join("\n")}${replayed.length > 15 ? "\n…" : ""}\n\nIf any of these is a SECOND copy, raise its qty on the draft.`);
+        if (newProducts.length) enrichInBackground(newProducts);
+      },
+    });
+  }
+  $("inv-import")?.addEventListener("click", openCollectionImport);
+  $("ent-import")?.addEventListener("click", openCollectionImport);
 
   $("ent-finish")?.addEventListener("click", async () => {
     if (!entryId) return;
@@ -1624,7 +1796,7 @@ const posData = {
     try {
       const j = await api(body);
       const cat = categories.find((c: any) => c.id === body.categoryId);
-      const newItem: any = { id: j.productId, title: body.title, slug: body.title.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""), platform: body.platform, franchise: "", genre: "", description: "", imageUrl: "", altNames: [], categoryId: body.categoryId, categoryName: cat?.name ?? "", categoryColor: cat?.color ?? "#2ce6e0",
+      const newItem: any = { id: j.productId, title: body.title, slug: j.slug || body.title.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""), platform: body.platform, franchise: "", genre: "", description: "", imageUrl: "", altNames: [], categoryId: body.categoryId, categoryName: cat?.name ?? "", categoryColor: cat?.color ?? "#2ce6e0",
         variants: [{ id: j.variantId, condition, completeness: null, completenessCode: comp, gradeCode: grade, sku: null, internalCode: j.internalCode || "", priceCents: body.priceCents, onlinePriceCents: null, costCents: null, quantity: body.quantity, onlineVisible: false, inventoryTypeId: body.inventoryTypeId || retailTypeId, locationId: "", barcodes: body.barcode ? [{ id: "primary:" + j.variantId, barcode: body.barcode, label: "Primary", primary: true }] : [] }] };
       items.push(newItem);
       if (entryMode && j.itemId) {

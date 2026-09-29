@@ -14,7 +14,7 @@ const [{ data: margins }, { data: categories }, { data: completeness }, { data: 
   supabase.from("condition_grades").select("code,label,aliases,icon").eq("is_active", true).order("rank"),
   supabase
     .from("products")
-    .select(`id, title, platform, franchise, alternative_names, category_id${delProbeErr ? "" : ", deleted_at"}, product_variants(price_cents, completeness_code, grade_code, barcode, product_barcodes(barcode))`)
+    .select(`id, title, platform, franchise, alternative_names, tags, category_id${delProbeErr ? "" : ", deleted_at"}, product_variants(price_cents, completeness_code, grade_code, barcode, product_barcodes(barcode))`)
     .order("title"),
 ]);
 const products = (productRows ?? []).filter((p: any) => !p.deleted_at);
@@ -36,6 +36,7 @@ const catalog = (products ?? []).map((p: any) => ({
   franchise: p.franchise ?? "",
   altNames: p.alternative_names ?? [],
   categoryId: p.category_id,
+  pcId: (p.tags ?? []).find((t: string) => t.startsWith("pricecharting:"))?.slice(13) ?? "",
   variants: (p.product_variants ?? []).map((v: any) => ({
     priceCents: v.price_cents,
     completenessCode: v.completeness_code ?? "",
@@ -84,6 +85,7 @@ const posData = {
     </table>
     <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.8rem;">
       <button id="add-row" class="btn btn-ghost btn-sm">＋ Add item</button>
+      <button id="ti-import" class="btn btn-ghost btn-sm" type="button" title="Import a collection .csv (PriceCharting export or any Title / Platform / Condition sheet) as rows on this ticket">📄 Import CSV</button>
       <button id="phone-scan-btn" class="btn btn-ghost btn-sm" type="button" title="Pair your phone as a wireless scanner — scan the UPC on the customer's box to fill a row">📱 Phone scanner</button>
     </div>
   </div>
@@ -144,6 +146,7 @@ const posData = {
   import { buildPlatforms, parseQuery as parseQ, smartMatches } from "../../lib/smartSearch";
   import { initScanReceiver, openPairDialog } from "../../lib/scanReceive";
   import { barcodeEq } from "../../lib/gtin";
+  import { openImportDialog } from "../../lib/importDialog";
 
   type Row = { key: string; description: string; categoryId: string | null; resaleCents: number };
   const data = JSON.parse(document.getElementById("pos-data")!.textContent!);
@@ -329,6 +332,35 @@ const posData = {
   };
   initScanReceiver(scanTarget);
   $("phone-scan-btn").addEventListener("click", () => openPairDialog(scanTarget));
+
+  // Collection CSV import (PriceCharting export etc.): each sheet row becomes
+  // one ticket row per unit, described like a typeahead pick, with the sheet's
+  // value (or our price for that condition) as the resale.
+  $("ti-import").addEventListener("click", () => {
+    openImportDialog({
+      mode: "trade",
+      catalog: catalog.map((p: any) => ({
+        id: p.id, title: p.title, platform: p.platform || "", franchise: p.franchise || "", altNames: p.altNames || [],
+        categoryId: p.categoryId, pcId: p.pcId || "",
+        variants: (p.variants || []).map((v: any) => ({ completenessCode: v.completenessCode || "", gradeCode: v.gradeCode || "", priceCents: v.priceCents || 0, barcodes: v.barcodes || [] })),
+      })),
+      completeness, grades, platforms: PLATFORMS, categories,
+      onImport: async (list, ch) => {
+        // Drop the untouched placeholder row so the ticket starts clean.
+        rows = rows.filter((r) => r.description.trim() || r.resaleCents > 0);
+        for (const r of list) {
+          const cond = [complLabel(r.row.completenessCode), r.row.gradeCode ? gradeLabel(r.row.gradeCode) : ""].filter(Boolean).join(" · ");
+          const title = r.product ? r.product.title : r.row.title;
+          const platform = r.product ? r.product.platform : r.row.platform;
+          const description = title + (platform ? ` (${platform})` : "") + (cond ? ` — ${cond}` : "");
+          const resale = r.row.priceCents ?? r.variant?.priceCents
+            ?? (r.product ? suggestResale(r.product, { completenessCode: r.row.completenessCode, gradeCode: r.row.gradeCode }) : null) ?? 0;
+          for (let i = 0; i < r.row.qty; i++) rows.push({ key: crypto.randomUUID(), description, categoryId: r.product?.categoryId || r.categoryId || ch.categoryId || null, resaleCents: resale });
+        }
+        render();
+      },
+    });
+  });
 
   $("save-ti").addEventListener("click", async () => {
     const valid = rows.filter((r) => r.description.trim() && r.resaleCents > 0);

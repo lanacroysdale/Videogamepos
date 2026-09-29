@@ -158,7 +158,7 @@ const pageData = {
       const canRevert = !isDraft && data.isManager && e.committed_at &&
         (Date.now() - new Date(e.committed_at).getTime()) < 24 * 3600 * 1000;
       detail.innerHTML = `
-        <p class="muted" style="margin:0 0 0.6rem;font-size:0.84rem;">${when(e.created_at)} · ${esc(e.employee?.full_name ?? "—")} · ${esc(e.source)}${e.supplier ? ` · from <strong>${esc(e.supplier)}</strong>` : ""} · <span class="pill ${isDraft ? "cyan" : "muted"}">${isDraft ? "draft" : e.status}</span></p>
+        <p class="muted" style="margin:0 0 0.6rem;font-size:0.84rem;">${when(e.created_at)} · ${esc(e.employee?.full_name ?? "—")} · ${esc(e.source)}${e.supplier ? ` · from <strong>${esc(e.supplier)}</strong>` : ""}${e.received_on ? ` · received <strong>${esc(new Date(e.received_on + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }))}</strong>` : ""} · <span class="pill ${isDraft ? "cyan" : "muted"}">${isDraft ? "draft" : e.status}</span></p>
         ${isDraft ? `<p class="muted" style="margin:0 0 0.6rem;font-size:0.8rem;">Staged only — nothing is in stock or on the website until this draft is finished.</p>` : ""}
         <div>${lines || `<p class="empty">No lines on this entry.</p>`}</div>
         <div style="display:flex;gap:0.5rem;margin-top:0.9rem;flex-wrap:wrap;">

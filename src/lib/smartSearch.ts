@@ -16,6 +16,12 @@ export interface ParsedQuery {
   completenessCode: string;
   gradeCode: string;
   title: string;
+  /** The platform words as typed ("wii"), when a platform was recognized. */
+  platformText: string;
+  /** Title to pre-fill when creating a new product: "wii sports" keeps "wii"
+   *  (the platform word LEADS the query, so it's likely part of the name),
+   *  "mario kart n64" drops it. */
+  titleForNew: string;
 }
 export interface MatchableProduct {
   title: string;
@@ -29,28 +35,128 @@ export interface PlatformAlias {
 }
 
 export const PLATFORM_ALIASES: PlatformAlias[] = [
+  // Canonical names follow PriceCharting's console naming so CSV imports line
+  // up; aliases cover shorthand staff type and the spellings other sources use.
+  // Switch 2 is its own platform; its longer aliases win over plain "switch".
+  { canonical: "Nintendo Switch 2", aliases: ["nintendo switch 2", "switch 2", "ns2", "nsw2", "switch2"] },
   { canonical: "Nintendo Switch", aliases: ["nintendo switch", "switch", "nsw"] },
-  { canonical: "Super Nintendo", aliases: ["super nintendo", "snes", "super nes", "super famicom", "sfc"] },
+  { canonical: "Super Nintendo", aliases: ["super nintendo", "snes", "super nes", "super famicom", "sfc", "super nintendo entertainment system"] },
   { canonical: "Nintendo 64", aliases: ["nintendo 64", "n64"] },
-  { canonical: "Game Boy Advance", aliases: ["game boy advance", "gba"] },
-  { canonical: "Game Boy", aliases: ["game boy color", "gbc", "game boy", "gameboy", "gb"] },
-  { canonical: "GameCube", aliases: ["gamecube", "game cube", "gcn", "ngc"] },
-  { canonical: "Nintendo DS", aliases: ["nintendo ds", "nds", "3ds", "ds"] },
-  { canonical: "NES", aliases: ["nintendo entertainment system", "nes", "famicom"] },
-  { canonical: "PlayStation 2", aliases: ["playstation 2", "ps2"] },
+  { canonical: "GameCube", aliases: ["gamecube", "game cube", "gcn", "ngc", "nintendo gamecube"] },
+  { canonical: "Wii U", aliases: ["wii u", "nintendo wii u", "wiiu"] },
+  { canonical: "Wii", aliases: ["wii", "nintendo wii"] },
+  { canonical: "Game Boy Advance", aliases: ["game boy advance", "gameboy advance", "gba"] },
+  { canonical: "Game Boy Color", aliases: ["game boy color", "gameboy color", "gbc"] },
+  { canonical: "Game Boy", aliases: ["game boy", "gameboy", "gb", "dmg"] },
+  { canonical: "Nintendo 3DS", aliases: ["nintendo 3ds", "3ds", "new 3ds", "new nintendo 3ds", "2ds"] },
+  { canonical: "Nintendo DS", aliases: ["nintendo ds", "nds", "ds", "dsi"] },
+  { canonical: "Virtual Boy", aliases: ["virtual boy"] },
+  { canonical: "NES", aliases: ["nintendo entertainment system", "nes", "famicom", "nintendo nes"] },
+  { canonical: "Famicom Disk System", aliases: ["famicom disk system", "fds"] },
+  { canonical: "PlayStation 5", aliases: ["playstation 5", "ps5"] },
+  { canonical: "PlayStation 4", aliases: ["playstation 4", "ps4"] },
   { canonical: "PlayStation 3", aliases: ["playstation 3", "ps3"] },
-  { canonical: "PlayStation", aliases: ["playstation", "psx", "ps1", "ps one", "psone"] },
+  { canonical: "PlayStation 2", aliases: ["playstation 2", "ps2"] },
+  { canonical: "PlayStation Vita", aliases: ["playstation vita", "ps vita", "psvita", "vita"] },
+  { canonical: "PSP", aliases: ["psp", "playstation portable"] },
+  { canonical: "PlayStation", aliases: ["playstation", "playstation 1", "psx", "ps1", "ps one", "psone"] },
+  { canonical: "Xbox Series X", aliases: ["xbox series x", "xbox series s", "xbox series", "series x", "xsx"] },
+  { canonical: "Xbox One", aliases: ["xbox one", "xb1", "xbone"] },
   { canonical: "Xbox 360", aliases: ["xbox 360", "x360"] },
-  { canonical: "Xbox", aliases: ["xbox"] },
-  { canonical: "Sega Genesis", aliases: ["sega genesis", "genesis", "mega drive", "megadrive"] },
+  { canonical: "Xbox", aliases: ["xbox", "original xbox"] },
+  { canonical: "Sega Genesis", aliases: ["sega genesis", "genesis", "mega drive", "megadrive", "sega mega drive"] },
+  { canonical: "Sega CD", aliases: ["sega cd", "mega cd"] },
+  { canonical: "Sega 32X", aliases: ["sega 32x", "32x"] },
+  { canonical: "Sega Saturn", aliases: ["sega saturn", "saturn"] },
   { canonical: "Sega Dreamcast", aliases: ["sega dreamcast", "dreamcast"] },
+  { canonical: "Sega Game Gear", aliases: ["sega game gear", "game gear"] },
+  { canonical: "Sega Master System", aliases: ["sega master system", "master system"] },
+  { canonical: "Atari 2600", aliases: ["atari 2600", "2600"] },
+  { canonical: "Atari 5200", aliases: ["atari 5200"] },
+  { canonical: "Atari 7800", aliases: ["atari 7800"] },
+  { canonical: "Atari Jaguar", aliases: ["atari jaguar"] },
+  { canonical: "Atari Lynx", aliases: ["atari lynx", "lynx"] },
+  { canonical: "TurboGrafx-16", aliases: ["turbografx 16", "turbografx", "tg16", "pc engine", "turbo grafx"] },
+  { canonical: "TurboGrafx CD", aliases: ["turbografx cd", "turbografx 16 cd", "tg cd", "pc engine cd", "pc engine cd rom"] },
+  { canonical: "Neo Geo", aliases: ["neo geo", "neogeo", "neo geo aes", "neo geo mvs"] },
+  { canonical: "Neo Geo CD", aliases: ["neo geo cd", "neogeo cd"] },
+  { canonical: "Neo Geo Pocket Color", aliases: ["neo geo pocket color", "neo geo pocket", "neogeo pocket color", "ngpc"] },
+  { canonical: "Intellivision", aliases: ["intellivision"] },
+  { canonical: "ColecoVision", aliases: ["colecovision"] },
+  { canonical: "3DO", aliases: ["3do"] },
+  { canonical: "N-Gage", aliases: ["n gage", "ngage"] },
 ];
 
 const NOISE = new Set(["condition", "cond", "the", "a", "of"]);
+// Real product names that START with a platform word — the only case where
+// "wii …" keeps "Wii" in a new product's title ("wii mario kart" doesn't).
+const NAME_WITH_PLATFORM_RE = /^(wii (sports|fit|play|party|music|chess|u party|u panorama|u sports|u fit)|game ?boy (camera|printer|gallery|wars)|game (and )?watch (gallery|collection)|virtual boy wario land)\b/;
 
+/** " word word " — lowercase, punctuation and "&"/"and" dropped, space-padded
+ *  so `.includes()` only matches whole words. */
+const phraseWords = (t: string) => " " + t.toLowerCase().replace(/&/g, " ").replace(/[^a-z0-9]+/g, " ").split(" ").filter((w) => w && w !== "and").join(" ") + " ";
+const BUILTIN_CANON = new Set(PLATFORM_ALIASES.map((p) => p.canonical));
+const words = (t: string) => " " + String(t ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() + " ";
+const STATIC_ALIASES = PLATFORM_ALIASES
+  .flatMap((p) => [p.canonical, ...p.aliases].map((a) => ({ canonical: p.canonical, alias: words(a) })))
+  .sort((x, y) => y.alias.length - x.alias.length);
+
+/** The built-in platform a free-text name refers to, by its longest alias as
+ *  whole words: "Sony PlayStation 4" → PlayStation 4, "Nintendo Game Boy" →
+ *  Game Boy, "PS4" → PlayStation 4. null for brands / unknown text. */
+export function resolveStaticPlatform(name: string | null | undefined): string | null {
+  return resolveStaticPlatforms(name)[0] ?? null;
+}
+
+/** EVERY built-in platform a name mentions, longest alias first, each span
+ *  consumed so "Nintendo Wii U" is Wii U only (not Wii too):
+ *  "Nintendo GameCube, Nintendo Wii" → [GameCube, Wii]. */
+export function resolveStaticPlatforms(name: string | null | undefined): string[] {
+  let s = words(name ?? "");
+  const out: string[] = [];
+  for (const m of STATIC_ALIASES) {
+    if (!m.alias.trim() || !s.includes(m.alias)) continue;
+    if (!out.includes(m.canonical)) out.push(m.canonical);
+    s = s.split(m.alias).join(" | ");
+  }
+  return out;
+}
+
+/** The platform whose alias IS the whole text ("Nintendo Switch", "PS4") —
+ *  brand words and colours aside — i.e. a console named after its platform. */
+export function platformNameExact(text: string): string | null {
+  const t = words(text);
+  if (!t.trim()) return null;
+  // As written ("Nintendo 64", "Super Nintendo", "Sega CD"), then without a
+  // leading maker/colour ("Sony PlayStation 2", "Neon Nintendo Switch").
+  const lead = t.replace(new RegExp(`^ ((${MAKERS}|${COLOURS}) )+`), " ");
+  for (const c of t === lead ? [t] : [t, lead]) {
+    for (const m of STATIC_ALIASES) {
+      if (!m.alias.trim() || !c.startsWith(m.alias)) continue;
+      // Only colour / finish words may follow: "Gameboy Advance Fuchsia Pink"
+      // is a console, "Wii Sports" / "Game Boy Camera" are not.
+      const rest = c.slice(m.alias.length).trim();
+      if (!rest || rest.split(" ").every((w) => COLOUR_SET.has(w) || MAKER_SET.has(w))) return m.canonical;
+    }
+  }
+  return null;
+}
+const MAKERS = "nintendo|sony|microsoft|sega";
+const COLOURS = "black|white|red|blue|neon|gray|grey|pink|purple|green|yellow|orange|clear|gold|silver|atomic|teal|indigo|coral|fuchsia|glacier|arctic|platinum|dandelion|kiwi|grape|berry|jungle|spice|flame|cobalt|midnight|onyx|pearl|lime|smoke|charcoal|titanium|graphite|ice|emerald|crimson|turquoise|violet|lavender|mint|navy|ocean|sky|light|dark|metallic|matte|glossy|transparent|translucent|limited|edition";
+const COLOUR_SET = new Set(COLOURS.split("|"));
+const MAKER_SET = new Set(MAKERS.split("|"));
+
+// Makers' names that eBay stores as the "platform" when an item has none
+// (amiibo, docks, controllers). Not platforms — never parse them as one.
+const BRAND_ONLY = /^(nintendo|sony|sega|microsoft|atari|nec|snk|bandai|bandai namco|hori|powera|pdp|mad catz|8bitdo|hyperkin|nyko|razer|turtle beach|logitech)$/i;
+
+/** Built-in platforms + the catalog's own spellings. A catalog spelling that
+ *  names a built-in platform ("Sony PlayStation 4", eBay's aspect) becomes an
+ *  ALIAS of it — never its own canonical, which would split one platform in two
+ *  and stop listings from matching imports and searches. */
 export function buildPlatforms(catalogPlatforms: (string | null | undefined)[]): PlatformAlias[] {
-  const extra = [...new Set(catalogPlatforms.filter(Boolean) as string[])].map((name) => ({
-    canonical: name,
+  const extra = [...new Set(catalogPlatforms.filter((n) => n && !BRAND_ONLY.test(n.trim())) as string[])].map((name) => ({
+    canonical: resolveStaticPlatform(name) ?? name,
     aliases: [name.toLowerCase()],
   }));
   return [...PLATFORM_ALIASES, ...extra];
@@ -58,11 +164,16 @@ export function buildPlatforms(catalogPlatforms: (string | null | undefined)[]):
 
 function peel(s: string, entries: { key: string; canonical?: string; aliases: string[] }[]) {
   const all: { key: string; canonical?: string; alias: string }[] = [];
-  for (const e of entries) for (const a of e.aliases) if (a) all.push({ key: e.key, canonical: e.canonical, alias: a.toLowerCase() });
+  // Aliases get the same clean-up as the query ("game & watch" → "game watch").
+  for (const e of entries) for (const a of e.aliases) {
+    const alias = a.toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
+    if (alias) all.push({ key: e.key, canonical: e.canonical, alias });
+  }
   all.sort((x, y) => y.alias.length - x.alias.length); // longest alias first
   for (const m of all) {
     const re = new RegExp("(^|\\s)" + m.alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "($|\\s)");
-    if (re.test(s)) return { key: m.key, canonical: m.canonical, rest: s.replace(re, " ") };
+    const hit = re.exec(s);
+    if (hit) return { key: m.key, canonical: m.canonical, alias: m.alias, before: s.slice(0, hit.index), rest: s.replace(re, " ") };
   }
   return null;
 }
@@ -72,27 +183,68 @@ export function parseQuery(
   opts: { completeness: TaxoEntry[]; grades: TaxoEntry[]; platforms: PlatformAlias[] },
 ): ParsedQuery {
   let s = " " + raw.toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ") + " ";
-  const out: ParsedQuery = { platform: null, completenessCode: "", gradeCode: "", title: "" };
-  const pm = peel(s, opts.platforms.map((p) => ({ key: p.canonical, canonical: p.canonical, aliases: p.aliases })));
-  if (pm) { out.platform = pm.canonical ?? null; s = pm.rest; }
+  const out: ParsedQuery = { platform: null, completenessCode: "", gradeCode: "", title: "", platformText: "", titleForNew: "" };
+  // Peel the platform the query names by the BUILT-IN table (longest alias
+  // wins, so "nintendo game boy color" is Game Boy Color, not the catalog's
+  // "Nintendo Game Boy"), using every spelling of that one platform; only when
+  // no built-in platform is named, try catalog-only names ("Game & Watch").
+  const named = resolveStaticPlatform(s);
+  const pm = peel(s, opts.platforms
+    .filter((p) => (named ? p.canonical === named : !BUILTIN_CANON.has(p.canonical)))
+    .map((p) => ({ key: p.canonical, canonical: p.canonical, aliases: [p.canonical.toLowerCase(), ...p.aliases] })));
+  if (pm) { out.platform = pm.canonical ?? null; out.platformText = pm.alias; s = pm.rest; }
   const cm = peel(s, opts.completeness.map((c) => ({ key: c.code, aliases: [...c.aliases, c.label, c.code] })));
   if (cm) { out.completenessCode = cm.key; s = cm.rest; }
   const gm = peel(s, opts.grades.map((g) => ({ key: g.code, aliases: [...g.aliases, g.label, g.code] })));
   if (gm) { out.gradeCode = gm.key; s = gm.rest; }
   out.title = s.split(/\s+/).filter((w) => w && !NOISE.has(w)).join(" ").trim();
+  // Keep the platform word in a NEW product's title only when it's one that
+  // names games ("wii sports", "game boy camera") and no title word came
+  // before it ("cib wii sports" still counts; "snes chrono trigger" never does).
+  const titleWords = new Set(out.title.split(" "));
+  const leads = !!pm && !pm.before.split(/\s+/).some((w) => w && titleWords.has(w));
+  out.titleForNew = pm && leads && out.title && NAME_WITH_PLATFORM_RE.test(`${pm.alias} ${out.title}`) ? `${pm.alias} ${out.title}` : out.title;
   return out;
 }
 
 export function platformMatches(productPlatform: string | null | undefined, parsedPlatform: string): boolean {
   const a = (productPlatform || "").toLowerCase();
   const b = (parsedPlatform || "").toLowerCase();
-  return !!a && (a === b || a.includes(b) || b.includes(a));
+  if (!a) return false;
+  // Same built-in platform under any spelling ("PS4" vs "PlayStation 4"); a
+  // listing naming several ("GameCube, Wii") matches any of them. The strict
+  // test only applies when BOTH sides are built-in platforms.
+  const ca = resolveStaticPlatforms(a), cb = resolveStaticPlatform(b);
+  if (ca.length && cb) return ca.includes(cb);
+  return a === b || a.includes(b) || b.includes(a);
 }
 
 export function matchScore(p: MatchableProduct, parsed: ParsedQuery): number {
-  if (parsed.platform && !platformMatches(p.platform, parsed.platform)) return 0;
-  if (!parsed.title) return 0.6;
   const hay = `${p.title} ${p.platform || ""} ${p.franchise || ""} ${(p.altNames || []).join(" ")}`.toLowerCase();
+  if (parsed.platform && !platformMatches(p.platform, parsed.platform)) {
+    // The platform word may be part of the NAME ("Wii Sports"), or the listing
+    // has no/brand-only platform ("Nintendo"). Keep it as a weaker title match
+    // instead of hiding it. Two different known platforms still exclude.
+    // A listing on a DIFFERENT known platform never matches. One whose platform
+    // is blank, a brand ("Nintendo", "Capcom") or other unknown text falls back
+    // to a weaker title match, as do names that contain the platform word.
+    if (!parsed.title) return 0;
+    // The platform word + title IS the name ("Wii Sports Club" on Wii U,
+    // "PlayStation Move" on PS3) — a real match whatever the platform.
+    // "&" / "and" and punctuation ignored on both sides, and the phrase must
+    // START on a word ("nes controller" ≠ an SNES one, "ds xl" ≠ a 3DS XL) —
+    // but its LAST word may be partial or singular, so the listing stays put
+    // while staff type ("wii sports clu", "nes controller" → "…Controllers").
+    const names = phraseWords(`${p.title} ${(p.altNames || []).join(" ")}`);
+    if (parsed.platformText && names.includes(phraseWords(`${parsed.platformText} ${parsed.title}`).trimEnd())) return 0.85;
+    if (resolveStaticPlatform(p.platform)) return 0;
+    if (hay.includes(parsed.title)) return 0.8;
+    // Only REAL title words count — the platform word alone is not a match.
+    const qt = parsed.title.split(" ").filter(Boolean);
+    const hit = qt.filter((w) => hay.includes(w)).length;
+    return hit ? (hit / qt.length) * 0.75 : 0;
+  }
+  if (!parsed.title) return 0.6;
   if (hay.includes(parsed.title)) return 1;
   const qt = parsed.title.split(" ").filter(Boolean);
   const hit = qt.filter((w) => hay.includes(w)).length;
