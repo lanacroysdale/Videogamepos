@@ -355,7 +355,7 @@ const posData = {
           const description = title + (platform ? ` (${platform})` : "") + (cond ? ` — ${cond}` : "");
           const resale = r.row.priceCents ?? r.variant?.priceCents
             ?? (r.product ? suggestResale(r.product, { completenessCode: r.row.completenessCode, gradeCode: r.row.gradeCode }) : null) ?? 0;
-          for (let i = 0; i < r.row.qty; i++) rows.push({ key: crypto.randomUUID(), description, categoryId: r.product?.categoryId || ch.categoryId || null, resaleCents: resale });
+          for (let i = 0; i < r.row.qty; i++) rows.push({ key: crypto.randomUUID(), description, categoryId: r.product?.categoryId || r.categoryId || ch.categoryId || null, resaleCents: resale });
         }
         render();
       },

@@ -43,8 +43,9 @@ export const DEPARTMENTS: Rule[] = [
     test: /\b(game|games|cib|complete in box|cartridge|\bcart\b|disc|software|sealed)\b|\b(snes|nes|n64|gba|gbc|3ds|ds|wii ?u|wii|switch|game ?cube|famicom|super famicom|sfc|genesis|saturn|dreamcast|ps1|ps2|ps3|ps4|psp|vita|xbox|game ?boy)\b/ },
 ];
 
-// Platform facet — order matters (wiiu before wii, 3ds before ds, snes before nes).
+// Platform facet — order matters (switch2 before switch, wiiu before wii, 3ds before ds, snes before nes).
 export const PLATFORMS: Rule[] = [
+  { key: "switch2", label: "Switch 2", test: /\bswitch ?2\b|\bns2\b/ },
   { key: "switch", label: "Switch", test: /\bswitch\b/ },
   { key: "wiiu", label: "Wii U", test: /wii ?u\b/ },
   { key: "wii", label: "Wii", test: /\bwii\b/ },

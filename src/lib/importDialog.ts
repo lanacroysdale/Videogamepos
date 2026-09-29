@@ -9,7 +9,7 @@
 import { parseDelimited } from "./csv";
 import {
   COLUMN_DEFS, type ColumnKey, type ColumnMap, detectColumns, headerSignature, looksLikeHeader,
-  buildRows, prepareCatalog, matchRow, chooseProduct,
+  buildRows, prepareCatalog, matchRow, chooseProduct, centsColumns, isSummaryRow, newListingKey,
   type CatalogProduct, type ImportRow, type ResolvedRow,
 } from "./collectionImport";
 import type { PlatformAlias, TaxoEntry } from "./smartSearch";
@@ -20,6 +20,10 @@ export interface ImportChoices {
   gradeCode: string;
   completenessCode: string;
   pricePct: number;
+  /** The imported file's name. */
+  fileName?: string;
+  /** name|size|lastModified — with each row's contents, forms its import key. */
+  fileKey?: string;
 }
 export interface ImportDialogOpts {
   mode: "entry" | "trade";
@@ -62,6 +66,7 @@ const CSS = `
 .tli-table tr.skip td{opacity:.4}
 .tli-table tr.review td.t{color:var(--magenta,#ff49d0)}
 .tli-table select{max-width:22rem;font-size:.8rem;padding:.25rem .35rem}
+.tli-table select[data-cat]{max-width:9rem}
 .tli-table .warn{cursor:help;color:var(--magenta,#ff49d0)}
 .tli-pill{display:inline-block;padding:.1rem .45rem;font-size:.68rem;font-weight:700;border:1px solid var(--border-strong,#555);white-space:nowrap}
 .tli-pill.ok{color:var(--green,#80ff72);border-color:rgba(128,255,114,.4)}
@@ -92,12 +97,26 @@ export function openImportDialog(o: ImportDialogOpts) {
 
   // ---- state ----
   let fileName = "";
+  let fileKey = "";
   let records: string[][] = [];   // data rows (header removed when present)
   let header: string[] = [];
   let hasHeader = true;
   let map: ColumnMap = {};
   let resolved: ResolvedRow[] = [];
   let busy = false;
+  let folderSel: string | null = null; // folder filter (null = every folder)
+  const catPicks = new Map<number, string>(); // employee's per-row category picks (by source line)
+  // Employee's per-row listing picks + skips (by source line). Persistent so a
+  // folder switch or a re-match doesn't drop rows that aren't on screen.
+  const picks = new Map<number, { productId: string; skip: boolean }>();
+  let cleared = new Set<string>(); // columns the employee set to "—" for this header layout
+  // Consoles / accessories / collectibles default to a matching category when the store has one.
+  const findCat = (re: RegExp) => o.categories.find((c) => re.test(c.name))?.id || "";
+  const kindCat: Record<string, string> = {
+    console: findCat(/console|hardware|system/i),
+    accessory: findCat(/accessor/i),
+    collectible: findCat(/collect|amiibo|figure|toy/i),
+  };
   const choices: ImportChoices = {
     categoryId: defaultCat,
     inventoryTypeId: o.invTypes?.find((t) => t.key === "retail")?.id || o.invTypes?.[0]?.id || "",
@@ -105,6 +124,9 @@ export function openImportDialog(o: ImportDialogOpts) {
     completenessCode: "",
     pricePct: 100,
   };
+  // Existing stock rows only count when they're the chosen inventory type
+  // (entry mode) — a Personal Collection copy gets its own row, same listing.
+  const typeFilter = () => (o.mode === "entry" ? choices.inventoryTypeId : "");
   const catDefaultComp = () => o.categories.find((c) => c.id === choices.categoryId)?.default_completeness || o.completeness.find((c) => c.code === "CIB")?.code || o.completeness[0]?.code || "";
   choices.completenessCode = catDefaultComp();
 
@@ -159,19 +181,25 @@ export function openImportDialog(o: ImportDialogOpts) {
   drop.addEventListener("click", () => input.click());
   drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
   drop.addEventListener("dragleave", () => drop.classList.remove("over"));
-  drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); const f = e.dataTransfer?.files?.[0]; if (f) loadFile(f); });
-  input.addEventListener("change", () => { const f = input.files?.[0]; if (f) loadFile(f); });
+  // No new file while an import is running — it would swap the rows out from
+  // under the batches still being staged.
+  drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); const f = e.dataTransfer?.files?.[0]; if (f && !busy) loadFile(f); });
+  input.addEventListener("change", () => { const f = input.files?.[0]; if (f && !busy) loadFile(f); });
 
   async function loadFile(f: File) {
     const text = await f.text();
     const all = parseDelimited(text);
     if (!all.length) { showErr("That file is empty."); return; }
     fileName = f.name;
+    fileKey = `${f.name}|${f.size}|${f.lastModified}`;
     $("tli-file").textContent = `${f.name} · ${all.length} rows`;
     hasHeader = looksLikeHeader(all[0]);
     header = hasHeader ? all[0] : all[0].map((_, i) => `Column ${i + 1}`);
     records = hasHeader ? all.slice(1) : all;
     map = mapFor(all[0]);
+    folderSel = null;
+    // A new file: row numbers mean different games now.
+    resolved = []; picks.clear(); catPicks.clear();
     if (map.title == null) showErr("Couldn't find a Title column — pick it under Columns."); else showErr("");
     renderMap(); renderDefaults(); rebuild();
   }
@@ -179,9 +207,17 @@ export function openImportDialog(o: ImportDialogOpts) {
   function mapFor(first: string[]): ColumnMap {
     if (!hasHeader) return { title: 0, platform: 1, condition: 2 };
     let m = detectColumns(first);
+    cleared = new Set();
     try {
       const saved = JSON.parse(localStorage.getItem("tl-import-map:" + headerSignature(first)) || "null");
-      if (saved && typeof saved === "object") m = saved;
+      // Saved corrections win; columns the detector learned since still fill
+      // in — except ones the employee explicitly cleared.
+      if (saved && typeof saved === "object") {
+        const { __cleared, ...cols } = saved as any;
+        m = { ...m, ...cols };
+        cleared = new Set(Array.isArray(__cleared) ? __cleared : []);
+        for (const k of cleared) delete (m as any)[k];
+      }
     } catch {}
     return m;
   }
@@ -196,9 +232,10 @@ export function openImportDialog(o: ImportDialogOpts) {
       + `<label class="chk" style="text-transform:none;letter-spacing:0;font-weight:600;"><input type="checkbox" id="tli-hdr" ${hasHeader ? "checked" : ""}/> First row is a header</label>`;
     $("tli-map").querySelectorAll<HTMLSelectElement>("select[data-col]").forEach((s) => s.addEventListener("change", () => {
       const k = s.dataset.col as ColumnKey;
-      if (s.value === "") delete map[k]; else map[k] = +s.value;
-      try { localStorage.setItem("tl-import-map:" + headerSignature(header), JSON.stringify(map)); } catch {}
+      if (s.value === "") { delete map[k]; cleared.add(k); } else { map[k] = +s.value; cleared.delete(k); }
+      try { localStorage.setItem("tl-import-map:" + headerSignature(header), JSON.stringify({ ...map, __cleared: [...cleared] })); } catch {}
       showErr(map.title == null ? "Couldn't find a Title column — pick it under Columns." : "");
+      if (k === "folder") { folderSel = null; renderDefaults(); }
       rebuild();
     }));
     $<HTMLInputElement>("tli-hdr").addEventListener("change", (e) => {
@@ -209,7 +246,9 @@ export function openImportDialog(o: ImportDialogOpts) {
       header = on ? all[0] : all[0].map((_, i) => `Column ${i + 1}`);
       records = on ? all.slice(1) : all;
       map = mapFor(all[0]);
-      renderMap(); rebuild();
+      folderSel = null;
+      resolved = []; picks.clear(); catPicks.clear(); // row numbers shift by one
+      renderMap(); renderDefaults(); rebuild();
     });
   }
 
@@ -217,16 +256,26 @@ export function openImportDialog(o: ImportDialogOpts) {
   function renderDefaults() {
     const wrap = $("tli-defaults"); wrap.hidden = false;
     const sel = (id: string, label: string, options: string, extra = "") => `<label>${label}<select id="${id}" ${extra}>${options}</select></label>`;
-    let html = sel("tli-cat", "Category", o.categories.map((c) => `<option value="${c.id}"${c.id === choices.categoryId ? " selected" : ""}>${esc(c.name)}</option>`).join(""));
+    let html = "";
+    if (map.folder != null) {
+      // PriceCharting collections are split into folders — import one at a time.
+      const counts = new Map<string, number>();
+      for (const r of records) { const f = String(r[map.folder] ?? "").trim(); counts.set(f, (counts.get(f) || 0) + 1); }
+      const names = [...counts.keys()].sort((a, b) => (a === "" ? 1 : b === "" ? -1 : a.localeCompare(b)));
+      html += sel("tli-folder", "Folder", `<option value="*"${folderSel == null ? " selected" : ""}>All folders (${records.length})</option>`
+        + names.map((f) => `<option value="${esc(f)}"${folderSel === f ? " selected" : ""}>${esc(f || "(no folder)")} (${counts.get(f)})</option>`).join(""));
+    }
+    html += sel("tli-cat", "Category", o.categories.map((c) => `<option value="${c.id}"${c.id === choices.categoryId ? " selected" : ""}>${esc(c.name)}</option>`).join(""));
     if (o.mode === "entry" && o.invTypes?.length) {
       html += sel("tli-type", "Inventory type", o.invTypes.map((t) => `<option value="${t.id}"${t.id === choices.inventoryTypeId ? " selected" : ""}>${esc((t.icon ? t.icon + " " : "") + t.name)}</option>`).join(""));
     }
     html += sel("tli-comp", "Condition when blank", o.completeness.map((c) => `<option value="${c.code}"${c.code === choices.completenessCode ? " selected" : ""}>${esc(c.label)}</option>`).join(""));
     html += sel("tli-grade", "Grade when blank", o.grades.map((g) => `<option value="${g.code}"${g.code === choices.gradeCode ? " selected" : ""}>${esc(gradeLabel(g.code))}</option>`).join(""));
     if (o.mode === "entry") html += `<label>Price = sheet value ×<input id="tli-pct" type="number" min="1" max="500" step="1" value="${choices.pricePct}" style="width:5.5rem;" /></label>`;
-    $("tli-def").innerHTML = html + `<span class="tli-note">Existing listings keep their own price; these only shape <em>new</em> ones.</span>`;
+    $("tli-def").innerHTML = html + `<span class="tli-note">Existing listings keep their own price; these only shape <em>new</em> ones.${o.mode === "entry" && o.invTypes?.length ? " A copy of a different inventory type gets its own stock row on the same listing." : ""}</span>`;
+    overlay.querySelector<HTMLSelectElement>("#tli-folder")?.addEventListener("change", (e) => { const v = (e.target as HTMLSelectElement).value; folderSel = v === "*" ? null : v; rebuild(); });
     $<HTMLSelectElement>("tli-cat").addEventListener("change", (e) => { choices.categoryId = (e.target as HTMLSelectElement).value; choices.completenessCode = catDefaultComp(); const c = overlay.querySelector<HTMLSelectElement>("#tli-comp"); if (c) c.value = choices.completenessCode; rebuild(); });
-    overlay.querySelector<HTMLSelectElement>("#tli-type")?.addEventListener("change", (e) => { choices.inventoryTypeId = (e.target as HTMLSelectElement).value; });
+    overlay.querySelector<HTMLSelectElement>("#tli-type")?.addEventListener("change", (e) => { choices.inventoryTypeId = (e.target as HTMLSelectElement).value; rebuild(); });
     $<HTMLSelectElement>("tli-comp").addEventListener("change", (e) => { choices.completenessCode = (e.target as HTMLSelectElement).value; rebuild(); });
     $<HTMLSelectElement>("tli-grade").addEventListener("change", (e) => { choices.gradeCode = (e.target as HTMLSelectElement).value; rebuild(); });
     overlay.querySelector<HTMLInputElement>("#tli-pct")?.addEventListener("change", (e) => { choices.pricePct = Math.max(1, Math.min(500, Math.round(+(e.target as HTMLInputElement).value) || 100)); renderTable(); });
@@ -236,17 +285,24 @@ export function openImportDialog(o: ImportDialogOpts) {
   function rebuild() {
     if (map.title == null) { resolved = []; renderTable(); return; }
     // Changing a default re-matches everything — keep the employee's picks and
-    // skips (keyed by source line) instead of silently resetting them.
-    const kept = new Map(resolved.map((r) => [r.row.n, { productId: r.product?.id ?? "", skip: r.skip, touched: r.product?.id !== r.match.product?.id || r.skip }]));
+    // skips (keyed by source line) instead of silently resetting them. Fold in
+    // the rows on screen first (incl. rows the caller marked staged/skipped).
+    for (const r of resolved) {
+      if (r.product?.id !== r.match.product?.id || r.skip) picks.set(r.row.n, { productId: r.product?.id ?? "", skip: r.skip });
+      else picks.delete(r.row.n);
+    }
     const rows: ImportRow[] = buildRows(records, map, {
       completeness: o.completeness, grades: o.grades, platforms: o.platforms,
       defaultCompleteness: choices.completenessCode, defaultGrade: choices.gradeCode,
+      cents: centsColumns(header, map), folder: map.folder != null ? folderSel : null,
     });
     resolved = rows.map((row) => {
-      const match = matchRow(row, prepared, o.platforms);
-      const r: ResolvedRow = { row, match, product: match.product, variant: match.variant, skip: false };
-      const k = kept.get(row.n);
-      if (k?.touched) { chooseProduct(r, k.productId ? byId.get(k.productId) || null : null); r.skip = k.skip; }
+      const match = matchRow(row, prepared, o.platforms, typeFilter());
+      const hint = row.kind ? kindCat[row.kind] : "";
+      if (row.kind === "console" && !hint) row.warnings.push("Looks like a console/handheld — pick its category (no Consoles category found)");
+      const r: ResolvedRow = { row, match, product: match.product, variant: match.variant, skip: false, categoryId: catPicks.get(row.n) ?? hint };
+      const k = picks.get(row.n);
+      if (k) { chooseProduct(r, k.productId ? byId.get(k.productId) || null : null, typeFilter()); r.skip = k.skip; }
       return r;
     });
     renderTable();
@@ -254,9 +310,26 @@ export function openImportDialog(o: ImportDialogOpts) {
 
   const newPrice = (r: ResolvedRow) => r.row.priceCents == null ? null : Math.round(r.row.priceCents * choices.pricePct / 100);
 
-  function statusOf(r: ResolvedRow): { cls: string; text: string } {
+  // A brand-new game's 2nd+ condition (Loose after CIB) lands on the SAME new
+  // listing as its first row — the caller groups them the same way.
+  // follower → the source line of the row that creates the listing.
+  function followerRows(): Map<ResolvedRow, number> {
+    const lead = new Map<string, number>(), out = new Map<ResolvedRow, number>();
+    for (const r of resolved) {
+      if (r.skip || r.product) continue;
+      const k = newListingKey(r.row);
+      if (lead.has(k)) out.set(r, lead.get(k)!); else lead.set(k, r.row.n);
+    }
+    return out;
+  }
+  function statusOf(r: ResolvedRow, followers: Map<ResolvedRow, number>): { cls: string; text: string } {
+    if (followers.has(r)) return { cls: "cond", text: "+ condition (same new listing)" };
     if (r.product && r.variant) return { cls: "ok", text: "existing" };
-    if (r.product) return { cls: "cond", text: "+ condition" };
+    if (r.product) {
+      // Same condition already on the listing, but another inventory type → its own row.
+      const sameCond = r.product.variants.some((v) => (v.completenessCode || "") === (r.row.completenessCode || ""));
+      return { cls: "cond", text: sameCond ? "+ own stock row" : "+ condition" };
+    }
     if (r.match.status === "review") return { cls: "rev", text: "review" };
     return { cls: "new", text: "new listing" };
   }
@@ -265,9 +338,12 @@ export function openImportDialog(o: ImportDialogOpts) {
     const wrap = $("tli-preview"); wrap.hidden = !resolved.length;
     const onlyReview = $<HTMLInputElement>("tli-only-review").checked;
     const entry = o.mode === "entry";
-    const head = `<tr><th></th><th>#</th><th>Title</th><th>Platform</th><th>Condition</th><th class="num">Qty</th><th class="num">${entry ? "Sheet value" : "Resale"}</th>${entry ? `<th class="num">Paid</th>` : ""}<th>Match</th>${entry ? `<th class="num">Price</th>` : ""}</tr>`;
+    const pcCol = map.pcValue != null;
+    const head = `<tr><th></th><th>#</th><th>Title</th><th>Platform</th><th>Condition</th><th class="num">Qty</th><th class="num">${entry ? "Sheet value" : "Resale"}</th>${pcCol ? `<th class="num" title="PriceCharting / market value from the sheet">PC value</th>` : ""}${entry ? `<th class="num">Paid</th>` : ""}<th>Match</th>${entry ? `<th class="num">Price</th>` : ""}</tr>`;
+    const catOpts = (sel: string) => o.categories.map((c) => `<option value="${c.id}"${c.id === sel ? " selected" : ""}>${esc(c.name)}</option>`).join("");
+    const followers = followerRows();
     const body = resolved.map((r, i) => {
-      const st = statusOf(r);
+      const st = statusOf(r, followers);
       if (onlyReview && !(st.cls === "rev" || r.row.warnings.length)) return "";
       const cands = r.match.candidates;
       const opts = [`<option value=""${!r.product ? " selected" : ""}>＋ New listing</option>`]
@@ -284,19 +360,28 @@ export function openImportDialog(o: ImportDialogOpts) {
         <td>${esc(cond)}</td>
         <td class="num">${r.row.qty}</td>
         <td class="num">${r.row.priceCents == null ? "—" : money(r.row.priceCents)}</td>
+        ${pcCol ? `<td class="num tli-muted">${r.row.pcValueCents == null ? "—" : money(r.row.pcValueCents)}</td>` : ""}
         ${entry ? `<td class="num">${r.row.costCents == null ? "—" : money(r.row.costCents)}</td>` : ""}
-        <td><select data-pick>${opts.join("")}</select> <span class="tli-pill ${st.cls}">${st.text}</span></td>
+        <td><select data-pick>${opts.join("")}</select> <span class="tli-pill ${st.cls}">${st.text}</span>${followers.has(r) ? ` <span class="tli-muted" title="This condition is added to the listing row ${followers.get(r)} creates — set the category there">category: row ${followers.get(r)}</span>` : !r.product ? ` <select data-cat title="Category for this new listing">${catOpts(r.categoryId || choices.categoryId)}</select>` : ""}</td>
         ${entry ? `<td class="num">${price}</td>` : ""}
       </tr>`;
     }).join("");
     $("tli-table").innerHTML = head + body;
     $("tli-table").querySelectorAll<HTMLElement>("tr[data-i]").forEach((tr) => {
       const r = resolved[+tr.dataset.i!];
-      tr.querySelector<HTMLInputElement>("[data-keep]")!.addEventListener("change", (e) => { r.skip = !(e.target as HTMLInputElement).checked; tr.classList.toggle("skip", r.skip); summary(); });
+      tr.querySelector<HTMLInputElement>("[data-keep]")!.addEventListener("change", (e) => {
+        r.skip = !(e.target as HTMLInputElement).checked;
+        // Skipping a new game's first row makes its next condition the one that creates the listing.
+        if (!r.product) renderTable(); else { tr.classList.toggle("skip", r.skip); summary(); }
+      });
       tr.querySelector<HTMLSelectElement>("[data-pick]")!.addEventListener("change", (e) => {
         const id = (e.target as HTMLSelectElement).value;
-        chooseProduct(r, id ? byId.get(id) || null : null);
+        chooseProduct(r, id ? byId.get(id) || null : null, typeFilter());
         renderTable();
+      });
+      tr.querySelector<HTMLSelectElement>("[data-cat]")?.addEventListener("change", (e) => {
+        r.categoryId = (e.target as HTMLSelectElement).value;
+        catPicks.set(r.row.n, r.categoryId);
       });
     });
     summary();
@@ -306,14 +391,16 @@ export function openImportDialog(o: ImportDialogOpts) {
   function summary() {
     const live = resolved.filter((r) => !r.skip);
     const n = { ex: 0, cond: 0, nw: 0, rev: 0, units: 0 };
+    const followers = followerRows();
     for (const r of live) {
       n.units += r.row.qty;
-      const s = statusOf(r).cls;
+      const s = statusOf(r, followers).cls;
       if (s === "ok") n.ex++; else if (s === "cond") n.cond++; else if (s === "rev") n.rev++; else n.nw++;
     }
     const nopl = live.filter((r) => !r.row.platform).length;
+    const totals = map.title == null ? 0 : records.filter((rec) => isSummaryRow(String(rec[map.title!] ?? ""), map.platform == null ? "" : String(rec[map.platform] ?? ""))).length;
     $("tli-sum").innerHTML = live.length
-      ? `<strong>${live.length}</strong> lines · <strong>${n.units}</strong> units — <strong>${n.ex}</strong> existing · <strong>${n.cond}</strong> new conditions · <strong>${n.nw + n.rev}</strong> new listings${n.rev ? ` (<strong style="color:var(--magenta)">${n.rev}</strong> need review)` : ""}${nopl ? ` · <span class="warn">${nopl} without a platform</span>` : ""}`
+      ? `<strong>${live.length}</strong> lines · <strong>${n.units}</strong> units — <strong>${n.ex}</strong> existing · <strong>${n.cond}</strong> new conditions · <strong>${n.nw + n.rev}</strong> new listings${n.rev ? ` (<strong style="color:var(--magenta)">${n.rev}</strong> need review)` : ""}${nopl ? ` · <span class="warn">${nopl} without a platform</span>` : ""}${totals ? ` · <span class="tli-muted">${totals} totals row${totals === 1 ? "" : "s"} skipped</span>` : ""}`
       : (resolved.length ? "Every row is skipped." : "Choose a file to begin.");
     ($("tli-go") as HTMLButtonElement).disabled = !live.length || busy;
     $("tli-go").textContent = live.length ? `Import ${live.length} line${live.length === 1 ? "" : "s"}` : "Import";
@@ -327,13 +414,13 @@ export function openImportDialog(o: ImportDialogOpts) {
     overlay.querySelectorAll<HTMLElement>("select, input, button").forEach((el) => { if (el.id !== "tli-go") (el as any).disabled = true; });
     const progress = (m: string) => { $("tli-sum").textContent = m; };
     try {
-      await o.onImport(live, { ...choices }, progress);
+      await o.onImport(live, { ...choices, fileName, fileKey }, progress);
       busy = false; close();
     } catch (e: any) {
       // The caller marks rows it already staged as skipped, so a retry only
       // sends what failed — re-render so the checkboxes show that.
       busy = false;
-      showErr((e?.message || "Import failed") + " — rows already imported are unchecked; press Import again to retry the rest.");
+      showErr((e?.message || "Import failed") + " Rows confirmed as imported are unchecked.");
       overlay.querySelectorAll<HTMLElement>("select, input, button").forEach((el) => { (el as any).disabled = false; });
       renderTable();
     }

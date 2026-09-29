@@ -9,23 +9,33 @@
 //   • no listing                               → a NEW PRODUCT
 // so a loose and a CIB copy of the same game land on one listing.
 
-import type { PlatformAlias, TaxoEntry } from "./smartSearch";
+import { PLATFORM_ALIASES, resolveStaticPlatforms, platformNameExact, type PlatformAlias, type TaxoEntry } from "./smartSearch";
+
+// Built-in platform names — catalog-only spellings are treated more strictly.
+const BUILTIN = new Set(PLATFORM_ALIASES.map((p) => p.canonical));
 import { barcodeEq } from "./gtin";
 
 /* ---------------- Column detection ---------------- */
 
 export type ColumnKey =
-  | "title" | "platform" | "condition" | "qty" | "price" | "cost" | "upc" | "pcId" | "notes"
+  | "title" | "platform" | "condition" | "grade" | "qty" | "price" | "pcValue" | "cost" | "upc" | "pcId" | "notes" | "folder"
   | "loosePrice" | "cibPrice" | "newPrice" | "gradedPrice";
 export type ColumnMap = Partial<Record<ColumnKey, number>>;
 
 export const COLUMN_DEFS: { key: ColumnKey; label: string; required?: boolean; aliases: string[] }[] = [
   { key: "title", label: "Title", required: true, aliases: ["product name", "product", "title", "game title", "game", "name", "item", "item name", "game name"] },
   { key: "platform", label: "Platform", aliases: ["console name", "console", "platform", "system", "console platform"] },
-  { key: "condition", label: "Condition", aliases: ["condition", "completeness", "status", "cond", "item condition", "type"] },
-  { key: "qty", label: "Qty", aliases: ["quantity", "qty", "count", "copies", "amount"] },
-  { key: "price", label: "Value / Price", aliases: ["value", "price", "current value", "current price", "market value", "resale", "retail", "estimated value", "item value", "total value", "sell price"] },
-  { key: "cost", label: "Paid (cost)", aliases: ["price paid", "paid", "cost", "purchase price", "paid price", "cost basis", "bought for", "purchase cost"] },
+  // PriceCharting's raw export: include-string = completeness ("Item, Box, and
+  // Manual"), condition-string = cosmetic grade ("Normal wear").
+  { key: "condition", label: "Condition", aliases: ["condition", "completeness", "status", "cond", "item condition", "type", "include string"] },
+  { key: "grade", label: "Grade", aliases: ["grade", "condition string", "cosmetic condition"] },
+  { key: "qty", label: "Qty", aliases: ["quantity", "qty", "count", "copies", "number of copies"] },
+  { key: "price", label: "Value / Price", aliases: ["value", "price", "sell price", "selling price", "our price", "asking price", "current value", "current price", "market value", "resale", "retail", "estimated value", "item value", "total value"] },
+  // The market guide price, kept apart from the store's own sell price. Raw
+  // PriceCharting exports call it price-in-pennies. With no sell-price column
+  // it becomes the price.
+  { key: "pcValue", label: "PriceCharting value", aliases: ["pricecharting value", "price charting value", "pricecharting price", "price charting price", "pricecharting", "price charting", "pc value", "pc price", "price in pennies"] },
+  { key: "cost", label: "Paid (cost)", aliases: ["price paid", "paid", "cost", "purchase price", "paid price", "cost basis", "bought for", "purchase cost", "cost basis in pennies", "cash value", "cash offer", "cash price", "buy price", "offer price", "trade offer"] },
   { key: "upc", label: "UPC / barcode", aliases: ["upc", "barcode", "ean", "gtin", "upc code"] },
   { key: "pcId", label: "PriceCharting id", aliases: ["id", "pricecharting id", "price charting id", "product id", "pc id", "pricecharting product id"] },
   { key: "notes", label: "Notes", aliases: ["notes", "note", "comments", "comment", "description", "memo"] },
@@ -33,6 +43,7 @@ export const COLUMN_DEFS: { key: ColumnKey; label: string; required?: boolean; a
   { key: "cibPrice", label: "CIB price", aliases: ["cib price", "cib", "complete price", "complete", "cib value", "complete in box price"] },
   { key: "newPrice", label: "New price", aliases: ["new price", "new", "sealed price", "new value", "brand new price"] },
   { key: "gradedPrice", label: "Graded price", aliases: ["graded price", "graded", "graded value"] },
+  { key: "folder", label: "Folder", aliases: ["folder", "collection folder"] },
 ];
 
 /** Lowercase, strip accents/punctuation, "&"→"and", collapse whitespace. */
@@ -66,14 +77,27 @@ export function detectColumns(header: string[]): ColumnMap {
       if (best >= 0) { map[def.key] = best; taken.add(best); }
     }
   }
-  // A bare "id" column is only PriceCharting's product id when the sheet is a
-  // PriceCharting export (its console-name / product-name headers are present);
-  // a generic sheet's row-number column must never be stored as one.
-  if (map.pcId != null && hs[map.pcId] === "id" && !hs.some((h) => /^(console name|product name)$/.test(h))) delete map.pcId;
+  // A bare "id" / "product id" column is only PriceCharting's product id when
+  // the sheet IS a PriceCharting export; another system's ids (or a row-number
+  // column) must never be stored as one — they'd match at 100% forever.
+  const pcExport = (hs.includes("product name") && hs.includes("console name")) || hs.includes("price in pennies") || hs.includes("include string");
+  // Only an explicitly-PriceCharting header survives on a non-PriceCharting
+  // sheet — "eBay Product ID" / "Shopify Product ID" (contains-pass hits) don't.
+  if (map.pcId != null && !/^(pricecharting id|price charting id|pc id|pricecharting product id)$/.test(hs[map.pcId]) && !pcExport) delete map.pcId;
   return map;
 }
 
 export const headerSignature = (header: string[]) => header.map(norm).join("|");
+
+/** Money columns whose header says they're whole cents ("price-in-pennies"). */
+export function centsColumns(header: string[], map: ColumnMap): Partial<Record<ColumnKey, boolean>> {
+  const out: Partial<Record<ColumnKey, boolean>> = {};
+  for (const k of ["price", "pcValue", "cost", "loosePrice", "cibPrice", "newPrice", "gradedPrice"] as ColumnKey[]) {
+    const i = map[k];
+    if (i != null && / (pennies|cents)( |$)/.test(" " + norm(header[i] ?? ""))) out[k] = true;
+  }
+  return out;
+}
 
 /** Does the first row look like a header (mostly non-numeric, matches ≥1 known column)? */
 export function looksLikeHeader(row: string[]): boolean {
@@ -86,17 +110,40 @@ export function looksLikeHeader(row: string[]): boolean {
 export function parseMoney(raw: string): number | null {
   const s = String(raw ?? "").trim();
   if (!s || /^(n\/?a|-|—|none|null)$/i.test(s)) return null;
-  const m = s.replace(/[^0-9.,-]/g, "").replace(/,(?=\d{3}\b)/g, "").replace(/,/, ".");
+  let m = s.replace(/[^0-9.,-]/g, "");
+  const lastDot = m.lastIndexOf("."), lastComma = m.lastIndexOf(",");
+  if (lastDot >= 0 && lastComma >= 0) {
+    // Both separators: the later one is the decimal ("1,093.50" / "1.093,50").
+    m = lastComma > lastDot ? m.replace(/\./g, "").replace(",", ".") : m.replace(/,/g, "");
+  } else if (lastComma >= 0) {
+    // "1,093" / "12,345,678" = thousands; "12,50" = decimal comma.
+    m = /^-?\d{1,3}(,\d{3})+$/.test(m) ? m.replace(/,/g, "") : m.replace(/,(?=[^,]*$)/, ".").replace(/,/g, "");
+  } else if (/^-?\d{1,3}(\.\d{3}){2,}$/.test(m)) {
+    m = m.replace(/\./g, ""); // "1.234.567"
+  }
   const n = parseFloat(m);
   return Number.isFinite(n) ? Math.max(0, Math.round(n * 100)) : null;
 }
 
+/** A whole-cents cell ("2511" → 2511). */
+export function parseCents(raw: string): number | null {
+  const s = String(raw ?? "").replace(/[^0-9.-]/g, "");
+  if (!s) return null;
+  const n = Math.round(parseFloat(s));
+  return Number.isFinite(n) ? Math.max(0, n) : null;
+}
+
+/** "2", "2.0", "1.00" (Excel number format), "3 copies" → a whole count. */
 export function parseQty(raw: string): number {
-  const n = parseInt(String(raw ?? "").replace(/[^0-9]/g, ""), 10);
+  const tok = String(raw ?? "").match(/\d+(?:[.,]\d+)*/)?.[0] ?? "";
+  // "1,200" = thousands; "1,00" / "2,0" = a decimal comma (European sheets).
+  const t = /^\d{1,3}(,\d{3})+$/.test(tok) ? tok.replace(/,/g, "") : tok.replace(/,(?=\d+$)/, ".").replace(/,/g, "");
+  const n = t ? Math.round(parseFloat(t)) : NaN;
   return Number.isFinite(n) && n > 0 ? n : 1;
 }
 
 const REGION_RE = /(^| )(pal|jp|jpn|japan|japanese|asian english|asia|eu|europe|uk|ntsc j)( |$)/;
+const IMPLIED_JP_RE = /(^| )(super famicom|famicom|famicom disk system|sfc|pc engine|pc engine cd|pc engine duo)( |$)/;
 
 /** Canonical platform for free text like "Switch - Nintendo" / "PAL Nintendo 64". */
 export function resolvePlatform(raw: string, platforms: PlatformAlias[]): { canonical: string | null; region: string | null } {
@@ -105,24 +152,60 @@ export function resolvePlatform(raw: string, platforms: PlatformAlias[]): { cano
   let region: string | null = null;
   const rm = s.match(REGION_RE);
   if (rm) { region = rm[2].toUpperCase().replace("JAPANESE", "JP").replace("JAPAN", "JP").replace("JPN", "JP").replace("NTSC J", "JP"); s = s.replace(REGION_RE, " "); }
-  const all: { canonical: string; alias: string }[] = [];
-  for (const p of platforms) for (const a of [p.canonical.toLowerCase(), ...p.aliases]) all.push({ canonical: p.canonical, alias: norm(a) });
-  all.sort((x, y) => y.alias.length - x.alias.length);
+  // PriceCharting names Japanese consoles without a "JP" prefix.
+  else if (IMPLIED_JP_RE.test(s)) region = "JP";
+  // Built-in platforms (and catalog spellings mapped onto them) match anywhere
+  // in the text. A catalog-ONLY spelling ("Game & Watch", "Amiibo", or a brand
+  // that slipped in) must equal the WHOLE text — as a substring, "nintendo"
+  // would swallow "Switch - Nintendo" and every row would miss its listing.
+  const all: { canonical: string; alias: string; builtin: boolean }[] = [];
+  for (const p of platforms) for (const a of [p.canonical.toLowerCase(), ...p.aliases]) all.push({ canonical: p.canonical, alias: norm(a), builtin: BUILTIN.has(p.canonical) });
+  all.sort((x, y) => Number(y.builtin) - Number(x.builtin) || y.alias.length - x.alias.length);
+  const whole = s.trim();
   for (const m of all) {
     if (!m.alias) continue;
-    if (s.includes(" " + m.alias + " ")) return { canonical: m.canonical, region };
+    if (m.builtin ? s.includes(" " + m.alias + " ") : whole === m.alias) return { canonical: m.canonical, region };
   }
   return { canonical: null, region };
 }
 
+// Common spreadsheet + PriceCharting-export phrasings → words the store's
+// condition aliases know.
+const CONDITION_SYNONYMS: Record<string, string> = {
+  "item box and manual": "cib",
+  "game box and manual": "cib",
+  "cart box and manual": "cib",
+  "cartridge box and manual": "cib",
+  "disc box and manual": "cib",
+  "new item box and manual": "new",
+  "item only": "loose",
+  "game only": "loose",
+  "console only": "loose",
+  "system only": "loose",
+  "unit only": "loose",
+  "cart only": "loose",
+  "cartridge only": "loose",
+  "disc only": "loose",
+  "item and box only": "in box",
+  "game and box only": "in box",
+  "item and manual only": "loose",
+  "game and manual only": "loose",
+};
+const MANUAL_NO_BOX = new Set(["item and manual only", "game and manual only"]);
+const PC_GRADE: Record<string, string> = {
+  "normal wear": "",   // PriceCharting's default → the store's default grade
+  "no blemishes": "mint",
+  "scratches": "fair",
+};
+
 /** "Loose" / "CIB" / "Brand New" / "Graded" / "Box Only" → our two axes. */
 export function resolveCondition(raw: string, completeness: TaxoEntry[], grades: TaxoEntry[]): { completenessCode: string; gradeCode: string; warning: string | null } {
-  const s0 = norm(raw);
+  const s0 = CONDITION_SYNONYMS[norm(raw)] ?? norm(raw);
   if (!s0) return { completenessCode: "", gradeCode: "", warning: null };
   let s = " " + s0 + " ";
   let warning: string | null = null;
   // PriceCharting-specific conditions with no clean equivalent.
-  if (/ (box only|manual only|box and manual|manual and box) /.test(s)) {
+  if (/^ (box only|manual only|box and manual|manual and box|box and manual only|manual and box only) $/.test(s)) {
     return { completenessCode: "", gradeCode: "", warning: `“${raw}” — no game included; set the condition by hand` };
   }
   // One longest-alias-first list across BOTH axes so "like new" (a grade)
@@ -163,6 +246,9 @@ export interface ImportRow {
   upc: string;
   pcId: string;
   notes: string;
+  folder: string;
+  pcValueCents: number | null; // PriceCharting / market guide value from the sheet
+  kind: "" | "console" | "accessory" | "collectible"; // "" = a game (or unknown)
   warnings: string[];
 }
 
@@ -172,15 +258,64 @@ export interface BuildOpts {
   platforms: PlatformAlias[];
   defaultCompleteness: string;
   defaultGrade: string;
+  /** Money columns holding whole cents (see centsColumns). */
+  cents?: Partial<Record<ColumnKey, boolean>>;
+  /** Only rows in this folder; "" = rows with no folder; null/undefined = all. */
+  folder?: string | null;
+}
+
+const fmtCents = (c: number) => "$" + (c / 100).toFixed(2);
+// "… x 8", "… x2" (lowercase x — "Mega Man X2" is a title), "DS Bulk Loose …",
+// "Lot of …". Not "Bundle": PriceCharting names real single products that way.
+const LOT_X_RE = /(^|\s)[x×]\s?\d+\s*$/;
+const LOT_WORDS_RE = /\bbulk\s+(lot|loose|games?|carts?|cartridges?|discs?|grade)\b|\blot\s+of\b|\b(games?|carts?|discs?)\s+lot\b|^lot\b/i;
+// Not bare "broken" — "Broken Sword", "Broken Age" are games.
+const PARTS_RE = /\b(defective|for parts|parts only|not working)\b|\(broken\)|\bbroken (screen|hinge|shell|console|unit|joystick)\b/i;
+// Consoles/handhelds by name, incl. PriceCharting's naming ("Original Gameboy
+// System", "Nintendo Switch Lite: …", "Pearl Blue Gameboy Advance SP"). A bare
+// "3DS" is a platform word in game titles, so it needs XL/LL; "System Shock"
+// is a game, so "system" must end the name or precede a bracket.
+const CONSOLE_RE = /\b(console|handheld system)\b|\bsystem\s*$|\b(new\s)?(2ds|3ds|dsi)\s?(xl|ll)\b|\b(new\s)?2ds\b|\bds\s?lite\b|\b(advance|gba)\s?sp\b|\b(gba|game ?boy)\s?micro\b|\bgame ?boy (pocket|light)\b|\bswitch (lite|oled)\b|\bclassic mini\b|\b(nes|snes|super nintendo|nintendo|famicom|genesis|playstation) classic( edition)?\b|\banalogue pocket\s*$/i;
+const ACCESSORY_RE = /\b(controllers?|joy-?cons?|nunchuks?|wii (u )?remote|remote plus|ac adapter|power adapter|charger|charging grip|charging station|battery pack|carrying case|microphone|memory card|dock|stylus|rumble pak|expansion pak|transfer pak|link cable)\b/i;
+const COLLECTIBLE_RE = /\bamiibo\b|\bskylanders?\b|\blego dimensions\b|\bdisney infinity\b|\bfigures?\b/i;
+/** What kind of item the name reads as, so it can default to the right category. */
+function itemKind(title: string, platform: string): ImportRow["kind"] {
+  // Judge by the name OUTSIDE brackets: "Wii Console [Wii Sports Bundle]" is a
+  // console, "Zelda Skyward Sword [Controller Bundle]" is the game.
+  const outside = title.replace(/\[[^\]]*\]|\([^)]*\)/g, " ").trim();
+  // The head noun decides — "Xbox 360 Console with Controller" is a console,
+  // "Nintendo Switch with Neon Joy-Con" too (its name IS the platform).
+  const head = outside.split(/\s+(?:with|w\/|incl\.?|including|\+)\s+/i)[0];
+  if (/\b(console|system)\s*$|\bconsole\b/i.test(head) || platformNameExact(head)) return "console";
+  // Then accessories: "Game Boy Advance SP AC Adapter", "NES Classic Controller".
+  if (ACCESSORY_RE.test(head)) return "accessory";
+  if (CONSOLE_RE.test(head)) return "console";
+  if (/\bbundle\b/i.test(title)) return ""; // "[amiibo Bundle]" = the game
+  if (COLLECTIBLE_RE.test(title + " " + platform)) return "collectible";
+  return "";
+}
+
+/** Rows that would create the SAME new listing (one game, several conditions). */
+export const newListingKey = (row: { title: string; platform: string }) =>
+  `${row.title.toLowerCase().replace(/\s+/g, " ").trim()}|${(row.platform || "").toLowerCase()}`;
+
+/** A spreadsheet's totals row ("Total", "Grand total", …) with no platform. */
+export function isSummaryRow(title: string, platform: string): boolean {
+  return !platform.trim() && /^(grand |sub ?)?totals?$|^sum$/.test(norm(title));
 }
 
 export function buildRows(records: string[][], map: ColumnMap, opts: BuildOpts): ImportRow[] {
   const cell = (r: string[], k: ColumnKey) => (map[k] == null ? "" : String(r[map[k]!] ?? "").trim());
   const out: ImportRow[] = [];
   const byKey = new Map<string, ImportRow>();
+  // How many copies each merged row's cost / guide value is averaged over
+  // (copies with a blank cost don't count toward the cost average).
+  const weights = new Map<ImportRow, { cost: number; pc: number }>();
   records.forEach((rec, i) => {
     const title0 = cell(rec, "title");
-    if (!title0) return;
+    if (!title0 || isSummaryRow(title0, cell(rec, "platform"))) return;
+    const folder = cell(rec, "folder");
+    if (opts.folder != null && folder !== opts.folder) return;
     const warnings: string[] = [];
     const platformRaw = cell(rec, "platform");
     const pr = resolvePlatform(platformRaw, opts.platforms);
@@ -189,39 +324,74 @@ export function buildRows(records: string[][], map: ColumnMap, opts: BuildOpts):
     const conditionRaw = cell(rec, "condition");
     const cond = resolveCondition(conditionRaw, opts.completeness, opts.grades);
     if (cond.warning) warnings.push(cond.warning);
+    if (MANUAL_NO_BOX.has(norm(conditionRaw))) warnings.push(`“${conditionRaw}” — imported as loose; the manual is included`);
+    // A separate grade column (PriceCharting's condition-string) wins over a
+    // grade named inside the condition cell.
+    const gradeRaw = cell(rec, "grade");
+    if (gradeRaw) {
+      const g0 = norm(gradeRaw);
+      const g = PC_GRADE[g0] ?? g0;
+      if (g) {
+        const gr = resolveCondition(g, [], opts.grades);
+        if (gr.gradeCode) cond.gradeCode = gr.gradeCode;
+        else warnings.push(`Unrecognized grade “${gradeRaw}” — used ${opts.defaultGrade || "the default"}`);
+      }
+    }
     const completenessCode = cond.completenessCode || opts.defaultCompleteness;
     if (!cond.completenessCode && !conditionRaw) warnings.push(`No condition — defaulted to ${completenessCode || "none"}`);
     const gradeCode = cond.gradeCode || opts.defaultGrade;
     // Price: an explicit value column wins; else the condition-specific guide
     // column (loose / cib / new) from a PriceCharting export.
-    let priceCents = parseMoney(cell(rec, "price"));
+    const money = (k: ColumnKey) => (opts.cents?.[k] ? parseCents : parseMoney)(cell(rec, k));
+    let priceCents = money("price");
     if (priceCents == null) {
       const c = completenessCode.toUpperCase();
       const k: ColumnKey | null = /NEW|SEALED/.test(c) ? "newPrice" : /^L$|LOOSE/.test(c) ? "loosePrice" : c ? "cibPrice" : null;
-      if (k) priceCents = parseMoney(cell(rec, k));
-      if (priceCents == null && map.gradedPrice != null && /graded/i.test(conditionRaw)) priceCents = parseMoney(cell(rec, "gradedPrice"));
+      if (k) priceCents = money(k);
+      if (priceCents == null && map.gradedPrice != null && /graded/i.test(conditionRaw)) priceCents = money("gradedPrice");
     }
+    const pcValueCents = money("pcValue");
+    if (priceCents == null) priceCents = pcValueCents;
+    if (LOT_X_RE.test(title0) || LOT_WORDS_RE.test(title0)) warnings.push(`“${title0}” looks like several copies or a lot. It imports as ONE item at the sheet price, so set the qty and per-copy price on the entry if that's wrong`);
+    if (PARTS_RE.test(title0)) warnings.push("Title says it's defective / for parts — check the grade");
+    const kind = itemKind(title0, platformRaw);
     let title = title0.replace(/\s+/g, " ");
-    if (pr.region && pr.region !== "NTSC") title = `${title} [${pr.region}]`;
+    // One spelling per market ("Europe" / "UK" / "EU" → [PAL]) so later
+    // imports of the same region land on this listing.
+    if (pr.region && pr.region !== "NTSC") title = `${title} [${regionCode(pr.region)}]`;
     const row: ImportRow = {
       n: i + 1, title,
       platform: pr.canonical || platformRaw, platformRaw, platformResolved: !!pr.canonical, region: pr.region,
       completenessCode, gradeCode, gradeFromSheet: !!cond.gradeCode, conditionRaw,
       qty: parseQty(cell(rec, "qty")),
-      priceCents, costCents: parseMoney(cell(rec, "cost")),
+      // PriceCharting writes 0 when no cost basis was entered → unknown, not free.
+      priceCents, costCents: opts.cents?.cost ? (money("cost") || null) : money("cost"),
       upc: cell(rec, "upc").replace(/[^0-9]/g, ""), pcId: /^\d+$/.test(cell(rec, "pcId")) ? cell(rec, "pcId") : "",
-      notes: cell(rec, "notes"), warnings,
+      notes: cell(rec, "notes"), folder, pcValueCents, kind, warnings,
     };
+    if (row.qty > 50) row.warnings.push(`Qty ${row.qty} looks high — check the Qty column`);
     // Same title + platform + condition twice in the sheet → one line, summed qty.
     const key = [norm(row.title), norm(row.platform), row.completenessCode, row.gradeCode].join("|");
     const dup = byKey.get(key);
     if (dup) {
+      // One stock row has one price: keep the first, but say so when the
+      // sheet disagreed. Cost + guide value average across the copies.
+      const w = weights.get(dup)!;
+      const avg = (a: number | null, wa: number, b: number | null) => (a == null || !wa ? b : b == null ? a : Math.round((a * wa + b * row.qty) / (wa + row.qty)));
+      if (dup.priceCents != null && row.priceCents != null && dup.priceCents !== row.priceCents) {
+        dup.warnings.push(`Duplicate row ${row.n} had a different price (${fmtCents(row.priceCents)} vs ${fmtCents(dup.priceCents)}) — using ${fmtCents(dup.priceCents)}`);
+      }
+      dup.costCents = avg(dup.costCents, w.cost, row.costCents);
+      dup.pcValueCents = avg(dup.pcValueCents, w.pc, row.pcValueCents);
+      if (row.costCents != null) w.cost += row.qty;
+      if (row.pcValueCents != null) w.pc += row.qty;
       dup.qty += row.qty;
       if (dup.priceCents == null) dup.priceCents = row.priceCents;
       if (!dup.warnings.some((w) => w.startsWith("Merged"))) dup.warnings.push("Merged duplicate rows");
       return;
     }
     byKey.set(key, row);
+    weights.set(row, { cost: row.costCents != null ? row.qty : 0, pc: row.pcValueCents != null ? row.qty : 0 });
     out.push(row);
   });
   return out;
@@ -236,6 +406,7 @@ export interface CatalogVariant {
   priceCents: number;
   barcodes: string[];
   quantity?: number;
+  inventoryTypeId?: string;   // retail / personal collection / … (per variant)
 }
 export interface CatalogProduct {
   id: string;
@@ -260,6 +431,12 @@ export const AUTO_MATCH = 0.92;
 export const REVIEW_MATCH = 0.6;
 
 const stripBrackets = (s: string) => s.replace(/\[[^\]]*\]|\([^)]*\)/g, " ");
+// Bracket qualifiers that DON'T make a different product (reprint labels,
+// condition words, the region tag we append ourselves).
+const BENIGN_QUALS = new Set(["greatest hits", "players choice", "player s choice", "nintendo selects", "platinum hits", "platinum", "reprint", "cib", "complete", "loose", "sealed", "new", "used", "ntsc", "ntsc u", "us", "usa", "pal", "jp", "japan", "eu"]);
+/** "Wii Nunchuk [White]" → "white"; edition / colour / variant qualifiers only. */
+// Region tags are compared separately (regionCode), so they're not qualifiers.
+const qualifiers = (s: string) => (s.match(/\[[^\]]*\]|\([^)]*\)/g) || []).map(norm).filter((q) => q && !BENIGN_QUALS.has(q) && !REGION_CODE[q]).sort().join("|");
 const dropArticle = (s: string) => s.replace(/^(the|a|an) /, "").replace(/ (the|a|an)$/, "");
 const bigrams = (s: string) => {
   const t = " " + s + " ";
@@ -278,10 +455,20 @@ function dice(a: Map<string, number>, b: Map<string, number>): number {
 // Arabic AND roman numerals: "Final Fantasy VII" vs "VIII" must never auto-match.
 const numbers = (s: string) => (s.match(/\b(?:\d+|(?=[ivx])x{0,3}(?:ix|iv|v?i{0,3}))\b/g) || []).filter(Boolean).join(",");
 
+// Region tags → one code per market, so "[EU]" and "PAL" compare equal.
+const REGION_CODE: Record<string, string> = { pal: "PAL", eu: "PAL", europe: "PAL", uk: "PAL", jp: "JP", jpn: "JP", japan: "JP", japanese: "JP", "ntsc j": "JP", asia: "ASIA", "asian english": "ASIA" };
+const regionCode = (r: string | null | undefined) => (r ? REGION_CODE[norm(r)] ?? norm(r).toUpperCase() : "");
+/** The market a title's bracket tag names: "Okami HD [JP]" → "JP", else "". */
+const titleRegion = (t: string) => {
+  for (const q of (t.match(/\[[^\]]*\]|\([^)]*\)/g) || []).map(norm)) if (REGION_CODE[q]) return REGION_CODE[q];
+  return "";
+};
+
 interface Prepared {
   product: CatalogProduct;
-  platform: string | null;
-  names: { full: string; bare: string; grams: Map<string, number>; nums: string }[];
+  platforms: string[]; // every platform the listing names ("GameCube, Wii" → both)
+  region: string; // "" = NTSC/US; "JP" / "PAL" from a title tag or the platform ("Super Famicom")
+  names: { full: string; bare: string; grams: Map<string, number>; nums: string; quals: string }[];
 }
 
 export function prepareCatalog(catalog: CatalogProduct[], platforms: PlatformAlias[]): Prepared[] {
@@ -289,33 +476,43 @@ export function prepareCatalog(catalog: CatalogProduct[], platforms: PlatformAli
     const names = [product.title, ...(product.altNames || [])].filter(Boolean).map((t) => {
       const full = dropArticle(norm(t));
       const bare = dropArticle(norm(stripBrackets(t))) || full;
-      return { full, bare, grams: bigrams(bare), nums: numbers(bare) };
+      return { full, bare, grams: bigrams(bare), nums: numbers(bare), quals: qualifiers(t) };
     });
-    return { product, platform: resolvePlatform(product.platform || "", platforms).canonical, names };
+    const rp = resolvePlatform(product.platform || "", platforms);
+    const all = resolveStaticPlatforms(product.platform);
+    return { product, platforms: all.length ? all : rp.canonical ? [rp.canonical] : [], region: titleRegion(product.title) || regionCode(rp.region), names };
   });
 }
 
-function titleScore(rowFull: string, rowBare: string, rowGrams: Map<string, number>, rowNums: string, region: string | null, p: Prepared): number {
+function titleScore(rowFull: string, rowBare: string, rowGrams: Map<string, number>, rowNums: string, rowQuals: string, rowRegion: string, p: Prepared): number {
   let best = 0;
-  const reg = region ? norm(region) : "";
   for (const n of p.names) {
     let s: number;
     if (n.full === rowFull) s = 1;
-    else if (n.bare === rowBare) s = 0.95;
+    // Same name once brackets are stripped. Different edition / colour
+    // qualifiers ("[White]" vs "[Black]", "[Collector's Edition]" vs none)
+    // are different products → review, not auto.
+    else if (n.bare === rowBare) s = n.quals === rowQuals ? 0.95 : 0.9;
     else {
       s = dice(rowGrams, n.grams);
       // "Mario Party 8" vs "Mario Party 9": different numbers can never auto-match.
-      if (s >= AUTO_MATCH && n.nums !== rowNums) s = 0.85;
+      // …nor can different editions / colours on the fuzzy path.
+      if (s >= AUTO_MATCH && (n.nums !== rowNums || n.quals !== rowQuals)) s = 0.85;
     }
     // A PAL / JP copy is a different product from the NTSC listing → review.
-    if (reg && s >= AUTO_MATCH && !n.full.includes(reg)) s = 0.85;
+    // A JP / PAL copy and a US listing (either way round) are different
+    // products → review, never auto.
+    if (s >= AUTO_MATCH && rowRegion !== p.region) s = 0.85;
     if (s > best) best = s;
   }
   return best;
 }
 
-export function pickVariant(product: CatalogProduct, completenessCode: string, gradeCode: string, gradeFromSheet: boolean): CatalogVariant | null {
-  const vs = product.variants || [];
+/** `inventoryTypeId` set → only stock rows of that type qualify: a personal-
+ *  collection copy gets its own row (own label code) on the same listing
+ *  instead of merging into the Retail row. */
+export function pickVariant(product: CatalogProduct, completenessCode: string, gradeCode: string, gradeFromSheet: boolean, inventoryTypeId = ""): CatalogVariant | null {
+  const vs = (product.variants || []).filter((v) => !inventoryTypeId || (v.inventoryTypeId || "") === inventoryTypeId);
   if (!vs.length) return null;
   const same = vs.filter((v) => (v.completenessCode || "") === (completenessCode || ""));
   if (!same.length) return null;
@@ -323,7 +520,7 @@ export function pickVariant(product: CatalogProduct, completenessCode: string, g
   return same.find((v) => (v.gradeCode || "") === (gradeCode || "")) || same[0];
 }
 
-export function matchRow(row: ImportRow, prepared: Prepared[], platforms: PlatformAlias[]): RowMatch {
+export function matchRow(row: ImportRow, prepared: Prepared[], platforms: PlatformAlias[], inventoryTypeId = ""): RowMatch {
   const gradeFromSheet = row.gradeFromSheet;
   const rowPlatform = resolvePlatform(row.platform, platforms).canonical;
   const rowPlatNorm = norm(row.platform);
@@ -331,6 +528,7 @@ export function matchRow(row: ImportRow, prepared: Prepared[], platforms: Platfo
   const rowBare = dropArticle(norm(stripBrackets(row.title))) || rowFull;
   const rowGrams = bigrams(rowBare);
   const rowNums = numbers(rowBare);
+  const rowQuals = qualifiers(row.title);
   const cands: Candidate[] = [];
   for (const p of prepared) {
     let score = 0;
@@ -339,17 +537,22 @@ export function matchRow(row: ImportRow, prepared: Prepared[], platforms: Platfo
     else {
       // Platform gate: both resolved → must be equal; otherwise loose substring.
       const pp = norm(p.product.platform || "");
-      if (rowPlatform && p.platform) { if (rowPlatform !== p.platform) continue; }
+      if (rowPlatform && p.platforms.length) { if (!p.platforms.includes(rowPlatform)) continue; }
       else if (rowPlatNorm && pp) { if (!(pp.includes(rowPlatNorm) || rowPlatNorm.includes(pp))) continue; }
-      score = titleScore(rowFull, rowBare, rowGrams, rowNums, row.region, p);
-      if (!pp && score < 1) score *= 0.9; // platform-less listing: a little less sure
+      score = titleScore(rowFull, rowBare, rowGrams, rowNums, rowQuals, regionCode(row.region) || titleRegion(row.title), p);
+      // Platform-less listing: a little less sure, even on an exact title, so a
+      // same-title listing ON the row's platform wins the tie.
+      if (!pp) score *= score >= 1 ? 0.97 : 0.9;
     }
     if (score >= REVIEW_MATCH) cands.push({ product: p.product, score });
   }
   cands.sort((a, b) => b.score - a.score);
   const top = cands[0];
-  if (top && top.score >= AUTO_MATCH) {
-    const variant = pickVariant(top.product, row.completenessCode, row.gradeCode, gradeFromSheet);
+  // Two different listings equally sure (e.g. "Tetris" with no platform vs the
+  // Game Boy AND NES listings) → the employee decides.
+  const tie = top && cands[1] && cands[1].product.id !== top.product.id && cands[1].score >= AUTO_MATCH && top.score - cands[1].score < 0.02;
+  if (top && top.score >= AUTO_MATCH && !tie) {
+    const variant = pickVariant(top.product, row.completenessCode, row.gradeCode, gradeFromSheet, inventoryTypeId);
     return { status: variant ? "variant" : "new-variant", product: top.product, variant, candidates: cands.slice(0, 5) };
   }
   return { status: top ? "review" : "new-product", product: null, variant: null, candidates: cands.slice(0, 5) };
@@ -361,10 +564,11 @@ export interface ResolvedRow {
   product: CatalogProduct | null;   // chosen listing (null = create a new product)
   variant: CatalogVariant | null;   // chosen existing variant (null = create one)
   skip: boolean;
+  categoryId: string;               // category for a NEW listing ("" = the dialog's default)
 }
 
 /** Apply a user's pick (product id or "" for new) to a row. */
-export function chooseProduct(r: ResolvedRow, product: CatalogProduct | null) {
+export function chooseProduct(r: ResolvedRow, product: CatalogProduct | null, inventoryTypeId = "") {
   r.product = product;
-  r.variant = product ? pickVariant(product, r.row.completenessCode, r.row.gradeCode, r.row.gradeFromSheet) : null;
+  r.variant = product ? pickVariant(product, r.row.completenessCode, r.row.gradeCode, r.row.gradeFromSheet, inventoryTypeId) : null;
 }
