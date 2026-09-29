@@ -90,8 +90,11 @@ export const PLATFORM_ALIASES: PlatformAlias[] = [
 const NOISE = new Set(["condition", "cond", "the", "a", "of"]);
 // Real product names that START with a platform word — the only case where
 // "wii …" keeps "Wii" in a new product's title ("wii mario kart" doesn't).
-const NAME_WITH_PLATFORM_RE = /^(wii (sports|fit|play|party|music|chess|u party|u panorama|u sports|u fit)|game ?boy (camera|printer|gallery|wars)|virtual boy wario land)\b/;
+const NAME_WITH_PLATFORM_RE = /^(wii (sports|fit|play|party|music|chess|u party|u panorama|u sports|u fit)|game ?boy (camera|printer|gallery|wars)|game (and )?watch (gallery|collection)|virtual boy wario land)\b/;
 
+/** " word word " — lowercase, punctuation and "&"/"and" dropped, space-padded
+ *  so `.includes()` only matches whole words. */
+const phraseWords = (t: string) => " " + t.toLowerCase().replace(/&/g, " ").replace(/[^a-z0-9]+/g, " ").split(" ").filter((w) => w && w !== "and").join(" ") + " ";
 const BUILTIN_CANON = new Set(PLATFORM_ALIASES.map((p) => p.canonical));
 const words = (t: string) => " " + String(t ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() + " ";
 const STATIC_ALIASES = PLATFORM_ALIASES
@@ -228,8 +231,11 @@ export function matchScore(p: MatchableProduct, parsed: ParsedQuery): number {
     if (!parsed.title) return 0;
     // The platform word + title IS the name ("Wii Sports Club" on Wii U,
     // "PlayStation Move" on PS3) — a real match whatever the platform.
-    const names = `${p.title} ${(p.altNames || []).join(" ")}`.toLowerCase();
-    if (parsed.platformText && names.includes(`${parsed.platformText} ${parsed.title}`)) return 0.85;
+    // Compared as whole words, with "&" / "and" and punctuation ignored on both
+    // sides: "game & watch gallery" finds "Game and Watch Gallery 4", while
+    // "nes controller" doesn't find an SNES one and "ds xl" not a 3DS XL.
+    const names = phraseWords(`${p.title} ${(p.altNames || []).join(" ")}`);
+    if (parsed.platformText && names.includes(phraseWords(`${parsed.platformText} ${parsed.title}`))) return 0.85;
     if (resolveStaticPlatform(p.platform)) return 0;
     if (hay.includes(parsed.title)) return 0.8;
     // Only REAL title words count — the platform word alone is not a match.
