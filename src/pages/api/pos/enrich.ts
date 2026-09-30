@@ -67,7 +67,13 @@ export const POST: APIRoute = async ({ locals, request }) => {
     if (meta?.summary && !cur?.description) patch.description = meta.summary;
     if (meta?.releaseYear && !cur?.release_year) patch.release_year = meta.releaseYear;
     if (meta?.trailerUrl && !cur?.trailer_url) patch.trailer_url = meta.trailerUrl;
-    if (meta?.altNames?.length && !(cur?.alternative_names?.length)) patch.alternative_names = meta.altNames;
+    // Merge (not fill-if-empty): an import may already have saved the sheet's
+    // own spelling as a search name; IGDB's aliases join it.
+    if (meta?.altNames?.length) {
+      const have: string[] = Array.isArray(cur?.alternative_names) ? cur.alternative_names : [];
+      const merged = [...new Set([...have, ...meta.altNames])];
+      if (merged.length !== have.length) patch.alternative_names = merged;
+    }
     if (Object.keys(patch).length) await admin.from("products").update(patch).eq("id", b.productId);
   }
 

@@ -9,7 +9,7 @@
 import { parseDelimited } from "./csv";
 import {
   COLUMN_DEFS, type ColumnKey, type ColumnMap, detectColumns, headerSignature, looksLikeHeader,
-  buildRows, prepareCatalog, matchRow, chooseProduct, centsColumns, isSummaryRow, newListingKey,
+  buildRows, prepareCatalog, matchRow, chooseProduct, centsColumns, isSummaryRow, newListingKey, officialTitleFor, norm,
   type CatalogProduct, type ImportRow, type ResolvedRow,
 } from "./collectionImport";
 import type { PlatformAlias, TaxoEntry } from "./smartSearch";
@@ -73,6 +73,8 @@ const CSS = `
 .tli-pill.cond{color:var(--cyan,#2ce6e0);border-color:rgba(44,230,224,.4)}
 .tli-pill.new{color:#ffd166;border-color:rgba(255,209,102,.4)}
 .tli-pill.rev{color:var(--magenta,#ff49d0);border-color:rgba(255,73,208,.4)}
+.tli-fix{font-size:.72rem;font-weight:400;color:var(--muted,#aaa);margin-top:.15rem}
+.tli-link{background:none;border:0;padding:0;color:var(--cyan,#2ce6e0);cursor:pointer;font-size:.72rem;text-decoration:underline}
 .tli-pill.noninv{color:var(--muted,#aaa);border-color:var(--border-strong,#555)}
 .tli-table label.tli-ni{display:inline-flex;align-items:center;gap:.25rem;font-size:.72rem;color:var(--muted,#aaa);margin-left:.35rem;cursor:pointer}
 .tli-foot{display:flex;align-items:center;gap:1rem;flex-wrap:wrap;padding:.7rem 1rem;border-top:1px solid var(--border,#333)}
@@ -107,6 +109,13 @@ export function openImportDialog(o: ImportDialogOpts) {
   let resolved: ResolvedRow[] = [];
   let busy = false;
   let folderSel: string | null = null; // folder filter (null = every folder)
+  // Official titles from the game database (LaunchBox copy) for rows that
+  // would create a NEW listing — fixes sheet typos ("Links Aweakening").
+  const titleFix = new Map<string, { name: string; sim: number } | null>(); // key: norm(title)|platform
+  const keepSheet = new Set<number>(); // rows the employee reverted to the sheet's title
+  let useOfficial = true;
+  let fixInFlight = false;
+  const fixKey = (row: ImportRow) => `${norm(row.title)}|${row.platform}`;
   const catPicks = new Map<number, string>(); // employee's per-row category picks (by source line)
   // Employee's per-row listing picks + skips (by source line). Persistent so a
   // folder switch or a re-match doesn't drop rows that aren't on screen.
@@ -203,7 +212,7 @@ export function openImportDialog(o: ImportDialogOpts) {
     map = mapFor(all[0]);
     folderSel = null;
     // A new file: row numbers mean different games now.
-    resolved = []; picks.clear(); catPicks.clear();
+    resolved = []; picks.clear(); catPicks.clear(); keepSheet.clear();
     if (map.title == null) showErr("Couldn't find a Title column — pick it under Columns."); else showErr("");
     renderMap(); renderDefaults(); rebuild();
   }
@@ -251,7 +260,7 @@ export function openImportDialog(o: ImportDialogOpts) {
       records = on ? all.slice(1) : all;
       map = mapFor(all[0]);
       folderSel = null;
-      resolved = []; picks.clear(); catPicks.clear(); // row numbers shift by one
+      resolved = []; picks.clear(); catPicks.clear(); keepSheet.clear(); // row numbers shift by one
       renderMap(); renderDefaults(); rebuild();
     });
   }
@@ -276,8 +285,10 @@ export function openImportDialog(o: ImportDialogOpts) {
     html += sel("tli-comp", "Condition when blank", o.completeness.map((c) => `<option value="${c.code}"${c.code === choices.completenessCode ? " selected" : ""}>${esc(c.label)}</option>`).join(""));
     html += sel("tli-grade", "Grade when blank", o.grades.map((g) => `<option value="${g.code}"${g.code === choices.gradeCode ? " selected" : ""}>${esc(gradeLabel(g.code))}</option>`).join(""));
     if (o.mode === "entry") html += `<label>Price = sheet value ×<input id="tli-pct" type="number" min="1" max="500" step="1" value="${choices.pricePct}" style="width:5.5rem;" /></label>`;
+    html += `<label class="chk" style="text-transform:none;letter-spacing:0;font-weight:600;" title="New listings take the game's official name from the game database — fixes typos in the sheet. The sheet's own title stays searchable."><input type="checkbox" id="tli-official" ${useOfficial ? "checked" : ""}/> Use official game titles</label>`;
     $("tli-def").innerHTML = html + `<span class="tli-note">Existing listings keep their own price; these only shape <em>new</em> ones.${o.mode === "entry" && o.invTypes?.length ? " A copy of a different inventory type gets its own stock row on the same listing." : ""}</span>`;
     overlay.querySelector<HTMLSelectElement>("#tli-folder")?.addEventListener("change", (e) => { const v = (e.target as HTMLSelectElement).value; folderSel = v === "*" ? null : v; rebuild(); });
+    overlay.querySelector<HTMLInputElement>("#tli-official")?.addEventListener("change", (e) => { useOfficial = (e.target as HTMLInputElement).checked; rebuild(); });
     $<HTMLSelectElement>("tli-cat").addEventListener("change", (e) => { choices.categoryId = (e.target as HTMLSelectElement).value; choices.completenessCode = catDefaultComp(); const c = overlay.querySelector<HTMLSelectElement>("#tli-comp"); if (c) c.value = choices.completenessCode; rebuild(); });
     overlay.querySelector<HTMLSelectElement>("#tli-type")?.addEventListener("change", (e) => { choices.inventoryTypeId = (e.target as HTMLSelectElement).value; rebuild(); });
     $<HTMLSelectElement>("tli-comp").addEventListener("change", (e) => { choices.completenessCode = (e.target as HTMLSelectElement).value; rebuild(); });
@@ -301,8 +312,21 @@ export function openImportDialog(o: ImportDialogOpts) {
       defaultCompleteness: choices.completenessCode, defaultGrade: choices.gradeCode,
       cents: centsColumns(header, map), folder: map.folder != null ? folderSel : null,
     });
-    resolved = rows.map((row) => {
-      const match = matchRow(row, prepared, o.platforms, typeFilter());
+    const wanted: ImportRow[] = [];
+    resolved = rows.map((row0) => {
+      let row = row0;
+      let match = matchRow(row, prepared, o.platforms, typeFilter());
+      // A row that would create a NEW listing takes the game's official title
+      // (then re-matches — the typo may have been hiding an existing listing).
+      const isNewListing = match.status === "new-product" || match.status === "review";
+      if (useOfficial && isNewListing && !row.kind && !row.lot && !keepSheet.has(row.n)) {
+        if (!titleFix.has(fixKey(row))) wanted.push(row);
+        const fixed = officialTitleFor(row.title, titleFix.get(fixKey(row)), row.platform);
+        if (fixed) {
+          row = { ...row, title: fixed, titleFrom: row.title };
+          match = matchRow(row, prepared, o.platforms, typeFilter());
+        }
+      }
       const hint = row.kind ? kindCat[row.kind] : "";
       if (row.kind === "console" && !hint) row.warnings.push("Looks like a console/handheld — pick its category (no Consoles category found)");
       const r: ResolvedRow = { row, match, product: match.product, variant: match.variant, skip: false, categoryId: catPicks.get(row.n) ?? hint, nonInventory: defaultNonInv(row) };
@@ -311,7 +335,32 @@ export function openImportDialog(o: ImportDialogOpts) {
       return r;
     });
     renderTable();
+    if (wanted.length) lookupOfficialTitles(wanted);
   }
+  // Ask the server for the closest official title of each new-listing row
+  // (batched), then re-run the matching with the answers.
+  async function lookupOfficialTitles(rows: ImportRow[]) {
+    if (fixInFlight) return;
+    fixInFlight = true;
+    if (useOfficial) { const go = $("tli-go") as HTMLButtonElement; go.disabled = true; go.textContent = "Checking titles…"; }
+    const uniq = [...new Map(rows.map((r) => [fixKey(r), r])).values()];
+    try {
+      for (let i = 0; i < uniq.length; i += 200) {
+        const chunk = uniq.slice(i, i + 200);
+        if (useOfficial) $("tli-sum").textContent = `Checking titles against the game database… ${Math.min(i + 200, uniq.length)}/${uniq.length}`;
+        let results: any[] = [];
+        try {
+          const r = await fetch("/api/pos/title-fix", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ items: chunk.map((x) => ({ title: x.title, platform: x.platform })) }) });
+          results = (await r.json()).results || [];
+        } catch { /* offline → keep sheet titles */ }
+        chunk.forEach((x, k) => titleFix.set(fixKey(x), results[k] ?? null));
+      }
+    } finally { fixInFlight = false; }
+    // Never swap the rows out from under an import that's running.
+    if (busy) { rebuildAfterImport = true; return; }
+    rebuild();
+  }
+  let rebuildAfterImport = false;
 
   // Entry imports: a lot ("Bulk …") defaults to non-inventory — money recorded, no stock.
   const defaultNonInv = (row: ImportRow) => o.mode === "entry" && row.lot;
@@ -364,7 +413,7 @@ export function openImportDialog(o: ImportDialogOpts) {
       return `<tr data-i="${i}" class="${r.skip ? "skip" : ""} ${st.cls === "rev" ? "review" : ""}">
         <td><input type="checkbox" data-keep ${r.skip ? "" : "checked"} title="Uncheck to skip this row" /></td>
         <td class="tli-muted">${r.row.n}</td>
-        <td class="t">${esc(r.row.title)}${warn}</td>
+        <td class="t">${esc(r.row.title)}${warn}${r.row.titleFrom ? `<div class="tli-fix" title="Official title from the game database — the sheet said “${esc(r.row.titleFrom)}” (kept as a search name)">✎ sheet: “${esc(r.row.titleFrom)}” <button type="button" class="tli-link" data-keeptitle>keep sheet title</button></div>` : ""}</td>
         <td>${esc(r.row.platform || "—")}${r.row.platformRaw && !r.row.platformResolved ? ` <span class="warn" title="Platform not recognized">?</span>` : ""}</td>
         <td>${esc(cond)}</td>
         <td class="num">${r.row.qty}</td>
@@ -393,6 +442,7 @@ export function openImportDialog(o: ImportDialogOpts) {
         if (!r.product) renderTable(); else { tr.classList.toggle("skip", r.skip); summary(); syncAllBox(); }
       });
       tr.querySelector<HTMLInputElement>("[data-noninv]")?.addEventListener("change", (e) => { r.nonInventory = (e.target as HTMLInputElement).checked; renderTable(); });
+      tr.querySelector<HTMLButtonElement>("[data-keeptitle]")?.addEventListener("click", () => { keepSheet.add(r.row.n); rebuild(); });
       tr.querySelector<HTMLSelectElement>("[data-pick]")?.addEventListener("change", (e) => {
         const id = (e.target as HTMLSelectElement).value;
         chooseProduct(r, id ? byId.get(id) || null : null, typeFilter());
@@ -420,10 +470,13 @@ export function openImportDialog(o: ImportDialogOpts) {
     const nopl = live.filter((r) => !r.row.platform).length;
     const totals = map.title == null ? 0 : records.filter((rec) => isSummaryRow(String(rec[map.title!] ?? ""), map.platform == null ? "" : String(rec[map.platform] ?? ""))).length;
     $("tli-sum").innerHTML = live.length
-      ? `<strong>${live.length}</strong> lines · <strong>${n.units}</strong> units — <strong>${n.ex}</strong> existing · <strong>${n.cond}</strong> new conditions · <strong>${n.nw + n.rev}</strong> new listings${n.rev ? ` (<strong style="color:var(--magenta)">${n.rev}</strong> need review)` : ""}${n.ni ? ` · <strong>${n.ni}</strong> non-inventory (recorded, no stock)` : ""}${nopl ? ` · <span class="warn">${nopl} without a platform</span>` : ""}${totals ? ` · <span class="tli-muted">${totals} totals row${totals === 1 ? "" : "s"} skipped</span>` : ""}`
+      ? `<strong>${live.length}</strong> lines · <strong>${n.units}</strong> units — <strong>${n.ex}</strong> existing · <strong>${n.cond}</strong> new conditions · <strong>${n.nw + n.rev}</strong> new listings${n.rev ? ` (<strong style="color:var(--magenta)">${n.rev}</strong> need review)` : ""}${n.ni ? ` · <strong>${n.ni}</strong> non-inventory (recorded, no stock)` : ""}${live.some((r) => r.row.titleFrom) ? ` · ✎ <strong>${live.filter((r) => r.row.titleFrom).length}</strong> title${live.filter((r) => r.row.titleFrom).length === 1 ? "" : "s"} corrected` : ""}${nopl ? ` · <span class="warn">${nopl} without a platform</span>` : ""}${totals ? ` · <span class="tli-muted">${totals} totals row${totals === 1 ? "" : "s"} skipped</span>` : ""}`
       : (resolved.length ? "Every row is skipped." : "Choose a file to begin.");
-    ($("tli-go") as HTMLButtonElement).disabled = !live.length || busy;
-    $("tli-go").textContent = live.length ? `Import ${live.length} line${live.length === 1 ? "" : "s"}` : "Import";
+    // Wait for the official-title check — importing now would keep the typos
+    // (unless official titles are switched off).
+    const waiting = useOfficial && fixInFlight;
+    ($("tli-go") as HTMLButtonElement).disabled = !live.length || busy || waiting;
+    $("tli-go").textContent = waiting ? "Checking titles…" : live.length ? `Import ${live.length} line${live.length === 1 ? "" : "s"}` : "Import";
   }
 
   $("tli-go").addEventListener("click", async () => {
@@ -440,6 +493,7 @@ export function openImportDialog(o: ImportDialogOpts) {
       // The caller marks rows it already staged as skipped, so a retry only
       // sends what failed — re-render so the checkboxes show that.
       busy = false;
+      if (rebuildAfterImport) { rebuildAfterImport = false; rebuild(); }
       showErr((e?.message || "Import failed") + " Rows confirmed as imported are unchecked.");
       overlay.querySelectorAll<HTMLElement>("select, input, button").forEach((el) => { (el as any).disabled = false; });
       renderTable();

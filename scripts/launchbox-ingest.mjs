@@ -44,7 +44,9 @@ const INCLUDE = new Set([
 const decode = (s) =>
   s.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#0?39;/g, "'");
-const normName = (s) => decode(s).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+// Keep in step with public.game_norm(): accents folded ("Pokémon" → "pokemon"),
+// apostrophes joined ("Luigi's" → "luigis"), everything else → one space.
+const normName = (s) => decode(s).normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/['’`]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
 const regionRank = (r) => (r === "North America" ? 4 : r === "United States" ? 3 : !r || r === "World" ? 2 : 1);
 
 const games = new Map();      // id -> { name, platform }

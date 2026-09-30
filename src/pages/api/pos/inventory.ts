@@ -291,6 +291,8 @@ export const POST: APIRoute = async ({ locals, request }) => {
           const { data: prod, error: pErr } = await sb.from("products").insert({
             title, platform, category_id: r.categoryId, slug: await uniqueSlug(title, platform),
             ...(r.tagPcId ? { tags: [`pricecharting:${String(r.tagPcId).slice(0, 40)}`] } : {}),
+            // The sheet's own spelling when the title was corrected — stays searchable.
+            ...(Array.isArray(r.altNames) && r.altNames.length ? { alternative_names: [...new Set(r.altNames.map((a: any) => String(a).trim().slice(0, 200)).filter((a: string) => a && a !== title))].slice(0, 5) } : {}),
             ...(await pendingFor(b.entryId)),
           }).select("id, slug").single();
           if (pErr) throw new Error(pErr.message);
@@ -370,6 +372,24 @@ export const POST: APIRoute = async ({ locals, request }) => {
         }
       }
       return json({ ok: true, results, idempotent: !keysErr, atomic: useRpc });
+    }
+    case "renameProducts": {
+      // "Fix titles": approved official names for existing listings. The old
+      // title stays searchable (alternative_names); the web address (slug)
+      // is left alone so links keep working.
+      if (!locals.can("inventory.manage")) return json({ error: "You don't have permission for this inventory action." }, 403);
+      const list: { id?: string; title?: string }[] = Array.isArray(b.items) ? b.items.slice(0, 500) : [];
+      const done: string[] = [];
+      for (const it of list) {
+        const title = String(it.title ?? "").trim().slice(0, 200);
+        if (!it.id || !title) continue;
+        const { data: cur } = await sb.from("products").select("title, alternative_names").eq("id", it.id).maybeSingle();
+        if (!cur || cur.title === title) continue;
+        const alts = [...new Set([...(Array.isArray(cur.alternative_names) ? cur.alternative_names : []), cur.title])].filter((a) => a && a !== title).slice(0, 20);
+        const { error } = await sb.from("products").update({ title, alternative_names: alts }).eq("id", it.id);
+        if (!error) done.push(it.id);
+      }
+      return json({ ok: true, renamed: done });
     }
     case "addNonInventoryLine": {
       // A bulk lot / non-stock purchase on a draft: what was paid, no stock row.

@@ -42,7 +42,7 @@ export const PLATFORM_ALIASES: PlatformAlias[] = [
   { canonical: "Nintendo Switch", aliases: ["nintendo switch", "switch", "nsw"] },
   { canonical: "Super Nintendo", aliases: ["super nintendo", "snes", "super nes", "super famicom", "sfc", "super nintendo entertainment system"] },
   { canonical: "Nintendo 64", aliases: ["nintendo 64", "n64"] },
-  { canonical: "GameCube", aliases: ["gamecube", "game cube", "gcn", "ngc", "nintendo gamecube"] },
+  { canonical: "GameCube", aliases: ["gamecube", "game cube", "gcn", "ngc", "gc", "nintendo gamecube"] },
   { canonical: "Wii U", aliases: ["wii u", "nintendo wii u", "wiiu"] },
   { canonical: "Wii", aliases: ["wii", "nintendo wii"] },
   { canonical: "Game Boy Advance", aliases: ["game boy advance", "gameboy advance", "gba"] },
@@ -121,6 +121,32 @@ export function resolveStaticPlatforms(name: string | null | undefined): string[
   }
   return out;
 }
+
+/** A sheet title without its own platform tacked on the end: "Street Fighter
+ *  II Super Nintendo", "Just Dance - Nintendo Wii", "Tetris GB" → the game's
+ *  name. Only the row's OWN platform is removed (any alias, optionally with its
+ *  maker — "Sony PlayStation 2" — or just the maker: "… Sega" on Genesis), and
+ *  a name is always left. Real names ending in their platform ("Mario Kart
+ *  Wii") come back from the game database with it. */
+export function withoutTrailingPlatform(title: string, platform: string | null | undefined): string {
+  const t = String(title ?? "").replace(/\s+/g, " ").trim();
+  const canon = resolveStaticPlatform(platform);
+  if (!canon) return t;
+  const own = new Set(STATIC_ALIASES.filter((m) => m.canonical === canon).map((m) => m.alias));
+  const maker = makerOf(canon);
+  const toks = t.split(" ");
+  for (let k = Math.min(5, toks.length - 1); k >= 1; k--) {
+    const tail = words(toks.slice(-k).join(" "));
+    const core = tail.replace(new RegExp(`^ ((${MAKERS}) )+`), " ");
+    if (!(own.has(tail) || own.has(core) || (core === " " && maker && tail === ` ${maker} `))) continue;
+    const rest = toks.slice(0, -k).join(" ").replace(/(?:[\s\-–—:,/|]|\b(?:for|on)\b)+$/i, "").trim();
+    if (/[a-z0-9]{3,}/i.test(rest.replace(/[^a-z0-9 ]+/gi, ""))) return rest;
+  }
+  return t;
+}
+const makerOf = (canon: string) =>
+  /^Sega/.test(canon) ? "sega" : /^(PlayStation|PSP)/.test(canon) ? "sony" : /^Xbox/.test(canon) ? "microsoft"
+  : /Nintendo|NES|Wii|GameCube|Game Boy|Virtual Boy|Famicom/.test(canon) ? "nintendo" : "";
 
 /** The platform whose alias IS the whole text ("Nintendo Switch", "PS4") —
  *  brand words and colours aside — i.e. a console named after its platform. */

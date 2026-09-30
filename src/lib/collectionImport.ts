@@ -9,7 +9,7 @@
 //   • no listing                               → a NEW PRODUCT
 // so a loose and a CIB copy of the same game land on one listing.
 
-import { PLATFORM_ALIASES, resolveStaticPlatforms, platformNameExact, type PlatformAlias, type TaxoEntry } from "./smartSearch";
+import { PLATFORM_ALIASES, resolveStaticPlatforms, platformNameExact, withoutTrailingPlatform, type PlatformAlias, type TaxoEntry } from "./smartSearch";
 
 // Built-in platform names — catalog-only spellings are treated more strictly.
 const BUILTIN = new Set(PLATFORM_ALIASES.map((p) => p.canonical));
@@ -250,6 +250,7 @@ export interface ImportRow {
   pcValueCents: number | null; // PriceCharting / market guide value from the sheet
   kind: "" | "console" | "accessory" | "collectible"; // "" = a game (or unknown)
   lot: boolean;                // "Bulk …" / "Lot of …" — a lot, not one sellable item
+  titleFrom?: string;          // the sheet's own title when replaced by the official one
   warnings: string[];
 }
 
@@ -464,6 +465,135 @@ const titleRegion = (t: string) => {
   for (const q of (t.match(/\[[^\]]*\]|\([^)]*\)/g) || []).map(norm)) if (REGION_CODE[q]) return REGION_CODE[q];
   return "";
 };
+
+/* ---------------- Official titles (typo correction) ---------------- */
+
+/** Minimum trigram similarity for a database title to replace a sheet title. */
+export const OFFICIAL_TITLE_SIM = 0.6;
+
+/**
+ * The official name to use instead of a sheet title, or null to keep it.
+ * `candidate` is the closest game on the SAME platform in our LaunchBox copy
+ * ("The Legend of Zelda Links Aweakening" → "The Legend of Zelda: Link's
+ * Awakening"). Safety: similar enough, and the NUMBERS must agree — "Mario
+ * Party 8" never becomes "Mario Party 9". Bracket qualifiers ([Collector's
+ * Edition], [JP]) aren't part of the game name, so they're carried over.
+ */
+export function officialTitleFor(original: string, candidate: { name: string; sim: number } | null | undefined, platform?: string | null): string | null {
+  if (!candidate?.name || !(candidate.sim >= OFFICIAL_TITLE_SIM)) return null;
+  const official = candidate.name.trim();
+  const quals = (original.match(/\[[^\]]*\]|\([^)]*\)/g) || []).join(" ");
+  // The row's own platform on the end isn't part of the name ("Street Fighter
+  // II Super Nintendo"); the lookup was made without it too.
+  const bareOrig = withoutTrailingPlatform(original.replace(/\[[^\]]*\]|\([^)]*\)/g, " ").replace(/\s+/g, " ").trim(), platform);
+  const o = norm(bareOrig), n = norm(official);
+  // Numbers must agree: "Mario Party 8" never becomes "Mario Party 9".
+  if (numbers(dropArticle(o)) !== numbers(dropArticle(n))) return null;
+  const ow = o.split(" ").filter(Boolean), nw = n.split(" ").filter(Boolean);
+  // Editions / versions must match BOTH ways: a sheet's "Legendary edition"
+  // isn't the base game, and an added "DX" / "HD" is a different release
+  // (often a ROM hack: "Pokémon Blue DX").
+  if (ow.some((w) => EDITION_WORDS.has(w) && !nw.includes(w))) return null;
+  if (nw.some((w) => EDITION_WORDS.has(w) && !ow.includes(w))) return null;
+  // Every distinctive word must be on BOTH sides (typo-tolerant). Otherwise
+  // it's a different product: a bundle ("Enter-EXIT the Gungeon"), a
+  // hardware set ("Wii ZAPPER with …"), a ROM hack ("Pokémon Red RUMOR",
+  // "Pokémon MOON Emerald", "FAKEMON FireRed"), a series entry ("…: Mini-Land
+  // Mayhem!") or one game of a trilogy.
+  // Two-letter words count too: "Ms. Pac-Man" isn't "Pac-Man", "Donkey Kong
+  // Jr." isn't "Donkey Kong", "Mega Man ZX" isn't "Mega Man".
+  const sig = (w: string) => !STOP_WORDS.has(w) && (w.length >= 3 || (w.length === 2 && !/^\d+$/.test(w)));
+  if (!ow.every((w, i) => !sig(w) || near(ow, i, nw))) return null;
+  // Words the official name adds are allowed only in their usual place, never
+  // in a subtitle: "Tomb Raider" isn't "Tomb Raider: Legend".
+  const head = official.match(/^(.*)(?::|\s[-–—]\s)/);
+  const subStart = head ? norm(head[1]).split(" ").filter(Boolean).length : nw.length;
+  const specific = ow.filter((w) => w.length >= 3 && !STOP_WORDS.has(w) && !PLATFORM_WORDS.has(w) && !numbers(w)).length >= 3;
+  if (!nw.every((w, i) => !sig(w) || near(nw, i, ow) || (i < subStart && addableAt(nw, i, subStart, specific)))) return null;
+  // A word the sheet repeats must repeat in the official name too:
+  // "Mario Party 10 MARIO [amiibo Bundle]" names which amiibo it comes with.
+  const count = (ws: string[], w: string) => ws.filter((x) => x === w).length;
+  if (ow.filter(sig).some((w) => count(ow, w) > 1 && count(nw, w) < count(ow, w))) return null;
+  // Same words, only styling differs: fix punctuation ("Luigis" → "Luigi's"),
+  // but don't turn "Carrion" into all-caps "CARRION".
+  if (o === n && /\b[A-Z]{3,}\b/.test(official.replace(/\b(HD|DX|3D|DS|GBA|NES|SNES|USA|VR|II|III|IV|VI|VII|VIII|XL)\b/g, "")) && !/\b[A-Z]{3,}\b/.test(bareOrig)) return null;
+  // …nor "Super Mario Bros. 2" into the database's odd "Super Mario Bros. -2".
+  if (o === n && /\s-\d/.test(official) && !/\s-\d/.test(bareOrig)) return null;
+  const fixed = `${official}${quals ? " " + quals : ""}`;
+  return fixed === original.trim() ? null : fixed;
+}
+/** Is word `i` of `ws` in the other title? Two-letter words must match
+ *  exactly — or be part of a word written apart, whole words on both sides:
+ *  "Yu-Gi-Oh" ~ "Yugioh", "R.C." ~ "RC", "Yo-kai" ~ "Yokai". */
+function near(ws: string[], i: number, other: string[]): boolean {
+  const w = ws[i];
+  if (w.length > 2) return nearWord(w, other, other.join(""));
+  if (other.includes(w)) return true;
+  let a = i, b = i;
+  while (a > 0 && ws[a - 1].length <= 2) a--;
+  while (b < ws.length - 1 && ws[b + 1].length <= 2) b++;
+  const run = ws.slice(a, b + 1).join("");
+  const spans = new Set<string>();
+  for (let j = 0; j < other.length; j++) for (let k = j, acc = ""; k < other.length && acc.length < 40; k++) spans.add(acc += other[k]);
+  return [run, run + (ws[b + 1] ?? ""), (ws[a - 1] ?? "") + run].some((c) => spans.has(c));
+}
+/** Is `w` (from one title) present in the other title's words — allowing a
+ *  typo ("aweakening" ~ "awakening", "robot" ~ "robobot") or a joined word
+ *  ("starfox" ~ "Star Fox", "ware" ~ "WarioWare")? */
+function nearWord(w: string, words: string[], joined: string): boolean {
+  if (words.includes(w)) return true;
+  if (w.length >= 3 && joined.includes(w)) return true; // "fox" in "starfox"
+  // A typo keeps the word's first two letters ("aweakening" ~ "awakening",
+  // "robot" ~ "robobot"); a different word usually doesn't ("pokemon" vs the
+  // ROM hack "fakemon"). Longer words may be off by more.
+  return words.some((v) => {
+    if (v.slice(0, 2) !== w.slice(0, 2) || Math.abs(v.length - w.length) > 2) return false;
+    const len = Math.max(v.length, w.length);
+    const maxEdits = len >= 7 ? 2 : len >= 5 ? 1 : 0;
+    return maxEdits > 0 && editDistance(v, w, maxEdits) <= maxEdits;
+  });
+}
+function editDistance(a: string, b: string, cap: number): number {
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let rowMin = i;
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      rowMin = Math.min(rowMin, cur[j]);
+    }
+    if (rowMin > cap) return cap + 1;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+// Words an official title may ADD without making it a different product —
+// each only in its usual place (before any subtitle):
+// - "The Legend of …" up front ("Zelda Links Awakening" → "The Legend of Zelda: …");
+// - a closing "Version" / "Game(s)" ("Pokémon Red Version", "… Olympic Games");
+// - platform names up front or at the end ("Wii Sports Resort", "Mario Kart
+//   DS", "Super Smash Bros. for Wii U");
+// - a leading "Super" and Donkey Kong's "Country" — only when the sheet title
+//   is specific (3+ distinctive words: "Mario Party Jamboree", "Donkey Kong
+//   Returns"). A short one may be another real game: "Street Fighter II" isn't
+//   "Super Street Fighter II", "Donkey Kong" isn't "Donkey Kong Country".
+function addableAt(nw: string[], i: number, end: number, specific: boolean): boolean {
+  const w = nw[i];
+  if (w === "legend") return nw[i + 1] === "of" && (i === 0 || (i === 1 && nw[0] === "the"));
+  if (w === "super") return i === 0 && specific;
+  if (w === "country") return specific && nw[i - 2] === "donkey" && nw[i - 1] === "kong";
+  if (CLOSING_WORDS.has(w)) return closingAt(nw, i, end);
+  // Up front, closing, or a brand in "Sonic & SEGA All-Stars Racing".
+  if (PLATFORM_WORDS.has(w)) return i === 0 || closingAt(nw, i, end) || (i === 2 && nw[1] === "and");
+  return false;
+}
+/** Only closing words (Version / Game / platform names) follow word `i`. */
+const closingAt = (ws: string[], i: number, end: number) =>
+  ws.slice(i + 1, end).every((x) => x.length < 2 || CLOSING_WORDS.has(x) || PLATFORM_WORDS.has(x));
+const CLOSING_WORDS = new Set(["version", "game", "games"]);
+const PLATFORM_WORDS = new Set(["nintendo", "wii", "switch", "ds", "3ds", "gba", "gbc", "gamecube", "playstation", "xbox", "sega", "sony", "microsoft"]);
+const EDITION_WORDS = new Set(["edition", "deluxe", "complete", "legendary", "definitive", "ultimate", "remastered", "remaster", "anniversary", "collectors", "collector", "limited", "special", "goty", "hd", "dx", "3d", "gold", "platinum", "reloaded"]);
+const STOP_WORDS = new Set(["the", "and", "for", "of", "a", "an", "in", "on", "to", "at", "by", "or"]);
 
 interface Prepared {
   product: CatalogProduct;

@@ -152,6 +152,7 @@ const posData = {
     {isManager && <button id="ebay-bulk" class="btn btn-ghost btn-sm" title="Import your eBay store listings as draft products (skips ones already imported)">🛒 Import eBay store</button>}
     {isManager && <button id="ebay-sync" class="btn btn-ghost btn-sm" title="Check eBay for ended / out-of-stock listings and zero them on the website (never raises local stock)">🔁 Sync eBay stock</button>}
     {isManager && <button id="resync-img" class="btn btn-ghost btn-sm" title="Fetch covers for items with no image (only fills empties)">🔄 Resync images</button>}
+    {isManager && <button id="fix-titles" class="btn btn-ghost btn-sm" title="Suggest official game titles (from the game database) for listings with typos — you approve each one">✎ Fix titles</button>}
     <button id="phone-scan-btn" class="btn btn-ghost btn-sm" title="Pair your phone as a wireless scanner">📱 Phone</button>
     <a href="/entries" class="btn btn-ghost btn-sm" title="Past receiving entries + label reprints">📥 Entries</a>
     <button id="inv-import" class="btn btn-ghost btn-sm" title="Import a collection .csv (PriceCharting export or any Title / Platform / Condition sheet) as staged lines on an entry">📄 Import CSV</button>
@@ -291,6 +292,25 @@ const posData = {
       </ul>
     </div>
   )}
+
+  <div id="fix-modal" class="modal-wrap" hidden>
+    <div class="modal-backdrop" data-fclose></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="fix-heading" style="width:min(820px,100%);">
+      <header class="modal-head">
+        <h2 id="fix-heading">✎ Fix titles</h2>
+        <button class="modal-x" data-fclose aria-label="Close">✕</button>
+      </header>
+      <div style="padding:0.8rem 1.1rem;overflow:auto;">
+        <p class="muted" style="margin:0 0 0.6rem;font-size:0.84rem;">Official names from the game database for listings whose title looks misspelled or incomplete. The old title stays searchable, and web links don't change. Close matches are pre-checked — untick anything that's wrong.</p>
+        <div id="fix-list"></div>
+      </div>
+      <footer style="display:flex;gap:0.6rem;justify-content:flex-end;align-items:center;padding:0.8rem 1.1rem;border-top:1px solid var(--border);">
+        <span class="muted" id="fix-count" style="margin-right:auto;font-size:0.84rem;"></span>
+        <button class="btn btn-ghost btn-sm" type="button" data-fclose>Cancel</button>
+        <button class="btn btn-primary btn-sm" type="button" id="fix-apply">Rename selected</button>
+      </footer>
+    </div>
+  </div>
 
   <div id="edit-modal" class="modal-wrap" hidden>
     <div class="modal-backdrop" data-close></div>
@@ -515,6 +535,8 @@ const posData = {
   .ti-sug:last-child { border-bottom:0; }
   .ti-sug:hover { background:rgba(44,230,224,.1); }
   .ti-sug-title { font-weight:600; }
+  .ti-sug-head { padding:0.35rem 0.6rem; font-size:0.7rem; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:var(--muted); background:rgba(44,230,224,.05); border-bottom:1px solid var(--border); }
+  .ti-sug img.ti-db-cover { width:26px; height:34px; object-fit:contain; flex:none; background:rgba(255,255,255,.04); }
   .ti-sug-meta { color:var(--muted-2); font-size:0.78rem; }
   .ti-sug-price { margin-left:auto; color:var(--green); font-weight:700; font-family:var(--font-mono); }
   .ti-links a { font-size:0.78rem; margin-right:0.5rem; white-space:nowrap; }
@@ -529,13 +551,13 @@ const posData = {
 </style>
 
 <script>
-  import { buildPlatforms, parseQuery as _parseQuery, smartMatches as _smartMatches, matchScore } from "../../lib/smartSearch";
+  import { buildPlatforms, parseQuery as _parseQuery, smartMatches as _smartMatches, matchScore, resolveStaticPlatform } from "../../lib/smartSearch";
   import { resolveComp, compAbbrev } from "../../lib/conditionDisplay";
   import { openPrintDialog } from "../../lib/labelPrint";
   import { initScanReceiver, openPairDialog } from "../../lib/scanReceive";
   import { barcodeEq } from "../../lib/gtin";
   import { openImportDialog } from "../../lib/importDialog";
-  import { newListingKey } from "../../lib/collectionImport";
+  import { newListingKey, officialTitleFor, norm as normImport } from "../../lib/collectionImport";
 
   const data = JSON.parse(document.getElementById("pos-data")!.textContent!);
   let items: any[] = data.items;
@@ -1708,7 +1730,46 @@ const posData = {
     }));
     box.querySelector("[data-new]")?.addEventListener("mousedown", (e) => { e.preventDefault(); box.hidden = true; entNewProduct(q); });
     box.querySelector("[data-noninv]")?.addEventListener("mousedown", (e) => { e.preventDefault(); box.hidden = true; entSearch.value = ""; entAddNonInventory(q); });
+    entDbSuggest(q, parsed);
   }
+  // "From the game database": official titles from our LaunchBox copy, so a
+  // game the store has never stocked can be added under its real name (and
+  // gets its box art). Debounced; stale answers are dropped.
+  let dbSeq = 0;
+  function entDbSuggest(q: string, parsed: any) {
+    const seq = ++dbSeq;
+    const term = (parsed?.title || q).trim();
+    if (term.length < 3) return;
+    setTimeout(async () => {
+      if (seq !== dbSeq) return;
+      let games: any[] = [];
+      try {
+        const r = await fetch("/api/pos/game-search", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ q: term, platform: parsed?.platform || "" }) });
+        games = (await r.json()).games || [];
+      } catch { return; }
+      const box = $("ent-suggest") as HTMLElement;
+      if (seq !== dbSeq || box.hidden || entSearch.value.trim() !== q) return;
+      // Skip games the store already lists on that platform (they're above).
+      const key = (t: string, pl: string) => `${normTitle(t)}|${(resolveStaticPlatform(pl) ?? pl ?? "").toLowerCase()}`;
+      const have = new Set(draftItems().flatMap((p: any) => [p.title, ...(p.altNames || [])].map((t: string) => key(t, p.platform || ""))));
+      games = games.filter((g) => !have.has(key(g.name, g.platform || ""))).slice(0, 6);
+      if (!games.length) return;
+      box.insertAdjacentHTML("beforeend", `<div class="ti-sug-head">From the game database</div>` + games.map((g, i) => `
+        <div class="ti-sug" data-db="${i}" title="Add as a new listing with its official title">
+          ${g.cover ? `<img class="ti-db-cover" src="${esc(g.cover)}" alt="" loading="lazy" />` : ""}
+          <span class="ti-sug-title">${esc(g.name)}</span>
+          <span class="ti-sug-meta">${esc(g.platform || "")} · new listing</span>
+        </div>`).join(""));
+      box.querySelectorAll<HTMLElement>("[data-db]").forEach((el) => el.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        const g = games[+el.dataset.db!];
+        box.hidden = true; entSearch.value = "";
+        entNewProduct("", { title: g.name, platform: g.platform, parsed });
+      }));
+    }, 250);
+  }
+  // Same folding as the importer (accents, apostrophes, "&"), minus "the"/"and".
+  const normTitle = (t: string) => normImport(t).replace(/\b(the|and)\b/g, " ").replace(/\s+/g, " ").trim();
   // A bulk lot / parts / supplies bought on this entry: what was paid, no stock.
   async function entAddNonInventory(desc0 = "") {
     try { await ensureEntry(); setEntryMode(true); } catch (e: any) { alert(e.message); return; }
@@ -1730,12 +1791,18 @@ const posData = {
   entSearch?.addEventListener("input", entSuggest);
   entSearch?.addEventListener("blur", () => setTimeout(() => { ($("ent-suggest") as HTMLElement).hidden = true; }, 150));
   $("ent-new")?.addEventListener("click", () => entNewProduct(entSearch.value.trim()));
-  function entNewProduct(q: string) {
-    const parsed = q ? parseQuery(q) : null;
+  function entNewProduct(q: string, official?: { title: string; platform: string; parsed?: any }) {
+    const parsed = q ? parseQuery(q) : official?.parsed ?? null;
     const panel = $("add-panel") as HTMLElement;
     panel.hidden = false;
-    if (parsed?.title) ($("np-title") as HTMLInputElement).value = parsed.titleForNew.replace(/\b\w/g, (c: string) => c.toUpperCase());
-    if (parsed?.platform) ($("np-platform") as HTMLInputElement).value = parsed.platform;
+    if (official) {
+      // Picked from the game database: its official name + our platform name.
+      ($("np-title") as HTMLInputElement).value = official.title;
+      ($("np-platform") as HTMLInputElement).value = official.platform || parsed?.platform || "";
+    } else {
+      if (parsed?.title) ($("np-title") as HTMLInputElement).value = parsed.titleForNew.replace(/\b\w/g, (c: string) => c.toUpperCase());
+      if (parsed?.platform) ($("np-platform") as HTMLInputElement).value = parsed.platform;
+    }
     if (parsed) { setComp($("np-comp") as HTMLInputElement, parsed.completenessCode || "", $("np-comp-abbr")); if (parsed.gradeCode) ($("np-grade") as HTMLSelectElement).value = parsed.gradeCode; }
     ($("np-qty") as HTMLInputElement).value = "1";
     panel.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -1803,7 +1870,9 @@ const posData = {
         const keyFor = (r: any) => {
           // Not the qty: the server keys each COPY (<key>#1, #2, …), so an edited
           // sheet that goes from 1 to 2 copies adds exactly one.
-          const fp = [r.row.title.toLowerCase().trim(), (r.row.platform || "").toLowerCase(), r.row.completenessCode, r.row.gradeCode, ch.inventoryTypeId || "", r.row.folder || ""].join("|");
+          // The SHEET's title (not the corrected one), so a re-import of the same
+          // sheet replays whether or not the correction ran this time.
+          const fp = [(r.row.titleFrom ?? r.row.title).toLowerCase().trim(), (r.row.platform || "").toLowerCase(), r.row.completenessCode, r.row.gradeCode, ch.inventoryTypeId || "", r.row.folder || ""].join("|");
           const occ = (seenPrints.get(fp) || 0) + 1; seenPrints.set(fp, occ);
           return `${fileTag}:${h32(fp, 2166136261)}${h32(fp, 5381)}:${occ}`;
         };
@@ -1822,7 +1891,8 @@ const posData = {
           // title/platform let the server find the listing if its ref row was staged in an earlier attempt.
           if (firstOfGroup.has(g)) return { kind: "newVariant", productRef: g, title: r.row.title, platform: r.row.platform, ...v, ...base };
           firstOfGroup.add(g);
-          return { kind: "newProduct", ref: g, title: r.row.title, platform: r.row.platform, categoryId: r.categoryId || ch.categoryId, ...v, ...base };
+          // A corrected title keeps the sheet's spelling as a search name.
+          return { kind: "newProduct", ref: g, title: r.row.title, platform: r.row.platform, categoryId: r.categoryId || ch.categoryId, altNames: r.row.titleFrom ? [r.row.titleFrom] : undefined, ...v, ...base };
         });
         const refToProduct = new Map<string, string>();
         const results: any[] = [];
@@ -1861,7 +1931,7 @@ const posData = {
             const cat = categories.find((c: any) => c.id === p.categoryId);
             const np: any = {
               id: res.productId, title: r.row.title, slug: res.slug || r.row.title.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""),
-              platform: r.row.platform, franchise: "", genre: "", description: "", imageUrl: "", altNames: [], categoryId: p.categoryId,
+              platform: r.row.platform, franchise: "", genre: "", description: "", imageUrl: "", altNames: p.altNames || [], categoryId: p.categoryId,
               categoryName: cat?.name ?? "", categoryColor: cat?.color ?? "#2ce6e0", ebayId: "", pcId: r.row.pcId || "", supplierLinks: [],
               // Hidden from the grid until this draft is finished.
               pendingEntryId: entryId, variants: [], pendingVariants: [mkImportedVariant(res, p)],
@@ -2003,6 +2073,53 @@ const posData = {
     btn.disabled = false; btn.textContent = orig;
     toast(`✓ Resync done — added ${added} cover${added === 1 ? "" : "s"}`);
   });
+  // ---- ✎ Fix titles (managers): official names for listings with typos ----
+  let fixSuggestions: { p: any; to: string; sim: number }[] = [];
+  document.getElementById("fix-titles")?.addEventListener("click", async () => {
+    const btn = document.getElementById("fix-titles") as HTMLButtonElement;
+    const list = liveItems().filter((p: any) => p.title && p.platform);
+    if (!list.length) { toast("No listings to check"); return; }
+    btn.disabled = true; const orig = btn.textContent;
+    fixSuggestions = [];
+    try {
+      for (let i = 0; i < list.length; i += 200) {
+        btn.textContent = `Checking ${Math.min(i + 200, list.length)}/${list.length}…`;
+        const chunk = list.slice(i, i + 200);
+        const r = await fetch("/api/pos/title-fix", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ items: chunk.map((p: any) => ({ title: p.title, platform: p.platform })) }) });
+        const results: any[] = (await r.json()).results || [];
+        chunk.forEach((p: any, k: number) => {
+          const to = officialTitleFor(p.title, results[k], p.platform);
+          if (to) fixSuggestions.push({ p, to, sim: results[k].sim });
+        });
+      }
+    } catch (e: any) { alert("Couldn't reach the game database: " + (e?.message || e)); }
+    finally { btn.disabled = false; btn.textContent = orig; }
+    if (!fixSuggestions.length) { toast("✓ No title fixes suggested"); return; }
+    fixSuggestions.sort((a, b) => b.sim - a.sim);
+    $("fix-list").innerHTML = `<table class="tbl" style="width:100%;font-size:0.84rem;"><thead><tr><th></th><th>Current title</th><th>Official title</th><th>Platform</th><th class="num">Match</th></tr></thead><tbody>${
+      fixSuggestions.map((f, i) => `<tr><td><input type="checkbox" data-fix="${i}"${f.sim >= 0.75 ? " checked" : ""} /></td><td>${esc(f.p.title)}</td><td><strong>${esc(f.to)}</strong></td><td class="muted">${esc(f.p.platform)}</td><td class="num">${Math.round(f.sim * 100)}%</td></tr>`).join("")
+    }</tbody></table>`;
+    const count = () => { const n = document.querySelectorAll<HTMLInputElement>("[data-fix]:checked").length; $("fix-count").textContent = `${n} of ${fixSuggestions.length} selected`; };
+    document.querySelectorAll<HTMLInputElement>("[data-fix]").forEach((c) => c.addEventListener("change", count));
+    count();
+    ($("fix-modal") as HTMLElement).hidden = false;
+  });
+  document.querySelectorAll<HTMLElement>("[data-fclose]").forEach((el) => el.addEventListener("click", () => { ($("fix-modal") as HTMLElement).hidden = true; }));
+  document.getElementById("fix-apply")?.addEventListener("click", async () => {
+    const chosen = [...document.querySelectorAll<HTMLInputElement>("[data-fix]:checked")].map((c) => fixSuggestions[+c.dataset.fix!]);
+    if (!chosen.length) { ($("fix-modal") as HTMLElement).hidden = true; return; }
+    const btn = $("fix-apply") as HTMLButtonElement; btn.disabled = true;
+    try {
+      const j = await api({ action: "renameProducts", items: chosen.map((f) => ({ id: f.p.id, title: f.to })) });
+      const ok = new Set<string>(j.renamed || []);
+      chosen.forEach((f) => { if (ok.has(f.p.id)) { f.p.altNames = [...new Set([...(f.p.altNames || []), f.p.title])]; f.p.title = f.to; } });
+      ($("fix-modal") as HTMLElement).hidden = true;
+      render();
+      toast(`✎ Renamed ${ok.size} listing${ok.size === 1 ? "" : "s"}`);
+    } catch (e: any) { alert(e.message); }
+    finally { btn.disabled = false; }
+  });
+
   wireComp($("np-comp") as HTMLInputElement, $("np-comp-abbr"));
   $("np-save").addEventListener("click", async () => {
     const comp = compVal($("np-comp") as HTMLInputElement);
