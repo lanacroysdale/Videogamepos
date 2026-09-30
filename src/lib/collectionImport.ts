@@ -250,6 +250,7 @@ export interface ImportRow {
   pcValueCents: number | null; // PriceCharting / market guide value from the sheet
   kind: "" | "console" | "accessory" | "collectible"; // "" = a game (or unknown)
   lot: boolean;                // "Bulk …" / "Lot of …" — a lot, not one sellable item
+  titleFrom?: string;          // the sheet's own title when replaced by the official one
   warnings: string[];
 }
 
@@ -464,6 +465,47 @@ const titleRegion = (t: string) => {
   for (const q of (t.match(/\[[^\]]*\]|\([^)]*\)/g) || []).map(norm)) if (REGION_CODE[q]) return REGION_CODE[q];
   return "";
 };
+
+/* ---------------- Official titles (typo correction) ---------------- */
+
+/** Minimum trigram similarity for a database title to replace a sheet title. */
+export const OFFICIAL_TITLE_SIM = 0.6;
+
+/**
+ * The official name to use instead of a sheet title, or null to keep it.
+ * `candidate` is the closest game on the SAME platform in our LaunchBox copy
+ * ("The Legend of Zelda Links Aweakening" → "The Legend of Zelda: Link's
+ * Awakening"). Safety: similar enough, and the NUMBERS must agree — "Mario
+ * Party 8" never becomes "Mario Party 9". Bracket qualifiers ([Collector's
+ * Edition], [JP]) aren't part of the game name, so they're carried over.
+ */
+export function officialTitleFor(original: string, candidate: { name: string; sim: number } | null | undefined): string | null {
+  if (!candidate?.name || !(candidate.sim >= OFFICIAL_TITLE_SIM)) return null;
+  const official = candidate.name.trim();
+  const quals = (original.match(/\[[^\]]*\]|\([^)]*\)/g) || []).join(" ");
+  const bareOrig = original.replace(/\[[^\]]*\]|\([^)]*\)/g, " ").replace(/\s+/g, " ").trim();
+  const o = norm(bareOrig), n = norm(official);
+  // Numbers must agree: "Mario Party 8" never becomes "Mario Party 9".
+  if (numbers(dropArticle(o)) !== numbers(dropArticle(n))) return null;
+  const ow = o.split(" "), nw = n.split(" ");
+  // An edition the sheet names must survive ("… Legendary edition" isn't the base game).
+  if (ow.some((w) => EDITION_WORDS.has(w) && !nw.includes(w))) return null;
+  // A subtitle the sheet never mentions means a DIFFERENT game in the series:
+  // "Mario VS Donkey Kong" is not "…: Mini-Land Mayhem!". (Typos still pass —
+  // words match on their first 4 letters: "Robot" ~ "Robobot".)
+  const sub = official.includes(":") ? norm(official.slice(official.lastIndexOf(":") + 1)).split(" ").filter((w) => w.length >= 3 && !STOP_WORDS.has(w)) : [];
+  if (sub.length) {
+    const near = (w: string) => ow.some((v) => v === w || (v.length >= 4 && w.length >= 4 && v.slice(0, 4) === w.slice(0, 4)));
+    if (sub.filter(near).length * 2 < sub.length) return null;
+  }
+  // Same words, only styling differs: fix punctuation ("Luigis" → "Luigi's"),
+  // but don't turn "Carrion" into all-caps "CARRION".
+  if (o === n && /\b[A-Z]{3,}\b/.test(official.replace(/\b(HD|DX|3D|DS|GBA|NES|SNES|USA|VR|II|III|IV|VI|VII|VIII|XL)\b/g, "")) && !/\b[A-Z]{3,}\b/.test(bareOrig)) return null;
+  const fixed = `${official}${quals ? " " + quals : ""}`;
+  return fixed === original.trim() ? null : fixed;
+}
+const EDITION_WORDS = new Set(["edition", "deluxe", "complete", "legendary", "definitive", "ultimate", "remastered", "remaster", "anniversary", "collectors", "collector", "limited", "special", "goty", "hd", "dx", "3d", "gold", "platinum", "reloaded"]);
+const STOP_WORDS = new Set(["the", "and", "for", "of", "a", "an", "in", "on", "to"]);
 
 interface Prepared {
   product: CatalogProduct;
