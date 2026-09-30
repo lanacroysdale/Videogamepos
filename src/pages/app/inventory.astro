@@ -2,6 +2,7 @@
 export const prerender = false;
 
 import AppLayout from "../../layouts/AppLayout.astro";
+import { fetchAll } from "../../lib/fetchAll";
 import { labelTemplates } from "../../lib/labels";
 import { MARKETING_HOSTS } from "../../consts";
 import { createSupabaseAdminClient } from "../../lib/supabase";
@@ -55,12 +56,15 @@ if (!delProbeErr) {
   }
 }
 const variantExtraCols = `${hasTypes ? ", inventory_type_id, location_id" : ""}${lcProbeErr ? "" : ", label_code"}`;
-const { data: products } = await supabase
+// Paged — one request stops at 1,000 listings (later titles silently vanished).
+const { data: products } = await fetchAll((from, to) => supabase
   .from("products")
   .select(
     `id, title, slug, platform, franchise, genre, description, image_url, alternative_names, tags, category_id${delProbeErr ? "" : ", deleted_at"}, category:categories(name,color)${srcProbeErr ? "" : ", product_suppliers(id, label, url)"}, product_variants(id, condition, completeness, completeness_code, grade_code, sku, barcode, internal_code, price_cents, online_price_cents, cost_cents, quantity, online_visible${variantExtraCols}, product_barcodes(id, barcode, label))`,
   )
-  .order("title");
+  .order("title")
+  .order("id")
+  .range(from, to));
 
 const allRows = (products ?? []).map((p: any) => ({
   id: p.id,
@@ -167,11 +171,20 @@ const posData = {
         <button id="ent-new" class="btn btn-ghost btn-sm" type="button">＋ New product</button>
         <button id="ent-import" class="btn btn-ghost btn-sm" type="button" title="Import a collection .csv — each row becomes a staged line (matched to existing listings when possible)">📄 Import CSV</button>
       </div>
+      <div class="ent-bulk" id="ent-bulk" hidden>
+        <span><strong id="ent-bulk-n">0</strong> selected</span>
+        <label>Condition <select id="ent-bulk-comp"></select></label>
+        <label>Grade <select id="ent-bulk-grade"></select></label>
+        <button id="ent-bulk-apply" class="btn btn-primary btn-sm" type="button">Apply to selected</button>
+        <button id="ent-bulk-rm" class="btn btn-ghost btn-sm ent-del" type="button">🗑 Remove selected</button>
+        <button id="ent-bulk-clear" class="link-btn" type="button">Clear selection</button>
+      </div>
       <table class="tbl" id="ent-table">
         <thead><tr>
-          <th style="width:26%">Item</th><th>Condition</th><th class="num">Qty</th>
+          <th class="ent-ck"><input type="checkbox" id="ent-selall" title="Select all lines" aria-label="Select all lines" /></th>
+          <th style="width:26%">Item</th><th>Condition</th><th>Grade</th><th class="num">Qty</th>
           <th class="num">Paid $ <small class="muted">each</small></th><th class="num">Price $</th>
-          <th class="ent-srccol">Source</th><th>Compare</th><th></th>
+          <th>Compare</th><th></th>
         </tr></thead>
         <tbody id="ent-body"></tbody>
       </table>
@@ -461,7 +474,12 @@ const posData = {
   .ent-src { display:flex; align-items:center; gap:0.4rem; font-size:0.84rem; font-weight:600; color:var(--muted); }
   .ent-src input { width:13rem; padding:0.35rem 0.5rem; }
   .ent-recv input { width:auto; }
-  #ent-table [data-ef="src"] { width:8rem; text-align:left; }
+  #ent-table select { padding:0.3rem 0.35rem; font-size:0.84rem; max-width:11rem; }
+  .ent-ck { width:1.6rem; }
+  .ent-bulk[hidden] { display:none; }
+  .ent-bulk { display:flex; align-items:center; gap:0.8rem; flex-wrap:wrap; padding:0.55rem 0.7rem; margin-bottom:0.6rem; border:1px solid var(--cyan); background:rgba(44,230,224,.06); font-size:0.86rem; }
+  .ent-bulk label { display:flex; align-items:center; gap:0.35rem; font-weight:600; color:var(--muted); }
+  .ent-bulk select { padding:0.3rem 0.35rem; }
   .sup-row { display:flex; align-items:center; gap:0.6rem; padding:0.3rem 0.1rem; border-bottom:1px solid var(--border); font-size:0.86rem; }
   .sup-row a { color:var(--cyan); }
   .sup-row .link-btn { margin-left:auto; }
@@ -1253,7 +1271,52 @@ const posData = {
   let entryId = "";
   let entryHuman = 0;
   let entryMode = false;
-  let entRows: any[] = []; // {itemId, variantId, title, platform, cond, qty, costCents, priceCents, wasNew, supplier}
+  let entRows: any[] = []; // {itemId, variantId, title, platform, cond, completenessCode, gradeCode, qty, costCents, priceCents, wasNew, supplier}
+  const entSel = new Set<string>(); // selected draft lines (bulk actions)
+  // Condition changes in flight — Finish waits for them (a Finish landing
+  // mid-change would apply the line to the row it was leaving).
+  let entBusy = 0;
+  const entBusyStep = (d: number) => {
+    entBusy = Math.max(0, entBusy + d);
+    const f = $("ent-finish") as HTMLButtonElement | null;
+    if (f) { f.disabled = entBusy > 0; f.title = entBusy > 0 ? "Wait — condition changes are still saving" : ""; }
+  };
+  const entCompOpts = (sel: string) =>
+    `<option value="">—</option>` + completeness.map((c) => `<option value="${c.code}"${c.code === sel ? " selected" : ""}>${esc(c.label)}</option>`).join("");
+  function entSyncSelection() {
+    const all = $("ent-selall") as HTMLInputElement | null;
+    if (all) { all.checked = entRows.length > 0 && entSel.size === entRows.length; all.indeterminate = entSel.size > 0 && entSel.size < entRows.length; }
+    const bar = $("ent-bulk") as HTMLElement | null;
+    if (bar) { bar.hidden = entSel.size === 0; $("ent-bulk-n").textContent = String(entSel.size); }
+  }
+  // Move a staged line to another completeness / grade (server picks or makes
+  // the matching stock row on the same listing), then mirror it locally.
+  async function setLineCondition(r: any, comp: string, grade: string) {
+    if ((r.completenessCode || "") === comp && (r.gradeCode || "") === grade) return;
+    const condition = [completeness.find((c) => c.code === comp)?.label, grades.find((g) => g.code === grade)?.label].filter(Boolean).join(" ") || "Used";
+    const j = await api({ action: "setEntryLineCondition", itemId: r.itemId, completenessCode: comp, gradeCode: grade, condition });
+    const p: any = items.find((x) => x.id === j.productId) || items.find((x) => x.variants.some((v: any) => v.id === r.variantId));
+    if (!p) return;
+    const src = p.variants.find((v: any) => v.id === r.variantId);
+    if (j.mode === "renamed" && src) Object.assign(src, { completenessCode: comp, gradeCode: grade, condition });
+    // Mirror exactly what the server did (no SKU / web flag / cost copied from the old row).
+    let dest = p.variants.find((v: any) => v.id === j.variantId);
+    if (!dest && (j.mode === "created" || j.mode === "moved")) {
+      dest = {
+        id: j.variantId, condition, completeness: null, completenessCode: comp, gradeCode: grade, sku: null,
+        internalCode: j.internalCode || "", labelCode: "", priceCents: j.priceCents ?? 0, onlinePriceCents: null, costCents: null,
+        quantity: 0, onlineVisible: false, inventoryTypeId: src?.inventoryTypeId || retailTypeId, locationId: src?.locationId || "", barcodes: [],
+      };
+      p.variants.push(dest);
+    }
+    if (dest && j.removedVariantId) {
+      // Barcodes the server moved onto the destination row.
+      const have = new Set((dest.barcodes || []).map((b: any) => b.barcode));
+      if (j.primaryBarcode && !have.has(j.primaryBarcode)) { dest.barcodes.unshift({ id: "primary:" + dest.id, barcode: j.primaryBarcode, label: "Primary", primary: true }); have.add(j.primaryBarcode); }
+      for (const b of (src?.barcodes || [])) if (!b.primary && (j.movedBarcodes || []).includes(b.barcode) && !have.has(b.barcode)) dest.barcodes.push(b);
+    }
+    if (j.removedVariantId) p.variants = p.variants.filter((v: any) => v.id !== j.removedVariantId);
+  }
   let entOrderTotal: number | null = null;
   let entSupplier = ""; // entry-level source (per-line placeholder default)
   if (!sourcesReady) document.querySelectorAll<HTMLElement>(".ent-src, .ent-srccol").forEach((el) => (el.style.display = "none"));
@@ -1271,7 +1334,7 @@ const posData = {
     if (entryMode) { $("ent-num").textContent = `#${entryHuman}`; renderEnt(); }
   }
   function clearEntry() {
-    entryId = ""; entryHuman = 0; entRows = []; entOrderTotal = null;
+    entryId = ""; entryHuman = 0; entRows = []; entOrderTotal = null; entSel.clear();
     try { sessionStorage.removeItem("tl-entry"); } catch {}
     setEntryMode(false);
   }
@@ -1308,15 +1371,19 @@ const posData = {
     const body = $("ent-body");
     body.innerHTML = entRows.length ? entRows.map((r) => `
       <tr data-item="${r.itemId}">
+        <td class="ent-ck"><input type="checkbox" data-esel aria-label="Select line"${entSel.has(r.itemId) ? " checked" : ""} /></td>
         <td><strong>${esc(r.title)}</strong>${r.platform ? ` <span class="ti-sug-meta">${esc(r.platform)}</span>` : ""}${r.wasNew ? ` <span class="pill cyan" style="font-size:0.66rem;">new</span>` : ""}</td>
-        <td>${esc(r.cond)}</td>
+        <td><select data-ef="comp" title="Completeness — moves the copy to that condition's stock row">${entCompOpts(r.completenessCode)}</select></td>
+        <td><select data-ef="grade" title="Grade (stars)">${gradeOpts(r.gradeCode)}</select></td>
         <td class="num"><input data-ef="qty" type="number" min="1" value="${r.qty}"></td>
         <td class="num"><input data-ef="cost" type="number" min="0" step="0.01" value="${r.costCents == null ? "" : (r.costCents / 100).toFixed(2)}" placeholder="—"></td>
         <td class="num"><input data-ef="price" type="number" min="0" step="0.01" value="${(r.priceCents / 100).toFixed(2)}"></td>
-        <td class="ent-srccol"${sourcesReady ? "" : ' style="display:none"'}><input data-ef="src" value="${esc(r.supplier || "")}" placeholder="${esc(entSupplier || "—")}" list="supplier-list"></td>
         <td>${cmpLinks([r.title, r.platform].filter(Boolean).join(" "))}</td>
         <td><button class="link-btn" data-erm title="Remove line">✕</button></td>
-      </tr>`).join("") : `<tr><td colspan="8" class="empty" style="padding:1rem 0.4rem;">Nothing staged yet — scan or search above to add the first item.</td></tr>`;
+      </tr>`).join("") : `<tr><td colspan="9" class="empty" style="padding:1rem 0.4rem;">Nothing staged yet — scan or search above to add the first item.</td></tr>`;
+    // Drop selections of lines that are gone; sync the header box + bulk bar.
+    for (const id of [...entSel]) if (!entRows.some((x) => x.itemId === id)) entSel.delete(id);
+    entSyncSelection();
 
     body.querySelectorAll<HTMLElement>("tr[data-item]").forEach((tr) => {
       const r = entRows.find((x) => x.itemId === tr.dataset.item)!;
@@ -1340,10 +1407,21 @@ const posData = {
         if (lv) lv.priceCents = r.priceCents;
         try { await api({ action: "updateVariant", id: r.variantId, priceCents: r.priceCents }); } catch (err: any) { alert(err.message); }
       });
-      tr.querySelector<HTMLInputElement>('[data-ef="src"]')?.addEventListener("change", async (e) => {
-        r.supplier = (e.target as HTMLInputElement).value.trim() || null;
-        try { await api({ action: "updateEntryItem", itemId: r.itemId, supplier: r.supplier }); } catch (err: any) { alert(err.message); }
+      tr.querySelector<HTMLInputElement>("[data-esel]")!.addEventListener("change", (e) => {
+        if ((e.target as HTMLInputElement).checked) entSel.add(r.itemId); else entSel.delete(r.itemId);
+        entSyncSelection();
       });
+      const onCond = async () => {
+        const comp = tr.querySelector<HTMLSelectElement>('[data-ef="comp"]')!.value;
+        const grade = tr.querySelector<HTMLSelectElement>('[data-ef="grade"]')!.value;
+        tr.querySelectorAll<HTMLSelectElement>("select").forEach((x) => (x.disabled = true));
+        entBusyStep(1);
+        try { await setLineCondition(r, comp, grade); } catch (err: any) { alert(err.message); }
+        finally { entBusyStep(-1); }
+        await loadEntry(entryId); renderEnt();
+      };
+      tr.querySelector<HTMLSelectElement>('[data-ef="comp"]')!.addEventListener("change", onCond);
+      tr.querySelector<HTMLSelectElement>('[data-ef="grade"]')!.addEventListener("change", onCond);
       tr.querySelector("[data-erm]")!.addEventListener("click", async () => {
         try {
           await api({ action: "removeEntryItem", itemId: r.itemId });
@@ -1375,6 +1453,7 @@ const posData = {
           priceCents: v.price_cents ?? 0, wasNew: it.was_new_variant, supplier: it.supplier ?? null,
           title: pr.title ?? "?", platform: pr.platform || pr.category?.name || "",
           cond: condLabel({ completenessCode: v.completeness_code, gradeCode: v.grade_code, condition: v.condition }),
+          completenessCode: v.completeness_code || "", gradeCode: v.grade_code || "",
         };
       });
       try { sessionStorage.setItem("tl-entry", JSON.stringify({ id: entryId, h: entryHuman })); } catch {}
@@ -1421,7 +1500,7 @@ const posData = {
   document.getElementById("phone-scan-btn")?.addEventListener("click", () => openPairDialog(scanTarget));
   $("ent-exit")?.addEventListener("click", () => {
     const h = entryHuman;
-    entryId = ""; entryHuman = 0; entRows = [];
+    entryId = ""; entryHuman = 0; entRows = []; entSel.clear();
     try { sessionStorage.removeItem("tl-entry"); } catch {}
     setEntryMode(false);
     toast(`💾 Draft Entry #${h} saved — resume it from 📥 Entries`);
@@ -1442,6 +1521,54 @@ const posData = {
     entTotals();
     try { await api({ action: "setOrderTotal", entryId, orderTotalCents: entOrderTotal }); } catch (err: any) { alert(err.message); }
   });
+  // ---- Draft line selection + bulk actions ----
+  {
+    const keep = `<option value="__keep">— keep —</option>`;
+    const bc = $("ent-bulk-comp") as HTMLSelectElement | null, bg = $("ent-bulk-grade") as HTMLSelectElement | null;
+    if (bc) bc.innerHTML = keep + completeness.map((c) => `<option value="${c.code}">${esc(c.label)}</option>`).join("");
+    if (bg) bg.innerHTML = keep + grades.map((g) => `<option value="${g.code}">${esc((g.icon ? g.icon + " " : "") + g.label)}</option>`).join("");
+  }
+  ($("ent-selall") as HTMLInputElement | null)?.addEventListener("change", (e) => {
+    entSel.clear();
+    if ((e.target as HTMLInputElement).checked) entRows.forEach((r) => entSel.add(r.itemId));
+    renderEnt();
+  });
+  $("ent-bulk-clear")?.addEventListener("click", () => { entSel.clear(); renderEnt(); });
+  $("ent-bulk-apply")?.addEventListener("click", async () => {
+    const comp = ($("ent-bulk-comp") as HTMLSelectElement).value, grade = ($("ent-bulk-grade") as HTMLSelectElement).value;
+    if (comp === "__keep" && grade === "__keep") { alert("Pick a condition and/or grade to apply."); return; }
+    const btn = $("ent-bulk-apply") as HTMLButtonElement;
+    const todo = entRows.filter((r) => entSel.has(r.itemId));
+    if (!todo.length) return;
+    btn.disabled = true;
+    entBusyStep(1);
+    const errors: string[] = [];
+    for (let i = 0; i < todo.length; i++) {
+      btn.textContent = `Applying ${i + 1}/${todo.length}…`;
+      const r = todo[i];
+      try { await setLineCondition(r, comp === "__keep" ? r.completenessCode || "" : comp, grade === "__keep" ? r.gradeCode || "" : grade); }
+      catch (err: any) { errors.push(`${r.title}: ${err.message}`); }
+    }
+    btn.disabled = false; btn.textContent = "Apply to selected";
+    entBusyStep(-1);
+    entSel.clear();
+    await loadEntry(entryId); renderEnt();
+    if (errors.length) alert(`${errors.length} line(s) couldn't be changed:\n\n${errors.slice(0, 10).join("\n")}`);
+    else toast(`✓ Updated ${todo.length} line${todo.length === 1 ? "" : "s"}`);
+  });
+  $("ent-bulk-rm")?.addEventListener("click", async () => {
+    const todo = entRows.filter((r) => entSel.has(r.itemId));
+    if (!todo.length || !confirm(`Remove ${todo.length} line${todo.length === 1 ? "" : "s"} from this draft? (Nothing is in stock yet, so nothing else changes.)`)) return;
+    const btn = $("ent-bulk-rm") as HTMLButtonElement; btn.disabled = true;
+    const errors: string[] = [];
+    for (const r of todo) {
+      try { await api({ action: "removeEntryItem", itemId: r.itemId }); entRows = entRows.filter((x) => x.itemId !== r.itemId); }
+      catch (err: any) { errors.push(`${r.title}: ${err.message}`); }
+    }
+    btn.disabled = false; entSel.clear(); renderEnt();
+    if (errors.length) alert(`${errors.length} line(s) couldn't be removed:\n\n${errors.slice(0, 10).join("\n")}`);
+  });
+
   ($("ent-received") as HTMLInputElement)?.addEventListener("change", async (e) => {
     const inp = e.target as HTMLInputElement;
     if (!entryId || !inp.value) return;
@@ -1466,7 +1593,7 @@ const posData = {
         return;
       }
       const j = await api({ action: "stageItem", entryId, variantId: v.id, qty: 1 });
-      entRows.push({ itemId: j.itemId, variantId: v.id, qty: 1, costCents: null, priceCents: v.priceCents, wasNew: false, supplier: null, title: p.title, platform: p.platform || p.categoryName || "", cond: condLabel(v) });
+      entRows.push({ itemId: j.itemId, variantId: v.id, qty: 1, costCents: null, priceCents: v.priceCents, wasNew: false, supplier: null, title: p.title, platform: p.platform || p.categoryName || "", cond: condLabel(v), completenessCode: v.completenessCode || "", gradeCode: v.gradeCode || "" });
       renderEnt();
     } catch (e: any) { alert(e.message); }
   }
@@ -1680,6 +1807,7 @@ const posData = {
 
   $("ent-finish")?.addEventListener("click", async () => {
     if (!entryId) return;
+    if (entBusy > 0) { alert("Condition changes are still saving — wait a moment, then Finish."); return; }
     if (!entRows.length) { alert("Nothing staged — add at least one line (or delete the draft)."); return; }
     const btn = $("ent-finish") as HTMLButtonElement; btn.disabled = true; const o = btn.textContent;
     try {
@@ -1806,6 +1934,7 @@ const posData = {
           itemId: j.itemId, variantId: j.variantId, qty: body.quantity || 1, costCents: null,
           priceCents: body.priceCents, wasNew: true, supplier: null, title: newItem.title,
           platform: newItem.platform || newItem.categoryName || "", cond: condLabel(newItem.variants[0]),
+          completenessCode: comp || "", gradeCode: grade || "",
         });
         renderEnt();
         ($("ent-search") as HTMLInputElement).value = "";

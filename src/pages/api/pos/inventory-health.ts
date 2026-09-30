@@ -1,4 +1,5 @@
 import type { APIRoute } from "astro";
+import { fetchAll } from "../../../lib/fetchAll";
 
 export const prerender = false;
 const json = (d: unknown, s = 200) =>
@@ -9,14 +10,19 @@ const json = (d: unknown, s = 200) =>
 export const GET: APIRoute = async ({ locals }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
   // Soft-deleted products don't need attention (fallback covers pre-migration DBs).
-  let res = await locals.supabase
+  // Paged — one request stops at 1,000 listings.
+  let res = await fetchAll((from, to) => locals.supabase
     .from("products")
     .select("id, image_url, description, product_variants(completeness_code)")
-    .is("deleted_at", null);
+    .is("deleted_at", null)
+    .order("id")
+    .range(from, to));
   if (res.error) {
-    res = await locals.supabase
+    res = await fetchAll((from, to) => locals.supabase
       .from("products")
-      .select("id, image_url, description, product_variants(completeness_code)");
+      .select("id, image_url, description, product_variants(completeness_code)")
+      .order("id")
+      .range(from, to));
   }
 
   let count = 0;
