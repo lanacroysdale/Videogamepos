@@ -559,6 +559,14 @@ const posData = {
   const draftItems = () => items.filter((p: any) => !p.pendingEntryId || (entryId && p.pendingEntryId === entryId));
   const draftVariants = (p: any) => [...p.variants, ...(p.pendingVariants || []).filter((v: any) => entryId && v.pendingEntryId === entryId)];
   const everyVariant = (p: any) => [...p.variants, ...(p.pendingVariants || [])];
+  // The server discarded a removed line's hidden stock row / listing — forget them too.
+  const forgetDiscarded = (j: any) => {
+    if (j?.removedProductId) items = items.filter((p: any) => p.id !== j.removedProductId);
+    if (j?.removedVariantId) items.forEach((p: any) => {
+      p.variants = p.variants.filter((v: any) => v.id !== j.removedVariantId);
+      if (p.pendingVariants) p.pendingVariants = p.pendingVariants.filter((v: any) => v.id !== j.removedVariantId);
+    });
+  };
   const smartMatches = (parsed: any, list: any[] = liveItems()) => _smartMatches(list, parsed);
   const complLabel = (code: string) => completeness.find((c) => c.code === code)?.label || code;
   const compAbbr = (code: string) => compAbbrev(code, completeness);
@@ -1461,7 +1469,7 @@ const posData = {
       tr.querySelector<HTMLSelectElement>('[data-ef="grade"]')?.addEventListener("change", onCond);
       tr.querySelector("[data-erm]")!.addEventListener("click", async () => {
         try {
-          await api({ action: "removeEntryItem", itemId: r.itemId });
+          forgetDiscarded(await api({ action: "removeEntryItem", itemId: r.itemId }));
           entRows = entRows.filter((x) => x.itemId !== r.itemId);
           renderEnt();
         } catch (err: any) { alert(err.message); }
@@ -1618,7 +1626,7 @@ const posData = {
       for (let i = 0; i < todo.length; i++) {
         const r = todo[i];
         btn.textContent = `Removing ${i + 1}/${todo.length}…`;
-        try { await api({ action: "removeEntryItem", itemId: r.itemId }); entRows = entRows.filter((x) => x.itemId !== r.itemId); }
+        try { forgetDiscarded(await api({ action: "removeEntryItem", itemId: r.itemId })); entRows = entRows.filter((x) => x.itemId !== r.itemId); }
         catch (err: any) { errors.push(`${r.title}: ${err.message}`); }
       }
     } finally { entBusyStep(-1); btn.textContent = label; }
@@ -1706,15 +1714,14 @@ const posData = {
     try { await ensureEntry(); setEntryMode(true); } catch (e: any) { alert(e.message); return; }
     const desc = (prompt("Non-inventory item — describe it (e.g. “DS loose games, bulk grade B”):", desc0 || "Bulk lot") || "").trim();
     if (!desc) return;
-    const n0 = desc.match(/(^|\s)[x×]\s?(\d+)\s*$/)?.[2] || "1";
-    const qty = Math.max(1, parseInt(prompt(`How many in “${desc}”?`, n0) || "1", 10) || 1);
-    const rawTotal = prompt(`What did you pay in TOTAL for ${qty === 1 ? "it" : `all ${qty}`} ($)? Leave empty if unknown.`, "");
+    const rawTotal = prompt(`What did you pay in TOTAL for “${desc}” ($)? Leave empty if unknown.`, "");
     if (rawTotal === null) return;
     const total = rawTotal.trim() === "" ? null : toCents(rawTotal.replace(/[^0-9.]/g, ""));
-    const unit = total == null ? null : Math.round(total / qty);
+    // One line at the exact total (a lot's count stays in its description) —
+    // splitting $100 over 3 would record $99.99.
     try {
-      const j = await api({ action: "addNonInventoryLine", entryId, description: desc, qty, unitCostCents: unit });
-      entRows.push({ itemId: j.itemId, variantId: null, kind: "non_inventory", qty, costCents: unit, priceCents: 0, wasNew: false, supplier: null, title: desc, platform: "", cond: "", completenessCode: "", gradeCode: "" });
+      const j = await api({ action: "addNonInventoryLine", entryId, description: desc, qty: 1, unitCostCents: total });
+      entRows.push({ itemId: j.itemId, variantId: null, kind: "non_inventory", qty: 1, costCents: total, priceCents: 0, wasNew: false, supplier: null, title: desc, platform: "", cond: "", completenessCode: "", gradeCode: "" });
       renderEnt();
       toast(`🧾 Added “${desc}” (non-inventory)`);
     } catch (e: any) { alert(e.message); }
@@ -1806,7 +1813,8 @@ const posData = {
             importKey: keyFor(r),
           };
           // Bulk lot etc.: recorded on the entry (what was paid) — no listing, no stock.
-          if (r.nonInventory) return { kind: "nonInventory", description: `${r.row.title}${r.row.platform ? ` (${r.row.platform})` : ""}`, ...base };
+          // One line at the sheet's total (cost × qty) so the books match what was paid.
+          if (r.nonInventory) return { kind: "nonInventory", description: `${r.row.title}${r.row.platform ? ` (${r.row.platform})` : ""}${r.row.qty > 1 ? ` ×${r.row.qty}` : ""}`, ...base, qty: 1, costCents: r.row.costCents == null ? null : r.row.costCents * r.row.qty };
           if (r.product && r.variant) return { kind: "variant", variantId: r.variant.id, productId: r.product.id, ...base };
           const v = { completenessCode: r.row.completenessCode, gradeCode: r.row.gradeCode, condition: condText(r), priceCents: priceOf(r), barcode: r.row.upc || null, inventoryTypeId: ch.inventoryTypeId || undefined };
           if (r.product) return { kind: "newVariant", productId: r.product.id, ...v, ...base };

@@ -132,7 +132,14 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  v_prod uuid;
 begin
+  -- For a single removed line, only ITS stock row and ITS listing are
+  -- candidates — never another listing this draft is creating right now.
+  if p_variant is not null then
+    select product_id into v_prod from public.product_variants where id = p_variant;
+  end if;
   delete from public.product_variants v
    where v.pending_entry_id = p_entry
      and (p_variant is null or v.id = p_variant)
@@ -142,6 +149,7 @@ begin
      and not exists (select 1 from public.transaction_items t where t.variant_id = v.id);
   delete from public.products p
    where p.pending_entry_id = p_entry
+     and (p_variant is null or p.id = v_prod)
      and not exists (select 1 from public.product_variants v where v.product_id = p.id);
 end;
 $$;

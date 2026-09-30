@@ -485,10 +485,25 @@ export const POST: APIRoute = async ({ locals, request }) => {
     }
     case "removeEntryItem": {
       if (!b.itemId) return json({ error: "itemId required" }, 400);
+      const { data: before } = await sb.from("inventory_entry_items").select("variant_id, variant:product_variants(product_id)").eq("id", b.itemId).maybeSingle();
       const { data, error } = await sb.from("inventory_entry_items").delete().eq("id", b.itemId).select("id").maybeSingle();
       if (error) return json({ error: error.message }, 500);
       if (!data) return json({ error: "That line is on a committed entry." }, 409);
-      return json({ ok: true });
+      // The DB discards a draft's hidden stock row / listing that only existed
+      // for this line (migration 20260930000001) — tell the screen which, so its
+      // in-memory catalog doesn't keep offering rows that are gone.
+      let removedVariantId: string | null = null, removedProductId: string | null = null;
+      const vId = before?.variant_id as string | undefined;
+      const pId = (before as any)?.variant?.product_id as string | undefined;
+      if (vId) {
+        const [{ data: v }, { data: p }] = await Promise.all([
+          sb.from("product_variants").select("id").eq("id", vId).maybeSingle(),
+          pId ? sb.from("products").select("id").eq("id", pId).maybeSingle() : Promise.resolve({ data: { id: pId } } as any),
+        ]);
+        if (!v) removedVariantId = vId;
+        if (pId && !p) removedProductId = pId;
+      }
+      return json({ ok: true, removedVariantId, removedProductId });
     }
     case "setOrderTotal": {
       if (!b.entryId) return json({ error: "entryId required" }, 400);

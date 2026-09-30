@@ -17,11 +17,14 @@ const [{ data: settingsRow }, { data: invTypes }, { data: locations }, { data: c
 ]);
 
 let needsMigration = false;
-const { data: entryRows, error: entryErr } = await supabase
+// Line kind (migration 20260930000001) — non-inventory lines aren't stock units.
+const listEntries = (itemCols: string) => supabase
   .from("inventory_entries")
-  .select("id, human_id, source, status, note, created_at, committed_at, employee:profiles(full_name), inventory_entry_items(qty_added)")
+  .select(`id, human_id, source, status, note, created_at, committed_at, employee:profiles(full_name), inventory_entry_items(${itemCols})`)
   .order("created_at", { ascending: false })
   .limit(50);
+let { data: entryRows, error: entryErr } = await listEntries("qty_added, kind");
+if (entryErr) ({ data: entryRows, error: entryErr } = await listEntries("qty_added"));
 if (entryErr) needsMigration = true;
 
 const entries = (entryRows ?? []).map((e: any) => ({
@@ -29,7 +32,7 @@ const entries = (entryRows ?? []).map((e: any) => ({
   createdAt: e.created_at, committedAt: e.committed_at,
   employee: e.employee?.full_name ?? "—",
   lineCount: (e.inventory_entry_items ?? []).length,
-  unitCount: (e.inventory_entry_items ?? []).reduce((s: number, it: any) => s + (it.qty_added || 0), 0),
+  unitCount: (e.inventory_entry_items ?? []).filter((it: any) => it.kind !== "non_inventory").reduce((s: number, it: any) => s + (it.qty_added || 0), 0),
 }));
 
 const pageData = {
@@ -207,7 +210,8 @@ const pageData = {
 
       // Triple-gated committed-entry delete: confirm → type DELETE → confirm.
       document.getElementById("ed-revert")?.addEventListener("click", async () => {
-        const units = (j.items || []).reduce((s: number, x: any) => s + (x.qty_added || 0), 0);
+        // Only stock lines move back out; non-inventory lines were never in stock.
+        const units = (j.items || []).filter((x: any) => x.kind !== "non_inventory").reduce((s: number, x: any) => s + (x.qty_added || 0), 0);
         if (!confirm(`Delete committed Entry #${e.human_id}?\n\nThis REVERSES what it added — ${units} unit${units === 1 ? "" : "s"} come back OUT of stock (never below zero) and the entry is permanently removed from history.`)) return;
         const typed = prompt(`Type DELETE (all caps) to confirm:`);
         if (typed !== "DELETE") { if (typed != null) alert("Not deleted — you must type DELETE exactly."); return; }
