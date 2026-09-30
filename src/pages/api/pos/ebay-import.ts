@@ -1,5 +1,6 @@
 import type { APIRoute } from "astro";
 import { createSupabaseAdminClient } from "../../../lib/supabase";
+import { fetchAll } from "../../../lib/fetchAll";
 import { copyImageToStorage, copyGallery } from "../../../lib/storage";
 import {
   ebayConfigured, ebaySeller, extractItemId, getItem, listSellerItems, mapItem, findUpc, type MappedItem,
@@ -134,8 +135,10 @@ export const POST: APIRoute = async ({ locals, request }) => {
     // -- UPC backfill step 1: variants missing a UPC barcode ----------------
     if (mode === "upc-list") {
       if (!isManager) return json({ error: "Managers only" }, 403);
-      const { data } = await admin.from("product_variants")
-        .select("id, product:products(title, platform), product_barcodes(label)");
+      const { data } = await fetchAll((from, to) => admin.from("product_variants")
+        .select("id, product:products(title, platform), product_barcodes(label)")
+        .order("id")
+        .range(from, to));
       const todo = (data || [])
         .filter((v: any) => !(v.product_barcodes || []).some((bc: any) => bc.label === "UPC"))
         .map((v: any) => ({ variantId: v.id, title: v.product?.title, platform: v.product?.platform }))

@@ -336,12 +336,13 @@ export function openImportDialog(o: ImportDialogOpts) {
     return { cls: "new", text: "new listing" };
   }
 
+  let syncAllBox = () => {}; // keeps the header select-all box in step with row toggles
   function renderTable() {
     const wrap = $("tli-preview"); wrap.hidden = !resolved.length;
     const onlyReview = $<HTMLInputElement>("tli-only-review").checked;
     const entry = o.mode === "entry";
     const pcCol = map.pcValue != null;
-    const head = `<tr><th></th><th>#</th><th>Title</th><th>Platform</th><th>Condition</th><th class="num">Qty</th><th class="num">${entry ? "Sheet value" : "Resale"}</th>${pcCol ? `<th class="num" title="PriceCharting / market value from the sheet">PC value</th>` : ""}${entry ? `<th class="num">Paid</th>` : ""}<th>Match</th>${entry ? `<th class="num">Price</th>` : ""}</tr>`;
+    const head = `<tr><th><input type="checkbox" id="tli-all" title="Select / unselect every row shown" aria-label="Select all rows" /></th><th>#</th><th>Title</th><th>Platform</th><th>Condition</th><th class="num">Qty</th><th class="num">${entry ? "Sheet value" : "Resale"}</th>${pcCol ? `<th class="num" title="PriceCharting / market value from the sheet">PC value</th>` : ""}${entry ? `<th class="num">Paid</th>` : ""}<th>Match</th>${entry ? `<th class="num">Price</th>` : ""}</tr>`;
     const catOpts = (sel: string) => o.categories.map((c) => `<option value="${c.id}"${c.id === sel ? " selected" : ""}>${esc(c.name)}</option>`).join("");
     const followers = followerRows();
     const body = resolved.map((r, i) => {
@@ -369,12 +370,21 @@ export function openImportDialog(o: ImportDialogOpts) {
       </tr>`;
     }).join("");
     $("tli-table").innerHTML = head + body;
+    // Header box: every row SHOWN (respects "only rows needing review").
+    const shown = resolved.filter((r) => !onlyReview || statusOf(r, followers).cls === "rev" || r.row.warnings.length);
+    const allBox = overlay.querySelector<HTMLInputElement>("#tli-all")!;
+    syncAllBox = () => {
+      allBox.checked = shown.length > 0 && shown.every((r) => !r.skip);
+      allBox.indeterminate = !allBox.checked && shown.some((r) => !r.skip);
+    };
+    syncAllBox();
+    allBox.addEventListener("change", () => { shown.forEach((r) => (r.skip = !allBox.checked)); renderTable(); });
     $("tli-table").querySelectorAll<HTMLElement>("tr[data-i]").forEach((tr) => {
       const r = resolved[+tr.dataset.i!];
       tr.querySelector<HTMLInputElement>("[data-keep]")!.addEventListener("change", (e) => {
         r.skip = !(e.target as HTMLInputElement).checked;
         // Skipping a new game's first row makes its next condition the one that creates the listing.
-        if (!r.product) renderTable(); else { tr.classList.toggle("skip", r.skip); summary(); }
+        if (!r.product) renderTable(); else { tr.classList.toggle("skip", r.skip); summary(); syncAllBox(); }
       });
       tr.querySelector<HTMLSelectElement>("[data-pick]")!.addEventListener("change", (e) => {
         const id = (e.target as HTMLSelectElement).value;

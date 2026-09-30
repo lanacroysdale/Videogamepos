@@ -2,6 +2,7 @@
 export const prerender = false;
 
 import AppLayout from "../../layouts/AppLayout.astro";
+import { fetchAll } from "../../lib/fetchAll";
 import { fmt, fullName } from "../../lib/money";
 
 const supabase = Astro.locals.supabase;
@@ -12,10 +13,13 @@ const [{ data: margins }, { data: categories }, { data: completeness }, { data: 
   supabase.from("categories").select("id,name").order("sort_order"),
   supabase.from("completeness_levels").select("code,label,aliases").eq("is_active", true).order("sort_order"),
   supabase.from("condition_grades").select("code,label,aliases,icon").eq("is_active", true).order("rank"),
-  supabase
+  // Paged — one request stops at 1,000 listings.
+  fetchAll((from, to) => supabase
     .from("products")
     .select(`id, title, platform, franchise, alternative_names, tags, category_id${delProbeErr ? "" : ", deleted_at"}, product_variants(price_cents, completeness_code, grade_code, barcode, product_barcodes(barcode))`)
-    .order("title"),
+    .order("title")
+    .order("id")
+    .range(from, to)),
 ]);
 const products = (productRows ?? []).filter((p: any) => !p.deleted_at);
 
