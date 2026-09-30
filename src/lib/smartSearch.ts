@@ -123,27 +123,58 @@ export function resolveStaticPlatforms(name: string | null | undefined): string[
 }
 
 /** A sheet title without its own platform tacked on the end: "Street Fighter
- *  II Super Nintendo", "Just Dance - Nintendo Wii", "Tetris GB" → the game's
- *  name. Only the row's OWN platform is removed (any alias, optionally with its
- *  maker — "Sony PlayStation 2" — or just the maker: "… Sega" on Genesis), and
- *  a name is always left. Real names ending in their platform ("Mario Kart
- *  Wii") come back from the game database with it. */
+ *  II Super Nintendo", "Just Dance - Nintendo Wii", "Tetris GB", "… Super
+ *  Nintendo SNES" → the game's name. Only the row's OWN platform is removed
+ *  (any alias, optionally with its maker — "Sony PlayStation 2" — or just the
+ *  maker: "… Sega" on Genesis; "DS" on a 3DS row, "Switch" on a Switch 2 row),
+ *  and a name is always left: "Super Nintendo" stays "Super Nintendo". Real
+ *  names ending in their platform ("Mario Kart Wii") come back from the game
+ *  database with it. */
 export function withoutTrailingPlatform(title: string, platform: string | null | undefined): string {
-  const t = String(title ?? "").replace(/\s+/g, " ").trim();
+  return stripPlatformEnd(title, platform, "end");
+}
+/** The same at the START ("Nintendo 3DS Mario Kart 7" → "Mario Kart 7"). For
+ *  comparing two names that are stripped alike — "Wii Sports" loses its "Wii"
+ *  on both sides — never for building a title. */
+export function withoutLeadingPlatform(title: string, platform: string | null | undefined): string {
+  return stripPlatformEnd(title, platform, "start");
+}
+function stripPlatformEnd(title: string, platform: string | null | undefined, side: "start" | "end"): string {
+  let t = String(title ?? "").replace(/\s+/g, " ").trim();
   const canon = resolveStaticPlatform(platform);
-  if (!canon) return t;
-  const own = new Set(STATIC_ALIASES.filter((m) => m.canonical === canon).map((m) => m.alias));
+  if (!canon || platformNameExact(t)) return t;
+  const own = new Set(STATIC_ALIASES.filter((m) => m.canonical === canon || m.canonical === PLATFORM_FAMILY[canon]).map((m) => m.alias));
   const maker = makerOf(canon);
-  const toks = t.split(" ");
-  for (let k = Math.min(5, toks.length - 1); k >= 1; k--) {
-    const tail = words(toks.slice(-k).join(" "));
-    const core = tail.replace(new RegExp(`^ ((${MAKERS}) )+`), " ");
-    if (!(own.has(tail) || own.has(core) || (core === " " && maker && tail === ` ${maker} `))) continue;
-    const rest = toks.slice(0, -k).join(" ").replace(/(?:[\s\-–—:,/|]|\b(?:for|on)\b)+$/i, "").trim();
-    if (/[a-z0-9]{3,}/i.test(rest.replace(/[^a-z0-9 ]+/gi, ""))) return rest;
+  for (let pass = 0; pass < 3; pass++) {
+    const toks = t.split(" ");
+    const phrase = (k: number) => words((side === "end" ? toks.slice(-k) : toks.slice(0, k)).join(" "));
+    // The word just outside the phrase + its first word, e.g. "super" + "nintendo".
+    const outer = (k: number) => words(side === "end" ? `${toks[toks.length - k - 1] ?? ""} ${toks[toks.length - k]}` : "");
+    const max = Math.min(5, toks.length - 1);
+    let cut = 0;
+    // An exact alias first ("SNES", "Super Nintendo"), then maker + alias
+    // ("Sony PlayStation 2"), then just the maker ("Sega"). A maker that is
+    // the tail of a longer alias ("Super NINTENDO") is never peeled off alone.
+    for (let k = max; k >= 1 && !cut; k--) if (own.has(phrase(k))) cut = k;
+    for (let k = max; k >= 2 && !cut; k--) {
+      const ph = phrase(k);
+      const core = ph.replace(new RegExp(`^ ((${MAKERS}) )+`), " ");
+      if (core !== ph && own.has(core) && !own.has(outer(k))) cut = k;
+    }
+    if (!cut && maker && max >= 1 && phrase(1) === ` ${maker} ` && !own.has(outer(1))) cut = 1;
+    if (!cut) break;
+    const rest = (side === "end" ? toks.slice(0, -cut) : toks.slice(cut)).join(" ")
+      .replace(side === "end" ? /(?:[\s\-–—:,/|]|\b(?:for|on)\b)+$/i : /^(?:[\s\-–—:,/|])+/, "").trim();
+    // Keep a real name: something beyond makers / "super" / platform words.
+    if (platformNameExact(rest) || !rest.split(/\s+/).some((w) => /[a-z0-9]{3,}/i.test(w) && !NOT_A_NAME.has(w.toLowerCase().replace(/[^a-z0-9]/g, "")))) break;
+    t = rest;
   }
   return t;
 }
+// A row on one of these platforms may carry its sibling's name: a 3DS game
+// listed as "… DS", a Switch 2 game as "… Switch".
+const PLATFORM_FAMILY: Record<string, string> = { "Nintendo 3DS": "Nintendo DS", "Nintendo Switch 2": "Nintendo Switch" };
+const NOT_A_NAME = new Set(["super", "nintendo", "sony", "sega", "microsoft", "atari", "new", "game", "system", "console"]);
 const makerOf = (canon: string) =>
   /^Sega/.test(canon) ? "sega" : /^(PlayStation|PSP)/.test(canon) ? "sony" : /^Xbox/.test(canon) ? "microsoft"
   : /Nintendo|NES|Wii|GameCube|Game Boy|Virtual Boy|Famicom/.test(canon) ? "nintendo" : "";
