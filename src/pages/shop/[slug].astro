@@ -26,16 +26,16 @@ const variantCols = `id, condition, completeness_code, grade_code, price_cents, 
 // deleted_at column ships in migration 20260903000001 — retry without it so a
 // pre-migration DB still serves the page (nothing is soft-deleted there anyway).
 const productCols = `id, title, slug, platform, franchise, genre, description, image_url, trailer_url, release_year, brand, alternative_names, tags, category:categories(name), product_variants(${variantCols})`;
-let res = (await admin
-  .from("products")
-  .select(`deleted_at, ${productCols}`)
-  .eq("slug", slug)
-  .maybeSingle()) as { data: any; error: any };
-if (res.error) {
-  res = (await admin.from("products").select(productCols).eq("slug", slug).maybeSingle()) as { data: any; error: any };
+// Newest columns first, dropping one at a time for a DB that predates them
+// (pending_entry_id: migration 20260930000001).
+let res: { data: any; error: any } = { data: null, error: true };
+for (const extra of ["deleted_at, pending_entry_id, ", "deleted_at, ", ""]) {
+  res = (await admin.from("products").select(`${extra}${productCols}`).eq("slug", slug).maybeSingle()) as { data: any; error: any };
+  if (!res.error) break;
 }
-// A soft-deleted product's page is gone, same as one that never existed.
-const product: any = res.data && !res.data.deleted_at ? res.data : null;
+// A soft-deleted product's page is gone, same as one that never existed — and
+// one an unfinished entry draft created doesn't exist yet.
+const product: any = res.data && !res.data.deleted_at && !res.data.pending_entry_id ? res.data : null;
 
 if (!product) Astro.response.status = 404;
 

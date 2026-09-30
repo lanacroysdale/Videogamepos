@@ -8,6 +8,9 @@ import { fmt, fullName } from "../../lib/money";
 const supabase = Astro.locals.supabase;
 // Soft-deleted products (migration 20260903000001) shouldn't be offered for trade.
 const { error: delProbeErr } = await Astro.locals.supabase.from("products").select("deleted_at").limit(1);
+// Listings / stock rows an unfinished entry draft created aren't offered yet.
+const { error: pendProbeErr } = await Astro.locals.supabase.from("products").select("pending_entry_id").limit(1);
+const pend = pendProbeErr ? "" : ", pending_entry_id";
 const [{ data: margins }, { data: categories }, { data: completeness }, { data: grades }, { data: productRows }] = await Promise.all([
   supabase.from("trade_margins").select("*").order("sort_order"),
   supabase.from("categories").select("id,name").order("sort_order"),
@@ -16,12 +19,14 @@ const [{ data: margins }, { data: categories }, { data: completeness }, { data: 
   // Paged — one request stops at 1,000 listings.
   fetchAll((from, to) => supabase
     .from("products")
-    .select(`id, title, platform, franchise, alternative_names, tags, category_id${delProbeErr ? "" : ", deleted_at"}, product_variants(price_cents, completeness_code, grade_code, barcode, product_barcodes(barcode))`)
+    .select(`id, title, platform, franchise, alternative_names, tags, category_id${delProbeErr ? "" : ", deleted_at"}${pend}, product_variants(price_cents, completeness_code, grade_code, barcode${pend}, product_barcodes(barcode))`)
     .order("title")
     .order("id")
     .range(from, to)),
 ]);
-const products = (productRows ?? []).filter((p: any) => !p.deleted_at);
+const products = (productRows ?? [])
+  .filter((p: any) => !p.deleted_at && !p.pending_entry_id)
+  .map((p: any) => ({ ...p, product_variants: (p.product_variants ?? []).filter((v: any) => !v.pending_entry_id) }));
 
 const customerId = Astro.url.searchParams.get("customer");
 let customer = null;

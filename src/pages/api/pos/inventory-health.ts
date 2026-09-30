@@ -11,12 +11,22 @@ export const GET: APIRoute = async ({ locals }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
   // Soft-deleted products don't need attention (fallback covers pre-migration DBs).
   // Paged — one request stops at 1,000 listings.
+  // A draft's not-yet-finished listings (migration 20260930000001) aren't counted.
   let res = await fetchAll((from, to) => locals.supabase
     .from("products")
     .select("id, image_url, description, product_variants(completeness_code)")
     .is("deleted_at", null)
+    .is("pending_entry_id", null)
     .order("id")
     .range(from, to));
+  if (res.error) {
+    res = await fetchAll((from, to) => locals.supabase
+      .from("products")
+      .select("id, image_url, description, product_variants(completeness_code)")
+      .is("deleted_at", null)
+      .order("id")
+      .range(from, to));
+  }
   if (res.error) {
     res = await fetchAll((from, to) => locals.supabase
       .from("products")

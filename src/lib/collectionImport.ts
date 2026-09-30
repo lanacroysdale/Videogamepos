@@ -249,6 +249,7 @@ export interface ImportRow {
   folder: string;
   pcValueCents: number | null; // PriceCharting / market guide value from the sheet
   kind: "" | "console" | "accessory" | "collectible"; // "" = a game (or unknown)
+  lot: boolean;                // "Bulk …" / "Lot of …" — a lot, not one sellable item
   warnings: string[];
 }
 
@@ -367,7 +368,7 @@ export function buildRows(records: string[][], map: ColumnMap, opts: BuildOpts):
       // PriceCharting writes 0 when no cost basis was entered → unknown, not free.
       priceCents, costCents: opts.cents?.cost ? (money("cost") || null) : money("cost"),
       upc: cell(rec, "upc").replace(/[^0-9]/g, ""), pcId: /^\d+$/.test(cell(rec, "pcId")) ? cell(rec, "pcId") : "",
-      notes: cell(rec, "notes"), folder, pcValueCents, kind, warnings,
+      notes: cell(rec, "notes"), folder, pcValueCents, kind, lot: LOT_WORDS_RE.test(title0), warnings,
     };
     if (row.qty > 50) row.warnings.push(`Qty ${row.qty} looks high — check the Qty column`);
     // Same title + platform + condition twice in the sheet → one line, summed qty.
@@ -565,6 +566,7 @@ export interface ResolvedRow {
   variant: CatalogVariant | null;   // chosen existing variant (null = create one)
   skip: boolean;
   categoryId: string;               // category for a NEW listing ("" = the dialog's default)
+  nonInventory?: boolean;           // entry import: record what was paid, create no stock (bulk lots)
 }
 
 /** Apply a user's pick (product id or "" for new) to a row. */

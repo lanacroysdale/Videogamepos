@@ -139,6 +139,13 @@ const pageData = {
       const e = j.entry;
       $("ed-title").textContent = `Entry #${e.human_id}`;
       const lines = (j.items || []).map((it: any) => {
+        if (it.kind === "non_inventory") return `
+          <div class="ed-line">
+            <span class="ed-qty">${it.qty_added}×</span>
+            <span>${esc(it.description || "Non-inventory item")} <span class="muted-2" style="font-size:0.78rem;">🧾 non-inventory${it.unit_cost_cents != null ? ` · paid ${money(it.unit_cost_cents * it.qty_added)}` : ""}</span></span>
+            <span class="ed-price">—</span>
+            <span></span>
+          </div>`;
         const v = it.variant || {};
         const p = v.product || {};
         const changed = v.price_cents !== it.price_cents_at_entry;
