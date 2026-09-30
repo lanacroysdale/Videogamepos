@@ -1543,14 +1543,15 @@ const posData = {
     btn.disabled = true;
     entBusyStep(1);
     const errors: string[] = [];
-    for (let i = 0; i < todo.length; i++) {
-      btn.textContent = `Applying ${i + 1}/${todo.length}…`;
-      const r = todo[i];
-      try { await setLineCondition(r, comp === "__keep" ? r.completenessCode || "" : comp, grade === "__keep" ? r.gradeCode || "" : grade); }
-      catch (err: any) { errors.push(`${r.title}: ${err.message}`); }
-    }
+    try {
+      for (let i = 0; i < todo.length; i++) {
+        btn.textContent = `Applying ${i + 1}/${todo.length}…`;
+        const r = todo[i];
+        try { await setLineCondition(r, comp === "__keep" ? r.completenessCode || "" : comp, grade === "__keep" ? r.gradeCode || "" : grade); }
+        catch (err: any) { errors.push(`${r.title}: ${err.message}`); }
+      }
+    } finally { entBusyStep(-1); }
     btn.disabled = false; btn.textContent = "Apply to selected";
-    entBusyStep(-1);
     entSel.clear();
     await loadEntry(entryId); renderEnt();
     if (errors.length) alert(`${errors.length} line(s) couldn't be changed:\n\n${errors.slice(0, 10).join("\n")}`);
@@ -1560,11 +1561,17 @@ const posData = {
     const todo = entRows.filter((r) => entSel.has(r.itemId));
     if (!todo.length || !confirm(`Remove ${todo.length} line${todo.length === 1 ? "" : "s"} from this draft? (Nothing is in stock yet, so nothing else changes.)`)) return;
     const btn = $("ent-bulk-rm") as HTMLButtonElement; btn.disabled = true;
+    const label = btn.textContent;
+    entBusyStep(1); // Finish waits — else it would add the lines still being removed
     const errors: string[] = [];
-    for (const r of todo) {
-      try { await api({ action: "removeEntryItem", itemId: r.itemId }); entRows = entRows.filter((x) => x.itemId !== r.itemId); }
-      catch (err: any) { errors.push(`${r.title}: ${err.message}`); }
-    }
+    try {
+      for (let i = 0; i < todo.length; i++) {
+        const r = todo[i];
+        btn.textContent = `Removing ${i + 1}/${todo.length}…`;
+        try { await api({ action: "removeEntryItem", itemId: r.itemId }); entRows = entRows.filter((x) => x.itemId !== r.itemId); }
+        catch (err: any) { errors.push(`${r.title}: ${err.message}`); }
+      }
+    } finally { entBusyStep(-1); btn.textContent = label; }
     btn.disabled = false; entSel.clear(); renderEnt();
     if (errors.length) alert(`${errors.length} line(s) couldn't be removed:\n\n${errors.slice(0, 10).join("\n")}`);
   });
