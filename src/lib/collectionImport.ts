@@ -487,23 +487,66 @@ export function officialTitleFor(original: string, candidate: { name: string; si
   const o = norm(bareOrig), n = norm(official);
   // Numbers must agree: "Mario Party 8" never becomes "Mario Party 9".
   if (numbers(dropArticle(o)) !== numbers(dropArticle(n))) return null;
-  const ow = o.split(" "), nw = n.split(" ");
-  // An edition the sheet names must survive ("… Legendary edition" isn't the base game).
+  const ow = o.split(" ").filter(Boolean), nw = n.split(" ").filter(Boolean);
+  const oj = ow.join(""), nj = nw.join("");
+  // Editions / versions must match BOTH ways: a sheet's "Legendary edition"
+  // isn't the base game, and an added "DX" / "HD" is a different release
+  // (often a ROM hack: "Pokémon Blue DX").
   if (ow.some((w) => EDITION_WORDS.has(w) && !nw.includes(w))) return null;
-  // A subtitle the sheet never mentions means a DIFFERENT game in the series:
-  // "Mario VS Donkey Kong" is not "…: Mini-Land Mayhem!". (Typos still pass —
-  // words match on their first 4 letters: "Robot" ~ "Robobot".)
-  const sub = official.includes(":") ? norm(official.slice(official.lastIndexOf(":") + 1)).split(" ").filter((w) => w.length >= 3 && !STOP_WORDS.has(w)) : [];
-  if (sub.length) {
-    const near = (w: string) => ow.some((v) => v === w || (v.length >= 4 && w.length >= 4 && v.slice(0, 4) === w.slice(0, 4)));
-    if (sub.filter(near).length * 2 < sub.length) return null;
-  }
+  if (nw.some((w) => EDITION_WORDS.has(w) && !ow.includes(w))) return null;
+  // Every distinctive word must be on BOTH sides (typo-tolerant). Otherwise
+  // it's a different product: a bundle ("Enter-EXIT the Gungeon"), a
+  // hardware set ("Wii ZAPPER with …"), a ROM hack ("Pokémon Red RUMOR",
+  // "Pokémon MOON Emerald", "FAKEMON FireRed"), a series entry ("…: Mini-Land
+  // Mayhem!") or one game of a trilogy.
+  const sig = (w: string) => w.length >= 3 && !STOP_WORDS.has(w);
+  if (!ow.filter(sig).every((w) => nearWord(w, nw, nj))) return null;
+  if (!nw.filter(sig).every((w) => ADDABLE_WORDS.has(w) || nearWord(w, ow, oj))) return null;
+  // A word the sheet repeats must repeat in the official name too:
+  // "Mario Party 10 MARIO [amiibo Bundle]" names which amiibo it comes with.
+  const count = (ws: string[], w: string) => ws.filter((x) => x === w).length;
+  if (ow.filter(sig).some((w) => count(ow, w) > 1 && count(nw, w) < count(ow, w))) return null;
   // Same words, only styling differs: fix punctuation ("Luigis" → "Luigi's"),
   // but don't turn "Carrion" into all-caps "CARRION".
   if (o === n && /\b[A-Z]{3,}\b/.test(official.replace(/\b(HD|DX|3D|DS|GBA|NES|SNES|USA|VR|II|III|IV|VI|VII|VIII|XL)\b/g, "")) && !/\b[A-Z]{3,}\b/.test(bareOrig)) return null;
   const fixed = `${official}${quals ? " " + quals : ""}`;
   return fixed === original.trim() ? null : fixed;
 }
+/** Is `w` (from one title) present in the other title's words — allowing a
+ *  typo ("aweakening" ~ "awakening", "robot" ~ "robobot") or a joined word
+ *  ("starfox" ~ "Star Fox", "ware" ~ "WarioWare")? */
+function nearWord(w: string, words: string[], joined: string): boolean {
+  if (words.includes(w)) return true;
+  if (w.length >= 3 && joined.includes(w)) return true; // "fox" in "starfox"
+  // A typo keeps the word's first two letters ("aweakening" ~ "awakening",
+  // "robot" ~ "robobot"); a different word usually doesn't ("pokemon" vs the
+  // ROM hack "fakemon"). Longer words may be off by more.
+  return words.some((v) => {
+    if (v.slice(0, 2) !== w.slice(0, 2) || Math.abs(v.length - w.length) > 2) return false;
+    const len = Math.max(v.length, w.length);
+    const maxEdits = len >= 7 ? 2 : len >= 5 ? 1 : 0;
+    return maxEdits > 0 && editDistance(v, w, maxEdits) <= maxEdits;
+  });
+}
+function editDistance(a: string, b: string, cap: number): number {
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let rowMin = i;
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      rowMin = Math.min(rowMin, cur[j]);
+    }
+    if (rowMin > cap) return cap + 1;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+// Words an official title may ADD without making it a different product:
+// "… Version" (Pokémon), "The Legend of Zelda", "Super Mario Party Jamboree",
+// "Donkey Kong Country Returns", "Olympic Games", and platform names
+// ("Super Smash Bros. for Wii U").
+const ADDABLE_WORDS = new Set(["version", "legend", "super", "country", "games", "game", "nintendo", "wii", "switch", "3ds", "gamecube", "playstation", "xbox", "sega", "sony", "microsoft"]);
 const EDITION_WORDS = new Set(["edition", "deluxe", "complete", "legendary", "definitive", "ultimate", "remastered", "remaster", "anniversary", "collectors", "collector", "limited", "special", "goty", "hd", "dx", "3d", "gold", "platinum", "reloaded"]);
 const STOP_WORDS = new Set(["the", "and", "for", "of", "a", "an", "in", "on", "to"]);
 

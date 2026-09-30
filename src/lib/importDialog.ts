@@ -342,6 +342,7 @@ export function openImportDialog(o: ImportDialogOpts) {
   async function lookupOfficialTitles(rows: ImportRow[]) {
     if (fixInFlight) return;
     fixInFlight = true;
+    { const go = $("tli-go") as HTMLButtonElement; go.disabled = true; go.textContent = "Checking titles…"; }
     const uniq = [...new Map(rows.map((r) => [fixKey(r), r])).values()];
     try {
       for (let i = 0; i < uniq.length; i += 200) {
@@ -355,8 +356,11 @@ export function openImportDialog(o: ImportDialogOpts) {
         chunk.forEach((x, k) => titleFix.set(fixKey(x), results[k] ?? null));
       }
     } finally { fixInFlight = false; }
+    // Never swap the rows out from under an import that's running.
+    if (busy) { rebuildAfterImport = true; return; }
     rebuild();
   }
+  let rebuildAfterImport = false;
 
   // Entry imports: a lot ("Bulk …") defaults to non-inventory — money recorded, no stock.
   const defaultNonInv = (row: ImportRow) => o.mode === "entry" && row.lot;
@@ -468,8 +472,9 @@ export function openImportDialog(o: ImportDialogOpts) {
     $("tli-sum").innerHTML = live.length
       ? `<strong>${live.length}</strong> lines · <strong>${n.units}</strong> units — <strong>${n.ex}</strong> existing · <strong>${n.cond}</strong> new conditions · <strong>${n.nw + n.rev}</strong> new listings${n.rev ? ` (<strong style="color:var(--magenta)">${n.rev}</strong> need review)` : ""}${n.ni ? ` · <strong>${n.ni}</strong> non-inventory (recorded, no stock)` : ""}${live.some((r) => r.row.titleFrom) ? ` · ✎ <strong>${live.filter((r) => r.row.titleFrom).length}</strong> title${live.filter((r) => r.row.titleFrom).length === 1 ? "" : "s"} corrected` : ""}${nopl ? ` · <span class="warn">${nopl} without a platform</span>` : ""}${totals ? ` · <span class="tli-muted">${totals} totals row${totals === 1 ? "" : "s"} skipped</span>` : ""}`
       : (resolved.length ? "Every row is skipped." : "Choose a file to begin.");
-    ($("tli-go") as HTMLButtonElement).disabled = !live.length || busy;
-    $("tli-go").textContent = live.length ? `Import ${live.length} line${live.length === 1 ? "" : "s"}` : "Import";
+    // Wait for the official-title check — importing now would keep the typos.
+    ($("tli-go") as HTMLButtonElement).disabled = !live.length || busy || fixInFlight;
+    $("tli-go").textContent = fixInFlight ? "Checking titles…" : live.length ? `Import ${live.length} line${live.length === 1 ? "" : "s"}` : "Import";
   }
 
   $("tli-go").addEventListener("click", async () => {
@@ -486,6 +491,7 @@ export function openImportDialog(o: ImportDialogOpts) {
       // The caller marks rows it already staged as skipped, so a retry only
       // sends what failed — re-render so the checkboxes show that.
       busy = false;
+      if (rebuildAfterImport) { rebuildAfterImport = false; rebuild(); }
       showErr((e?.message || "Import failed") + " Rows confirmed as imported are unchecked.");
       overlay.querySelectorAll<HTMLElement>("select, input, button").forEach((el) => { (el as any).disabled = false; });
       renderTable();

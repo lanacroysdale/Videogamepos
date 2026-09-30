@@ -551,13 +551,13 @@ const posData = {
 </style>
 
 <script>
-  import { buildPlatforms, parseQuery as _parseQuery, smartMatches as _smartMatches, matchScore } from "../../lib/smartSearch";
+  import { buildPlatforms, parseQuery as _parseQuery, smartMatches as _smartMatches, matchScore, resolveStaticPlatform } from "../../lib/smartSearch";
   import { resolveComp, compAbbrev } from "../../lib/conditionDisplay";
   import { openPrintDialog } from "../../lib/labelPrint";
   import { initScanReceiver, openPairDialog } from "../../lib/scanReceive";
   import { barcodeEq } from "../../lib/gtin";
   import { openImportDialog } from "../../lib/importDialog";
-  import { newListingKey, officialTitleFor } from "../../lib/collectionImport";
+  import { newListingKey, officialTitleFor, norm as normImport } from "../../lib/collectionImport";
 
   const data = JSON.parse(document.getElementById("pos-data")!.textContent!);
   let items: any[] = data.items;
@@ -1750,8 +1750,9 @@ const posData = {
       const box = $("ent-suggest") as HTMLElement;
       if (seq !== dbSeq || box.hidden || entSearch.value.trim() !== q) return;
       // Skip games the store already lists on that platform (they're above).
-      const have = new Set(draftItems().map((p: any) => `${normTitle(p.title)}|${(p.platform || "").toLowerCase()}`));
-      games = games.filter((g) => !have.has(`${normTitle(g.name)}|${String(g.platform || "").toLowerCase()}`)).slice(0, 6);
+      const key = (t: string, pl: string) => `${normTitle(t)}|${(resolveStaticPlatform(pl) ?? pl ?? "").toLowerCase()}`;
+      const have = new Set(draftItems().flatMap((p: any) => [p.title, ...(p.altNames || [])].map((t: string) => key(t, p.platform || ""))));
+      games = games.filter((g) => !have.has(key(g.name, g.platform || ""))).slice(0, 6);
       if (!games.length) return;
       box.insertAdjacentHTML("beforeend", `<div class="ti-sug-head">From the game database</div>` + games.map((g, i) => `
         <div class="ti-sug" data-db="${i}" title="Add as a new listing with its official title">
@@ -1767,7 +1768,8 @@ const posData = {
       }));
     }, 250);
   }
-  const normTitle = (t: string) => String(t || "").toLowerCase().replace(/&/g, " ").replace(/[^a-z0-9]+/g, " ").replace(/\b(the|and)\b/g, " ").replace(/\s+/g, " ").trim();
+  // Same folding as the importer (accents, apostrophes, "&"), minus "the"/"and".
+  const normTitle = (t: string) => normImport(t).replace(/\b(the|and)\b/g, " ").replace(/\s+/g, " ").trim();
   // A bulk lot / parts / supplies bought on this entry: what was paid, no stock.
   async function entAddNonInventory(desc0 = "") {
     try { await ensureEntry(); setEntryMode(true); } catch (e: any) { alert(e.message); return; }
@@ -1868,7 +1870,9 @@ const posData = {
         const keyFor = (r: any) => {
           // Not the qty: the server keys each COPY (<key>#1, #2, …), so an edited
           // sheet that goes from 1 to 2 copies adds exactly one.
-          const fp = [r.row.title.toLowerCase().trim(), (r.row.platform || "").toLowerCase(), r.row.completenessCode, r.row.gradeCode, ch.inventoryTypeId || "", r.row.folder || ""].join("|");
+          // The SHEET's title (not the corrected one), so a re-import of the same
+          // sheet replays whether or not the correction ran this time.
+          const fp = [(r.row.titleFrom ?? r.row.title).toLowerCase().trim(), (r.row.platform || "").toLowerCase(), r.row.completenessCode, r.row.gradeCode, ch.inventoryTypeId || "", r.row.folder || ""].join("|");
           const occ = (seenPrints.get(fp) || 0) + 1; seenPrints.set(fp, occ);
           return `${fileTag}:${h32(fp, 2166136261)}${h32(fp, 5381)}:${occ}`;
         };
