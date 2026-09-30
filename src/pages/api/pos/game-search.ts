@@ -22,13 +22,24 @@ export const POST: APIRoute = async ({ locals, request }) => {
   if (!error) rows = data ?? [];
   else {
     // Fallback: every word (any order) must appear in the normalized name.
-    const words = q.toLowerCase().replace(/[^a-z0-9]+/g, " ").split(" ").filter((w) => w.length >= 2 && !["and", "the", "of"].includes(w)).slice(0, 6);
+    // Folded like the stored names; a trailing "s" is dropped so "luigis"
+    // still finds names stored before the fold as "luigi s mansion".
+    const words = q.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/['’`]/g, "").replace(/[^a-z0-9]+/g, " ")
+      .split(" ").filter((w) => w.length >= 2 && !["and", "the", "of"].includes(w))
+      .map((w) => (w.length >= 5 && w.endsWith("s") ? w.slice(0, -1) : w)).slice(0, 6);
     if (!words.length) return json({ ok: true, games: [] });
     let query = sb.from("game_metadata").select("name, platform, box_front, box_3d");
     for (const w of words) query = query.ilike("name_norm", `%${w}%`);
     if (lb) query = query.eq("platform", lb);
     const { data: d2 } = await query.limit(40);
     rows = (d2 ?? []).sort((a: any, b2: any) => a.name.length - b2.name.length).slice(0, 8);
+  }
+  // A platform was named but isn't one the game database maps: keep its games
+  // (if any) instead of silently mixing in every other platform.
+  const want = b.platform && !lb ? resolveStaticPlatform(String(b.platform)) ?? String(b.platform) : null;
+  if (want) {
+    const same = rows.filter((r: any) => (resolveStaticPlatform(r.platform) ?? r.platform) === want);
+    if (same.length) rows = same;
   }
   const games = rows.map((r: any) => ({
     name: r.name,

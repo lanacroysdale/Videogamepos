@@ -2,6 +2,8 @@
 // scripts/launchbox-ingest.mjs) stores image GUID filenames served from the
 // LaunchBox CDN; the lookup_box_art RPC finds the best match by title/platform.
 
+import { resolveStaticPlatform } from "./smartSearch";
+
 export const lbImageUrl = (filename: string) => `https://images.launchbox-app.com/${filename}`;
 
 // Map our free-text product platforms to LaunchBox platform names.
@@ -29,10 +31,25 @@ const MAP: Record<string, string> = {
   "sega dreamcast": "Sega Dreamcast", dreamcast: "Sega Dreamcast",
   "sega saturn": "Sega Saturn", saturn: "Sega Saturn",
   "sega game gear": "Sega Game Gear", "game gear": "Sega Game Gear",
-  "sega master system": "Sega Master System",
+  "sega master system": "Sega Master System", "master system": "Sega Master System",
+  "nintendo switch 2": "Nintendo Switch 2", "switch 2": "Nintendo Switch 2",
+  "virtual boy": "Nintendo Virtual Boy", "famicom disk system": "Nintendo Famicom Disk System",
+  "game & watch": "Nintendo Game & Watch", "game and watch": "Nintendo Game & Watch",
+  "xbox series x": "Microsoft Xbox Series X/S", "xbox series s": "Microsoft Xbox Series X/S",
+  "sega cd": "Sega CD", "sega 32x": "Sega 32X",
+  "atari 2600": "Atari 2600", "atari 5200": "Atari 5200", "atari 7800": "Atari 7800",
+  "atari jaguar": "Atari Jaguar", "atari lynx": "Atari Lynx",
+  "turbografx-16": "NEC TurboGrafx-16", "turbografx 16": "NEC TurboGrafx-16", "turbografx cd": "NEC TurboGrafx-CD",
+  "neo geo": "SNK Neo Geo AES", "neo geo cd": "SNK Neo Geo CD", "neo geo pocket color": "SNK Neo Geo Pocket Color",
+  "3do": "3DO Interactive Multiplayer", wonderswan: "WonderSwan", "wonderswan color": "WonderSwan Color",
 };
 
 export function lbPlatform(platform?: string | null): string | null {
   if (!platform) return null;
-  return MAP[platform.toLowerCase().trim()] ?? null;
+  const direct = MAP[platform.toLowerCase().trim()];
+  if (direct) return direct;
+  // eBay / free-text spellings ("Nintendo Wii U", "Sony PlayStation 2") → our
+  // canonical platform first, then its LaunchBox name.
+  const canon = resolveStaticPlatform(platform);
+  return canon ? MAP[canon.toLowerCase()] ?? null : null;
 }
