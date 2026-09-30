@@ -32,6 +32,18 @@ export const POST: APIRoute = async ({ locals, request }) => {
     });
   };
 
+  // Columns from later migrations — probe once per request so every path
+  // works before AND after the owner applies them.
+  const probes = new Map<string, Promise<boolean>>();
+  const hasCol = (table: string, col: string) => {
+    const k = table + "." + col;
+    if (!probes.has(k)) probes.set(k, Promise.resolve(sb.from(table).select(col).limit(1)).then(({ error }) => !error));
+    return probes.get(k)!;
+  };
+  // Rows a DRAFT creates stay hidden until Finish (migration 20260930000001).
+  const pendingFor = async (entryId: string | null | undefined) =>
+    entryId && (await hasCol("products", "pending_entry_id")) ? { pending_entry_id: String(entryId) } : {};
+
   // /shop/<slug> looks the slug up with maybeSingle(), so it MUST be unique:
   // "mario-kart-64", else "…-<platform>", else a numeric suffix.
   const slugify = (t: string) => t.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
@@ -203,6 +215,24 @@ export const POST: APIRoute = async ({ locals, request }) => {
       };
       const processRow = async (r: any): Promise<{ res: any; created: "" | "product" | "variant" }> => {
         const qty = qtyOf(r.qty), cost = cents(r.costCents);
+        if (r.kind === "nonInventory") {
+          // Bulk lot etc.: recorded on the entry (what was paid), no stock row.
+          const description = String(r.description ?? r.title ?? "").trim().slice(0, 200);
+          if (!description) throw new Error("A non-inventory line needs a description");
+          if (!(await hasCol("inventory_entry_items", "kind"))) throw new Error("Apply migration 20260930000001 to record non-inventory lines.");
+          if (rowKey) {
+            const { data, error } = await sb.rpc("stage_import_noninventory", { p_entry: b.entryId, p_key: rowKey, p_description: description, p_qty: qty, p_cost: cost });
+            if (error) throw new Error(error.message);
+            if (data?.replay) return { res: { ok: true, replay: true, itemId: data.item_id, nonInventory: true }, created: "" };
+            return { res: { ok: true, itemId: data.item_id, nonInventory: true }, created: "" };
+          }
+          const { data: st, error } = await sb.from("inventory_entry_items").insert({
+            entry_id: b.entryId, variant_id: null, kind: "non_inventory", description, qty_added: qty,
+            unit_cost_cents: cost, price_cents_at_entry: 0, was_new_variant: false, applied: false,
+          }).select("id").single();
+          if (error) throw new Error(error.message);
+          return { res: { ok: true, itemId: st.id, nonInventory: true }, created: "" };
+        }
         if (r.kind === "variant") {
           if (!r.variantId) throw new Error("variantId required");
           const { data: v } = await sb.from("product_variants").select("id, price_cents, product_id, internal_code").eq("id", r.variantId).maybeSingle();
@@ -220,6 +250,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
           barcode: r.barcode ? String(r.barcode).slice(0, 40) : null,
           ...(r.inventoryTypeId ? { inventory_type_id: String(r.inventoryTypeId) } : {}),
           ...(r.locationId ? { location_id: r.locationId } : {}),
+          ...(await pendingFor(b.entryId)),
         };
         // Put the row on `productId`: its matching stock row if one exists,
         // else a new one.
@@ -260,6 +291,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
           const { data: prod, error: pErr } = await sb.from("products").insert({
             title, platform, category_id: r.categoryId, slug: await uniqueSlug(title, platform),
             ...(r.tagPcId ? { tags: [`pricecharting:${String(r.tagPcId).slice(0, 40)}`] } : {}),
+            ...(await pendingFor(b.entryId)),
           }).select("id, slug").single();
           if (pErr) throw new Error(pErr.message);
           if (r.ref) createdByRef.set(String(r.ref), prod.id);
@@ -339,6 +371,21 @@ export const POST: APIRoute = async ({ locals, request }) => {
       }
       return json({ ok: true, results, idempotent: !keysErr, atomic: useRpc });
     }
+    case "addNonInventoryLine": {
+      // A bulk lot / non-stock purchase on a draft: what was paid, no stock row.
+      if (!b.entryId) return json({ error: "entryId required" }, 400);
+      const description = String(b.description ?? "").trim().slice(0, 200);
+      if (!description) return json({ error: "Describe the item (e.g. “DS bulk loose games, grade B”)." }, 400);
+      if (!(await hasCol("inventory_entry_items", "kind"))) return json({ error: "Apply migration 20260930000001 to record non-inventory lines." }, 400);
+      const { data: st, error } = await sb.from("inventory_entry_items").insert({
+        entry_id: b.entryId, variant_id: null, kind: "non_inventory", description,
+        qty_added: Math.max(1, Math.round(Number(b.qty)) || 1),
+        unit_cost_cents: b.unitCostCents == null || b.unitCostCents === "" ? null : Math.max(0, Math.round(Number(b.unitCostCents)) || 0),
+        price_cents_at_entry: 0, was_new_variant: false, applied: false,
+      }).select("id").single();
+      if (error) return json({ error: /violates row-level security|finished on another station/i.test(error.message) ? "That draft was finished — start a new entry." : error.message }, 500);
+      return json({ ok: true, itemId: st.id });
+    }
     case "setEntryLineCondition": {
       // Change a STAGED line's completeness / grade. The line moves to the
       // matching stock row on the same listing (existing, or a new one) — it
@@ -357,6 +404,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
         .select("id, entry_id, variant_id, was_new_variant, applied, entry:inventory_entries(status)")
         .eq("id", b.itemId).maybeSingle();
       if (!line) return json({ error: "Line not found." }, 404);
+      if (!line.variant_id) return json({ error: "Non-inventory lines have no condition." }, 400);
       const closed = "That draft was finished — the line wasn't changed.";
       if ((line as any).entry?.status !== "open" || line.applied) return json({ error: closed }, 409);
       const { data: old } = await sb.from("product_variants")
@@ -392,6 +440,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
           price_cents: old.price_cents ?? 0, quantity: 0,
           ...(old.inventory_type_id ? { inventory_type_id: old.inventory_type_id } : {}),
           ...(old.location_id ? { location_id: old.location_id } : {}),
+          ...(await pendingFor(line.entry_id)), // hidden until the draft is finished
         }).select("id, price_cents, internal_code, barcode").single();
         if (error) return json({ error: error.message }, 500);
         dest = nv; created = true;
@@ -436,10 +485,25 @@ export const POST: APIRoute = async ({ locals, request }) => {
     }
     case "removeEntryItem": {
       if (!b.itemId) return json({ error: "itemId required" }, 400);
+      const { data: before } = await sb.from("inventory_entry_items").select("variant_id, variant:product_variants(product_id)").eq("id", b.itemId).maybeSingle();
       const { data, error } = await sb.from("inventory_entry_items").delete().eq("id", b.itemId).select("id").maybeSingle();
       if (error) return json({ error: error.message }, 500);
       if (!data) return json({ error: "That line is on a committed entry." }, 409);
-      return json({ ok: true });
+      // The DB discards a draft's hidden stock row / listing that only existed
+      // for this line (migration 20260930000001) — tell the screen which, so its
+      // in-memory catalog doesn't keep offering rows that are gone.
+      let removedVariantId: string | null = null, removedProductId: string | null = null;
+      const vId = before?.variant_id as string | undefined;
+      const pId = (before as any)?.variant?.product_id as string | undefined;
+      if (vId) {
+        const [{ data: v }, { data: p }] = await Promise.all([
+          sb.from("product_variants").select("id").eq("id", vId).maybeSingle(),
+          pId ? sb.from("products").select("id").eq("id", pId).maybeSingle() : Promise.resolve({ data: { id: pId } } as any),
+        ]);
+        if (!v) removedVariantId = vId;
+        if (pId && !p) removedProductId = pId;
+      }
+      return json({ ok: true, removedVariantId, removedProductId });
     }
     case "setOrderTotal": {
       if (!b.entryId) return json({ error: "entryId required" }, 400);
@@ -558,10 +622,11 @@ export const POST: APIRoute = async ({ locals, request }) => {
       const otCol = otErr ? "" : ", order_total_cents";
       const supCol = supErr ? "" : ", supplier";
       const roCol = roErr ? "" : ", received_on";
+      const kindCol = (await hasCol("inventory_entry_items", "kind")) ? ", kind, description" : "";
       const [{ data: entry }, { data: items, error }] = await Promise.all([
         sb.from("inventory_entries").select(`id, human_id, source, status, note, created_at, committed_at${otCol}${supCol}${roCol}, employee:profiles(full_name)`).eq("id", b.entryId).maybeSingle(),
         sb.from("inventory_entry_items")
-          .select(`id, qty_added, unit_cost_cents, price_cents_at_entry, was_new_variant, created_at${supCol}, variant:product_variants(id, sku, internal_code${lcCol}, price_cents, quantity, completeness_code, grade_code, condition, inventory_type_id, location_id, product:products(title, platform, category:categories(name)))`)
+          .select(`id, qty_added, unit_cost_cents, price_cents_at_entry, was_new_variant, created_at${supCol}${kindCol}, variant:product_variants(id, sku, internal_code${lcCol}, price_cents, quantity, completeness_code, grade_code, condition, inventory_type_id, location_id, product:products(title, platform, category:categories(name)))`)
           .eq("entry_id", b.entryId).order("created_at"),
       ]);
       if (!entry) return json({ error: "Entry not found." }, 404);
@@ -624,7 +689,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
       const slug = await uniqueSlug(String(b.title).trim(), b.platform || null);
       const { data: prod, error: pErr } = await sb
         .from("products")
-        .insert({ title: String(b.title).trim(), platform: b.platform || null, franchise: b.franchise || null, category_id: b.categoryId, slug })
+        .insert({ title: String(b.title).trim(), platform: b.platform || null, franchise: b.franchise || null, category_id: b.categoryId, slug, ...(await pendingFor(b.stageEntryId)) })
         .select()
         .single();
       if (pErr) return json({ error: pErr.message }, 500);
@@ -645,6 +710,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
           // columns outright); omitted → the DB trigger defaults to Retail.
           ...(b.inventoryTypeId ? { inventory_type_id: b.inventoryTypeId } : {}),
           ...(b.locationId ? { location_id: b.locationId } : {}),
+          ...(await pendingFor(b.stageEntryId)),
         })
         .select()
         .single();
@@ -678,6 +744,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
           quantity: b.stageEntryId ? 0 : Math.max(0, Math.round(Number(b.quantity)) || 0),
           ...(b.inventoryTypeId ? { inventory_type_id: b.inventoryTypeId } : {}),
           ...(b.locationId ? { location_id: b.locationId } : {}),
+          ...(await pendingFor(b.stageEntryId)),
         })
         .select("id, internal_code, quantity, price_cents")
         .single();

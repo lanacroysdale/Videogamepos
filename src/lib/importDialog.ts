@@ -73,6 +73,8 @@ const CSS = `
 .tli-pill.cond{color:var(--cyan,#2ce6e0);border-color:rgba(44,230,224,.4)}
 .tli-pill.new{color:#ffd166;border-color:rgba(255,209,102,.4)}
 .tli-pill.rev{color:var(--magenta,#ff49d0);border-color:rgba(255,73,208,.4)}
+.tli-pill.noninv{color:var(--muted,#aaa);border-color:var(--border-strong,#555)}
+.tli-table label.tli-ni{display:inline-flex;align-items:center;gap:.25rem;font-size:.72rem;color:var(--muted,#aaa);margin-left:.35rem;cursor:pointer}
 .tli-foot{display:flex;align-items:center;gap:1rem;flex-wrap:wrap;padding:.7rem 1rem;border-top:1px solid var(--border,#333)}
 .tli-foot .tli-sum{font-size:.84rem;color:var(--muted,#aaa)}
 .tli-foot .tli-sum strong{font-family:var(--font-mono,monospace)}
@@ -108,7 +110,7 @@ export function openImportDialog(o: ImportDialogOpts) {
   const catPicks = new Map<number, string>(); // employee's per-row category picks (by source line)
   // Employee's per-row listing picks + skips (by source line). Persistent so a
   // folder switch or a re-match doesn't drop rows that aren't on screen.
-  const picks = new Map<number, { productId: string; skip: boolean }>();
+  const picks = new Map<number, { productId: string; skip: boolean; nonInventory: boolean }>();
   let cleared = new Set<string>(); // columns the employee set to "—" for this header layout
   // Consoles / accessories / collectibles default to a matching category when the store has one.
   const findCat = (re: RegExp) => o.categories.find((c) => re.test(c.name))?.id || "";
@@ -290,7 +292,8 @@ export function openImportDialog(o: ImportDialogOpts) {
     // skips (keyed by source line) instead of silently resetting them. Fold in
     // the rows on screen first (incl. rows the caller marked staged/skipped).
     for (const r of resolved) {
-      if (r.product?.id !== r.match.product?.id || r.skip) picks.set(r.row.n, { productId: r.product?.id ?? "", skip: r.skip });
+      const nonInv = !!r.nonInventory;
+      if (r.product?.id !== r.match.product?.id || r.skip || nonInv !== defaultNonInv(r.row)) picks.set(r.row.n, { productId: r.product?.id ?? "", skip: r.skip, nonInventory: nonInv });
       else picks.delete(r.row.n);
     }
     const rows: ImportRow[] = buildRows(records, map, {
@@ -302,14 +305,16 @@ export function openImportDialog(o: ImportDialogOpts) {
       const match = matchRow(row, prepared, o.platforms, typeFilter());
       const hint = row.kind ? kindCat[row.kind] : "";
       if (row.kind === "console" && !hint) row.warnings.push("Looks like a console/handheld — pick its category (no Consoles category found)");
-      const r: ResolvedRow = { row, match, product: match.product, variant: match.variant, skip: false, categoryId: catPicks.get(row.n) ?? hint };
+      const r: ResolvedRow = { row, match, product: match.product, variant: match.variant, skip: false, categoryId: catPicks.get(row.n) ?? hint, nonInventory: defaultNonInv(row) };
       const k = picks.get(row.n);
-      if (k) { chooseProduct(r, k.productId ? byId.get(k.productId) || null : null, typeFilter()); r.skip = k.skip; }
+      if (k) { chooseProduct(r, k.productId ? byId.get(k.productId) || null : null, typeFilter()); r.skip = k.skip; r.nonInventory = k.nonInventory; }
       return r;
     });
     renderTable();
   }
 
+  // Entry imports: a lot ("Bulk …") defaults to non-inventory — money recorded, no stock.
+  const defaultNonInv = (row: ImportRow) => o.mode === "entry" && row.lot;
   const newPrice = (r: ResolvedRow) => r.row.priceCents == null ? null : Math.round(r.row.priceCents * choices.pricePct / 100);
 
   // A brand-new game's 2nd+ condition (Loose after CIB) lands on the SAME new
@@ -318,13 +323,14 @@ export function openImportDialog(o: ImportDialogOpts) {
   function followerRows(): Map<ResolvedRow, number> {
     const lead = new Map<string, number>(), out = new Map<ResolvedRow, number>();
     for (const r of resolved) {
-      if (r.skip || r.product) continue;
+      if (r.skip || r.product || r.nonInventory) continue;
       const k = newListingKey(r.row);
       if (lead.has(k)) out.set(r, lead.get(k)!); else lead.set(k, r.row.n);
     }
     return out;
   }
   function statusOf(r: ResolvedRow, followers: Map<ResolvedRow, number>): { cls: string; text: string } {
+    if (r.nonInventory) return { cls: "noninv", text: "🧾 non-inventory" };
     if (followers.has(r)) return { cls: "cond", text: "+ condition (same new listing)" };
     if (r.product && r.variant) return { cls: "ok", text: "existing" };
     if (r.product) {
@@ -365,7 +371,7 @@ export function openImportDialog(o: ImportDialogOpts) {
         <td class="num">${r.row.priceCents == null ? "—" : money(r.row.priceCents)}</td>
         ${pcCol ? `<td class="num tli-muted">${r.row.pcValueCents == null ? "—" : money(r.row.pcValueCents)}</td>` : ""}
         ${entry ? `<td class="num">${r.row.costCents == null ? "—" : money(r.row.costCents)}</td>` : ""}
-        <td><select data-pick>${opts.join("")}</select> <span class="tli-pill ${st.cls}">${st.text}</span>${followers.has(r) ? ` <span class="tli-muted" title="This condition is added to the listing row ${followers.get(r)} creates — set the category there">category: row ${followers.get(r)}</span>` : !r.product ? ` <select data-cat title="Category for this new listing">${catOpts(r.categoryId || choices.categoryId)}</select>` : ""}</td>
+        <td>${r.nonInventory ? "" : `<select data-pick>${opts.join("")}</select> `}<span class="tli-pill ${st.cls}">${st.text}</span>${r.nonInventory ? "" : followers.has(r) ? ` <span class="tli-muted" title="This condition is added to the listing row ${followers.get(r)} creates — set the category there">category: row ${followers.get(r)}</span>` : !r.product ? ` <select data-cat title="Category for this new listing">${catOpts(r.categoryId || choices.categoryId)}</select>` : ""}${entry ? `<label class="tli-ni" title="Non-inventory: record what was paid on the entry, but create no listing or stock (bulk lots, parts)"><input type="checkbox" data-noninv${r.nonInventory ? " checked" : ""} /> non-inv</label>` : ""}</td>
         ${entry ? `<td class="num">${price}</td>` : ""}
       </tr>`;
     }).join("");
@@ -386,7 +392,8 @@ export function openImportDialog(o: ImportDialogOpts) {
         // Skipping a new game's first row makes its next condition the one that creates the listing.
         if (!r.product) renderTable(); else { tr.classList.toggle("skip", r.skip); summary(); syncAllBox(); }
       });
-      tr.querySelector<HTMLSelectElement>("[data-pick]")!.addEventListener("change", (e) => {
+      tr.querySelector<HTMLInputElement>("[data-noninv]")?.addEventListener("change", (e) => { r.nonInventory = (e.target as HTMLInputElement).checked; renderTable(); });
+      tr.querySelector<HTMLSelectElement>("[data-pick]")?.addEventListener("change", (e) => {
         const id = (e.target as HTMLSelectElement).value;
         chooseProduct(r, id ? byId.get(id) || null : null, typeFilter());
         renderTable();
@@ -402,17 +409,18 @@ export function openImportDialog(o: ImportDialogOpts) {
 
   function summary() {
     const live = resolved.filter((r) => !r.skip);
-    const n = { ex: 0, cond: 0, nw: 0, rev: 0, units: 0 };
+    const n = { ex: 0, cond: 0, nw: 0, rev: 0, units: 0, ni: 0 };
     const followers = followerRows();
     for (const r of live) {
-      n.units += r.row.qty;
       const s = statusOf(r, followers).cls;
+      if (s === "noninv") { n.ni++; continue; }
+      n.units += r.row.qty;
       if (s === "ok") n.ex++; else if (s === "cond") n.cond++; else if (s === "rev") n.rev++; else n.nw++;
     }
     const nopl = live.filter((r) => !r.row.platform).length;
     const totals = map.title == null ? 0 : records.filter((rec) => isSummaryRow(String(rec[map.title!] ?? ""), map.platform == null ? "" : String(rec[map.platform] ?? ""))).length;
     $("tli-sum").innerHTML = live.length
-      ? `<strong>${live.length}</strong> lines · <strong>${n.units}</strong> units — <strong>${n.ex}</strong> existing · <strong>${n.cond}</strong> new conditions · <strong>${n.nw + n.rev}</strong> new listings${n.rev ? ` (<strong style="color:var(--magenta)">${n.rev}</strong> need review)` : ""}${nopl ? ` · <span class="warn">${nopl} without a platform</span>` : ""}${totals ? ` · <span class="tli-muted">${totals} totals row${totals === 1 ? "" : "s"} skipped</span>` : ""}`
+      ? `<strong>${live.length}</strong> lines · <strong>${n.units}</strong> units — <strong>${n.ex}</strong> existing · <strong>${n.cond}</strong> new conditions · <strong>${n.nw + n.rev}</strong> new listings${n.rev ? ` (<strong style="color:var(--magenta)">${n.rev}</strong> need review)` : ""}${n.ni ? ` · <strong>${n.ni}</strong> non-inventory (recorded, no stock)` : ""}${nopl ? ` · <span class="warn">${nopl} without a platform</span>` : ""}${totals ? ` · <span class="tli-muted">${totals} totals row${totals === 1 ? "" : "s"} skipped</span>` : ""}`
       : (resolved.length ? "Every row is skipped." : "Choose a file to begin.");
     ($("tli-go") as HTMLButtonElement).disabled = !live.length || busy;
     $("tli-go").textContent = live.length ? `Import ${live.length} line${live.length === 1 ? "" : "s"}` : "Import";

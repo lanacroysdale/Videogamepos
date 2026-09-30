@@ -40,17 +40,20 @@ export async function loadPosCatalog(supabase: Client): Promise<PosCatalogRow[]>
   const hasLabelCodes = !lcProbeErr;
   // Soft-deleted products (migration 20260903000001) must not be scannable/sellable.
   const { error: delProbeErr } = await supabase.from("products").select("deleted_at").limit(1);
+  // Rows an unfinished entry draft created (migration 20260930000001) aren't for sale yet.
+  const { error: pendProbeErr } = await supabase.from("products").select("pending_entry_id").limit(1);
+  const pend = pendProbeErr ? "" : ", pending_entry_id";
 
   // Paged: a single request stops at 1,000 rows, which silently dropped the
   // cheapest items from checkout scanning once the catalog grew past that.
   const { data: variantRows } = await fetchAll((from, to) => supabase
     .from("product_variants")
-    .select(`id, condition, completeness, price_cents, quantity, sku, barcode, internal_code${hasLabelCodes ? ", label_code" : ""}${hasTypes ? ", inventory_type_id" : ""}, product_barcodes(barcode), product:products(title, platform${delProbeErr ? "" : ", deleted_at"}, category:categories(id,name,color,is_trackable))`)
+    .select(`id, condition, completeness, price_cents, quantity, sku, barcode, internal_code${hasLabelCodes ? ", label_code" : ""}${hasTypes ? ", inventory_type_id" : ""}${pend}, product_barcodes(barcode), product:products(title, platform${delProbeErr ? "" : ", deleted_at"}${pend}, category:categories(id,name,color,is_trackable))`)
     .order("price_cents", { ascending: false })
     .order("id")
     .range(from, to));
 
-  return (variantRows ?? []).filter((v: any) => !v.product?.deleted_at).map((v: any) => ({
+  return (variantRows ?? []).filter((v: any) => !v.product?.deleted_at && !v.pending_entry_id && !v.product?.pending_entry_id).map((v: any) => ({
     variantId: v.id,
     title: v.product?.title ?? "Item",
     platform: v.product?.platform ?? "",

@@ -56,19 +56,47 @@ if (!delProbeErr) {
   }
 }
 const variantExtraCols = `${hasTypes ? ", inventory_type_id, location_id" : ""}${lcProbeErr ? "" : ", label_code"}`;
+// Draft-created rows stay hidden until Finish (migration 20260930000001). They
+// still load (flagged) so the draft's own screen can find them; the grid,
+// counts and every other page hide them.
+const { error: pendProbeErr } = await supabase.from("products").select("pending_entry_id").limit(1);
+const pendCol = pendProbeErr ? "" : ", pending_entry_id";
 // Paged — one request stops at 1,000 listings (later titles silently vanished).
 const { data: products } = await fetchAll((from, to) => supabase
   .from("products")
   .select(
-    `id, title, slug, platform, franchise, genre, description, image_url, alternative_names, tags, category_id${delProbeErr ? "" : ", deleted_at"}, category:categories(name,color)${srcProbeErr ? "" : ", product_suppliers(id, label, url)"}, product_variants(id, condition, completeness, completeness_code, grade_code, sku, barcode, internal_code, price_cents, online_price_cents, cost_cents, quantity, online_visible${variantExtraCols}, product_barcodes(id, barcode, label))`,
+    `id, title, slug, platform, franchise, genre, description, image_url, alternative_names, tags, category_id${delProbeErr ? "" : ", deleted_at"}${pendCol}, category:categories(name,color)${srcProbeErr ? "" : ", product_suppliers(id, label, url)"}, product_variants(id, condition, completeness, completeness_code, grade_code, sku, barcode, internal_code, price_cents, online_price_cents, cost_cents, quantity, online_visible${variantExtraCols}${pendCol}, product_barcodes(id, barcode, label))`,
   )
   .order("title")
   .order("id")
   .range(from, to));
 
+const mapVariant = (v: any) => ({
+  id: v.id,
+  condition: v.condition,
+  completeness: v.completeness,
+  completenessCode: v.completeness_code ?? "",
+  gradeCode: v.grade_code ?? "",
+  sku: v.sku,
+  internalCode: v.internal_code ?? "",
+  labelCode: v.label_code ?? "",
+  priceCents: v.price_cents,
+  onlinePriceCents: v.online_price_cents,
+  costCents: v.cost_cents,
+  quantity: v.quantity,
+  onlineVisible: v.online_visible ?? false,
+  inventoryTypeId: v.inventory_type_id ?? "",
+  locationId: v.location_id ?? "",
+  pendingEntryId: v.pending_entry_id ?? "",
+  barcodes: [
+    ...(v.barcode ? [{ id: "primary:" + v.id, barcode: v.barcode, label: "Primary", primary: true }] : []),
+    ...(v.product_barcodes ?? []).map((b: any) => ({ id: b.id, barcode: b.barcode, label: b.label, primary: false })),
+  ],
+});
 const allRows = (products ?? []).map((p: any) => ({
   id: p.id,
   deletedAt: p.deleted_at ?? null,
+  pendingEntryId: p.pending_entry_id ?? "", // created by a draft that isn't finished yet
   title: p.title,
   slug: p.slug ?? "",
   platform: p.platform ?? "",
@@ -83,27 +111,9 @@ const allRows = (products ?? []).map((p: any) => ({
   ebayId: (p.tags ?? []).find((t: string) => t.startsWith("ebay:"))?.slice(5) ?? "",
   pcId: (p.tags ?? []).find((t: string) => t.startsWith("pricecharting:"))?.slice(13) ?? "",
   supplierLinks: p.product_suppliers ?? [], // manager-only via RLS (staff get [])
-  variants: (p.product_variants ?? []).map((v: any) => ({
-    id: v.id,
-    condition: v.condition,
-    completeness: v.completeness,
-    completenessCode: v.completeness_code ?? "",
-    gradeCode: v.grade_code ?? "",
-    sku: v.sku,
-    internalCode: v.internal_code ?? "",
-    labelCode: v.label_code ?? "",
-    priceCents: v.price_cents,
-    onlinePriceCents: v.online_price_cents,
-    costCents: v.cost_cents,
-    quantity: v.quantity,
-    onlineVisible: v.online_visible ?? false,
-    inventoryTypeId: v.inventory_type_id ?? "",
-    locationId: v.location_id ?? "",
-    barcodes: [
-      ...(v.barcode ? [{ id: "primary:" + v.id, barcode: v.barcode, label: "Primary", primary: true }] : []),
-      ...(v.product_barcodes ?? []).map((b: any) => ({ id: b.id, barcode: b.barcode, label: b.label, primary: false })),
-    ],
-  })),
+  // Live stock rows only; a draft's not-yet-finished rows sit apart.
+  variants: (p.product_variants ?? []).filter((v: any) => !v.pending_entry_id).map(mapVariant),
+  pendingVariants: (p.product_variants ?? []).filter((v: any) => v.pending_entry_id).map(mapVariant),
 }));
 const isManager = Astro.locals.can("inventory.manage");
 const items = allRows.filter((i) => !i.deletedAt);
@@ -169,6 +179,7 @@ const posData = {
           <div class="ti-suggest" id="ent-suggest" hidden></div>
         </div>
         <button id="ent-new" class="btn btn-ghost btn-sm" type="button">＋ New product</button>
+        <button id="ent-noninv" class="btn btn-ghost btn-sm" type="button" title="Something you paid for that isn't sold as stock — a bulk lot, parts, supplies. Recorded on the entry for the books; no stock, no label.">＋ Non-inventory</button>
         <button id="ent-import" class="btn btn-ghost btn-sm" type="button" title="Import a collection .csv — each row becomes a staged line (matched to existing listings when possible)">📄 Import CSV</button>
       </div>
       <div class="ent-bulk" id="ent-bulk" hidden>
@@ -475,6 +486,7 @@ const posData = {
   .ent-src input { width:13rem; padding:0.35rem 0.5rem; }
   .ent-recv input { width:auto; }
   #ent-table select { padding:0.3rem 0.35rem; font-size:0.84rem; max-width:11rem; }
+  #ent-table tr.ent-noninv td { background:rgba(255,255,255,.02); }
   .ent-ck { width:1.6rem; }
   .ent-bulk[hidden] { display:none; }
   .ent-bulk { display:flex; align-items:center; gap:0.8rem; flex-wrap:wrap; padding:0.55rem 0.7rem; margin-bottom:0.6rem; border:1px solid var(--cyan); background:rgba(44,230,224,.06); font-size:0.86rem; }
@@ -541,7 +553,21 @@ const posData = {
   /* ---------- Smart find-or-create (shared module: src/lib/smartSearch.ts) ---------- */
   const PLATFORMS = buildPlatforms(items.map((p) => p.platform));
   const parseQuery = (raw: string) => _parseQuery(raw, { completeness, grades, platforms: PLATFORMS });
-  const smartMatches = (parsed: any) => _smartMatches(items, parsed);
+  // A draft's not-yet-finished listings / stock rows are hidden everywhere but
+  // that draft's own screen (search, scanning, import matching, Finish).
+  const liveItems = () => items.filter((p: any) => !p.pendingEntryId);
+  const draftItems = () => items.filter((p: any) => !p.pendingEntryId || (entryId && p.pendingEntryId === entryId));
+  const draftVariants = (p: any) => [...p.variants, ...(p.pendingVariants || []).filter((v: any) => entryId && v.pendingEntryId === entryId)];
+  const everyVariant = (p: any) => [...p.variants, ...(p.pendingVariants || [])];
+  // The server discarded a removed line's hidden stock row / listing — forget them too.
+  const forgetDiscarded = (j: any) => {
+    if (j?.removedProductId) items = items.filter((p: any) => p.id !== j.removedProductId);
+    if (j?.removedVariantId) items.forEach((p: any) => {
+      p.variants = p.variants.filter((v: any) => v.id !== j.removedVariantId);
+      if (p.pendingVariants) p.pendingVariants = p.pendingVariants.filter((v: any) => v.id !== j.removedVariantId);
+    });
+  };
+  const smartMatches = (parsed: any, list: any[] = liveItems()) => _smartMatches(list, parsed);
   const complLabel = (code: string) => completeness.find((c) => c.code === code)?.label || code;
   const compAbbr = (code: string) => compAbbrev(code, completeness);
   const gradeLabel = (code: string) => { const g = grades.find((x) => x.code === code); return g ? (g.icon ? g.icon + " " : "") + g.label : code; };
@@ -722,14 +748,14 @@ const posData = {
     const rawQ = (state.q || "").trim();
     if (rawQ.length >= 2) {
       const Q = rawQ.toUpperCase();
-      const codeHits = items.filter((p) => p.variants.some((v: any) =>
+      const codeHits = liveItems().filter((p) => p.variants.some((v: any) =>
         (v.sku && v.sku.toUpperCase().includes(Q)) ||
         (v.internalCode && v.internalCode === Q) ||
         (v.labelCode && v.labelCode === rawQ) ||
         (v.barcodes || []).some((b: any) => barcodeEq(b.barcode, rawQ))));
       if (codeHits.length) return codeHits.sort((a, b) => a.title.localeCompare(b.title));
     }
-    let list = items.filter((p) => {
+    let list = liveItems().filter((p) => {
       if (state.cat && p.categoryId !== state.cat) return false;
       if (state.instock && totalQty(p) <= 0) return false;
       if (state.web && !anyWeb(p)) return false;
@@ -772,7 +798,7 @@ const posData = {
       });
     });
     // Live count on the "needs attention" chip.
-    const attn = items.filter((p) => issues(p).length).length;
+    const attn = liveItems().filter((p) => issues(p).length).length;
     const chip = document.getElementById("attn-chip");
     if (chip) chip.textContent = `⚠ Needs attention${attn ? ` (${attn})` : ""}`;
     updateBulkBar();
@@ -1292,22 +1318,25 @@ const posData = {
   // Move a staged line to another completeness / grade (server picks or makes
   // the matching stock row on the same listing), then mirror it locally.
   async function setLineCondition(r: any, comp: string, grade: string) {
+    if (r.kind === "non_inventory") return;
     if ((r.completenessCode || "") === comp && (r.gradeCode || "") === grade) return;
     const condition = [completeness.find((c) => c.code === comp)?.label, grades.find((g) => g.code === grade)?.label].filter(Boolean).join(" ") || "Used";
     const j = await api({ action: "setEntryLineCondition", itemId: r.itemId, completenessCode: comp, gradeCode: grade, condition });
-    const p: any = items.find((x) => x.id === j.productId) || items.find((x) => x.variants.some((v: any) => v.id === r.variantId));
+    const p: any = items.find((x) => x.id === j.productId) || items.find((x) => everyVariant(x).some((v: any) => v.id === r.variantId));
     if (!p) return;
-    const src = p.variants.find((v: any) => v.id === r.variantId);
+    p.pendingVariants ||= [];
+    const src = everyVariant(p).find((v: any) => v.id === r.variantId);
     if (j.mode === "renamed" && src) Object.assign(src, { completenessCode: comp, gradeCode: grade, condition });
     // Mirror exactly what the server did (no SKU / web flag / cost copied from the old row).
-    let dest = p.variants.find((v: any) => v.id === j.variantId);
+    let dest = everyVariant(p).find((v: any) => v.id === j.variantId);
     if (!dest && (j.mode === "created" || j.mode === "moved")) {
       dest = {
         id: j.variantId, condition, completeness: null, completenessCode: comp, gradeCode: grade, sku: null,
         internalCode: j.internalCode || "", labelCode: "", priceCents: j.priceCents ?? 0, onlinePriceCents: null, costCents: null,
         quantity: 0, onlineVisible: false, inventoryTypeId: src?.inventoryTypeId || retailTypeId, locationId: src?.locationId || "", barcodes: [],
+        pendingEntryId: j.mode === "created" ? entryId : "", // a row made for a draft stays hidden until Finish
       };
-      p.variants.push(dest);
+      (j.mode === "created" ? p.pendingVariants : p.variants).push(dest);
     }
     if (dest && j.removedVariantId) {
       // Barcodes the server moved onto the destination row.
@@ -1315,7 +1344,10 @@ const posData = {
       if (j.primaryBarcode && !have.has(j.primaryBarcode)) { dest.barcodes.unshift({ id: "primary:" + dest.id, barcode: j.primaryBarcode, label: "Primary", primary: true }); have.add(j.primaryBarcode); }
       for (const b of (src?.barcodes || [])) if (!b.primary && (j.movedBarcodes || []).includes(b.barcode) && !have.has(b.barcode)) dest.barcodes.push(b);
     }
-    if (j.removedVariantId) p.variants = p.variants.filter((v: any) => v.id !== j.removedVariantId);
+    if (j.removedVariantId) {
+      p.variants = p.variants.filter((v: any) => v.id !== j.removedVariantId);
+      p.pendingVariants = p.pendingVariants.filter((v: any) => v.id !== j.removedVariantId);
+    }
   }
   let entOrderTotal: number | null = null;
   let entSupplier = ""; // entry-level source (per-line placeholder default)
@@ -1350,10 +1382,13 @@ const posData = {
   };
 
   function entTotals() {
-    const units = entRows.reduce((s, r) => s + r.qty, 0);
-    const retail = entRows.reduce((s, r) => s + r.priceCents * r.qty, 0);
+    const stock = entRows.filter((r) => r.kind !== "non_inventory");
+    const units = stock.reduce((s, r) => s + r.qty, 0);
+    const retail = stock.reduce((s, r) => s + r.priceCents * r.qty, 0);
+    // Paid covers EVERYTHING bought on this entry, incl. non-inventory lines.
     const paid = entRows.reduce((s, r) => s + (r.costCents ?? 0) * r.qty, 0);
-    $("ent-count").textContent = String(entRows.length);
+    const nonInv = entRows.length - stock.length;
+    $("ent-count").textContent = String(entRows.length) + (nonInv ? ` (${nonInv} non-inventory)` : "");
     $("ent-units").textContent = String(units);
     $("ent-retail").textContent = money(retail);
     $("ent-paid").textContent = money(paid);
@@ -1369,7 +1404,17 @@ const posData = {
 
   function renderEnt() {
     const body = $("ent-body");
-    body.innerHTML = entRows.length ? entRows.map((r) => `
+    body.innerHTML = entRows.length ? entRows.map((r) => r.kind === "non_inventory" ? `
+      <tr data-item="${r.itemId}" class="ent-noninv">
+        <td class="ent-ck"><input type="checkbox" data-esel aria-label="Select line"${entSel.has(r.itemId) ? " checked" : ""} /></td>
+        <td><strong>${esc(r.title)}</strong> <span class="pill" style="font-size:0.66rem;" title="Recorded for the books (what you paid) — no stock, no label">🧾 non-inventory</span></td>
+        <td colspan="2" class="muted" style="font-size:0.8rem;">no stock · no label</td>
+        <td class="num"><input data-ef="qty" type="number" min="1" value="${r.qty}"></td>
+        <td class="num"><input data-ef="cost" type="number" min="0" step="0.01" value="${r.costCents == null ? "" : (r.costCents / 100).toFixed(2)}" placeholder="—"></td>
+        <td class="num muted">—</td>
+        <td></td>
+        <td><button class="link-btn" data-erm title="Remove line">✕</button></td>
+      </tr>` : `
       <tr data-item="${r.itemId}">
         <td class="ent-ck"><input type="checkbox" data-esel aria-label="Select line"${entSel.has(r.itemId) ? " checked" : ""} /></td>
         <td><strong>${esc(r.title)}</strong>${r.platform ? ` <span class="ti-sug-meta">${esc(r.platform)}</span>` : ""}${r.wasNew ? ` <span class="pill cyan" style="font-size:0.66rem;">new</span>` : ""}</td>
@@ -1399,11 +1444,11 @@ const posData = {
         entTotals();
         try { await api({ action: "updateEntryItem", itemId: r.itemId, unitCostCents: r.costCents }); } catch (err: any) { alert(err.message); }
       });
-      tr.querySelector<HTMLInputElement>('[data-ef="price"]')!.addEventListener("change", async (e) => {
+      tr.querySelector<HTMLInputElement>('[data-ef="price"]')?.addEventListener("change", async (e) => {
         r.priceCents = toCents((e.target as HTMLInputElement).value);
         entTotals();
         // Price edits are LIVE variant edits (labels print this price).
-        const lv = items.flatMap((p) => p.variants).find((x: any) => x.id === r.variantId);
+        const lv = items.flatMap(everyVariant).find((x: any) => x.id === r.variantId);
         if (lv) lv.priceCents = r.priceCents;
         try { await api({ action: "updateVariant", id: r.variantId, priceCents: r.priceCents }); } catch (err: any) { alert(err.message); }
       });
@@ -1420,11 +1465,11 @@ const posData = {
         finally { entBusyStep(-1); }
         await loadEntry(entryId); renderEnt();
       };
-      tr.querySelector<HTMLSelectElement>('[data-ef="comp"]')!.addEventListener("change", onCond);
-      tr.querySelector<HTMLSelectElement>('[data-ef="grade"]')!.addEventListener("change", onCond);
+      tr.querySelector<HTMLSelectElement>('[data-ef="comp"]')?.addEventListener("change", onCond);
+      tr.querySelector<HTMLSelectElement>('[data-ef="grade"]')?.addEventListener("change", onCond);
       tr.querySelector("[data-erm]")!.addEventListener("click", async () => {
         try {
-          await api({ action: "removeEntryItem", itemId: r.itemId });
+          forgetDiscarded(await api({ action: "removeEntryItem", itemId: r.itemId }));
           entRows = entRows.filter((x) => x.itemId !== r.itemId);
           renderEnt();
         } catch (err: any) { alert(err.message); }
@@ -1448,7 +1493,16 @@ const posData = {
       if (recvInp) recvInp.value = j.entry.received_on || "";
       entRows = (j.items || []).map((it: any) => {
         const v = it.variant || {}; const pr = v.product || {};
+        if (it.kind === "non_inventory") {
+          // Bought for the books only (bulk lot…): no stock row, no price, no label.
+          return {
+            itemId: it.id, variantId: null, kind: "non_inventory", qty: it.qty_added, costCents: it.unit_cost_cents,
+            priceCents: 0, wasNew: false, supplier: it.supplier ?? null, title: it.description || "Non-inventory item",
+            platform: "", cond: "", completenessCode: "", gradeCode: "",
+          };
+        }
         return {
+          kind: "stock",
           itemId: it.id, variantId: v.id, qty: it.qty_added, costCents: it.unit_cost_cents,
           priceCents: v.price_cents ?? 0, wasNew: it.was_new_variant, supplier: it.supplier ?? null,
           title: pr.title ?? "?", platform: pr.platform || pr.category?.name || "",
@@ -1485,7 +1539,7 @@ const posData = {
     describe: (code: string) => {
       const q = code.trim();
       if (!q) return null;
-      const flat = items.flatMap((p) => p.variants.map((v: any) => ({ p, v })));
+      const flat = (entryMode ? draftItems() : liveItems()).flatMap((p) => (entryMode ? draftVariants(p) : p.variants).map((v: any) => ({ p, v })));
       let hit = flat.find(({ v }: any) =>
         (v.barcodes || []).some((b: any) => barcodeEq(b.barcode, q)) || (v.labelCode && v.labelCode === q) || (v.internalCode && v.internalCode === q.toUpperCase()));
       if (!hit) {
@@ -1510,7 +1564,11 @@ const posData = {
     const n = entRows.length;
     if (!confirm(`Delete draft Entry #${entryHuman}?\n\n${n} staged line${n === 1 ? "" : "s"} will be discarded. Nothing was added to stock, so nothing else changes.`)) return;
     try {
+      const gone = entryId;
       await api({ action: "deleteEntry", entryId });
+      // The server discarded the draft's unused hidden listings / stock rows.
+      items = items.filter((p: any) => p.pendingEntryId !== gone);
+      items.forEach((p: any) => { if (p.pendingVariants) p.pendingVariants = p.pendingVariants.filter((v: any) => v.pendingEntryId !== gone); });
       toast(`🗑 Draft deleted`);
       clearEntry();
     } catch (e: any) { alert(e.message); }
@@ -1538,8 +1596,8 @@ const posData = {
     const comp = ($("ent-bulk-comp") as HTMLSelectElement).value, grade = ($("ent-bulk-grade") as HTMLSelectElement).value;
     if (comp === "__keep" && grade === "__keep") { alert("Pick a condition and/or grade to apply."); return; }
     const btn = $("ent-bulk-apply") as HTMLButtonElement;
-    const todo = entRows.filter((r) => entSel.has(r.itemId));
-    if (!todo.length) return;
+    const todo = entRows.filter((r) => entSel.has(r.itemId) && r.kind !== "non_inventory");
+    if (!todo.length) { alert("None of the selected lines have a condition (non-inventory lines don't)."); return; }
     btn.disabled = true;
     entBusyStep(1);
     const errors: string[] = [];
@@ -1568,7 +1626,7 @@ const posData = {
       for (let i = 0; i < todo.length; i++) {
         const r = todo[i];
         btn.textContent = `Removing ${i + 1}/${todo.length}…`;
-        try { await api({ action: "removeEntryItem", itemId: r.itemId }); entRows = entRows.filter((x) => x.itemId !== r.itemId); }
+        try { forgetDiscarded(await api({ action: "removeEntryItem", itemId: r.itemId })); entRows = entRows.filter((x) => x.itemId !== r.itemId); }
         catch (err: any) { errors.push(`${r.title}: ${err.message}`); }
       }
     } finally { entBusyStep(-1); btn.textContent = label; }
@@ -1612,7 +1670,7 @@ const posData = {
     const box = $("ent-suggest") as HTMLElement;
     const q = entSearch.value.trim();
     if (q.length < 2) { box.hidden = true; return; }
-    const flat = items.flatMap((p) => p.variants.map((v: any) => ({ p, v })));
+    const flat = draftItems().flatMap((p) => draftVariants(p).map((v: any) => ({ p, v })));
     const hit = flat.find(({ v }: any) =>
       (v.barcodes || []).some((b: any) => barcodeEq(b.barcode, q)) || (v.labelCode && v.labelCode === q) || (v.internalCode && v.internalCode === q.toUpperCase()));
     if (hit) { entSearch.value = ""; box.hidden = true; stageVariant(hit.p, hit.v); return; }
@@ -1620,9 +1678,9 @@ const posData = {
     const skuExact = flat.filter(({ v }: any) => v.sku && v.sku.toUpperCase() === q.toUpperCase());
     if (skuExact.length === 1) { entSearch.value = ""; box.hidden = true; stageVariant(skuExact[0].p, skuExact[0].v); return; }
     const parsed = parseQuery(q);
-    const matches = smartMatches(parsed).slice(0, 5);
+    const matches = smartMatches(parsed, draftItems()).slice(0, 5);
     let opts = matches.flatMap((m: any) => {
-      const vs = [...m.p.variants].sort((a: any, b: any) =>
+      const vs = draftVariants(m.p).sort((a: any, b: any) =>
         (b.completenessCode === parsed.completenessCode ? 1 : 0) - (a.completenessCode === parsed.completenessCode ? 1 : 0));
       return vs.map((v: any) => ({ p: m.p, v }));
     }).slice(0, 8);
@@ -1638,6 +1696,9 @@ const posData = {
         <span class="ti-sug-price">${money(o.v.priceCents)}</span>
       </div>`).join("") + `
       <div class="ti-sug" data-new><span class="ti-sug-title">＋ New product “${esc(q)}”</span><span class="ti-sug-meta">create &amp; stage</span></div>`;
+    // "bulk …" / "lot of …" reads as a non-inventory purchase: offer it first.
+    if (/\b(bulk|lot)\b/i.test(q)) box.innerHTML = `
+      <div class="ti-sug" data-noninv><span class="ti-sug-title">🧾 Add “${esc(q)}” as non-inventory</span><span class="ti-sug-meta">recorded for the books · no stock</span></div>` + box.innerHTML;
     box.hidden = false;
     box.querySelectorAll<HTMLElement>("[data-i]").forEach((el) => el.addEventListener("mousedown", (e) => {
       e.preventDefault();
@@ -1646,7 +1707,26 @@ const posData = {
       stageVariant(o.p, o.v);
     }));
     box.querySelector("[data-new]")?.addEventListener("mousedown", (e) => { e.preventDefault(); box.hidden = true; entNewProduct(q); });
+    box.querySelector("[data-noninv]")?.addEventListener("mousedown", (e) => { e.preventDefault(); box.hidden = true; entSearch.value = ""; entAddNonInventory(q); });
   }
+  // A bulk lot / parts / supplies bought on this entry: what was paid, no stock.
+  async function entAddNonInventory(desc0 = "") {
+    try { await ensureEntry(); setEntryMode(true); } catch (e: any) { alert(e.message); return; }
+    const desc = (prompt("Non-inventory item — describe it (e.g. “DS loose games, bulk grade B”):", desc0 || "Bulk lot") || "").trim();
+    if (!desc) return;
+    const rawTotal = prompt(`What did you pay in TOTAL for “${desc}” ($)? Leave empty if unknown.`, "");
+    if (rawTotal === null) return;
+    const total = rawTotal.trim() === "" ? null : toCents(rawTotal.replace(/[^0-9.]/g, ""));
+    // One line at the exact total (a lot's count stays in its description) —
+    // splitting $100 over 3 would record $99.99.
+    try {
+      const j = await api({ action: "addNonInventoryLine", entryId, description: desc, qty: 1, unitCostCents: total });
+      entRows.push({ itemId: j.itemId, variantId: null, kind: "non_inventory", qty: 1, costCents: total, priceCents: 0, wasNew: false, supplier: null, title: desc, platform: "", cond: "", completenessCode: "", gradeCode: "" });
+      renderEnt();
+      toast(`🧾 Added “${desc}” (non-inventory)`);
+    } catch (e: any) { alert(e.message); }
+  }
+  $("ent-noninv")?.addEventListener("click", () => entAddNonInventory(entSearch.value.trim()));
   entSearch?.addEventListener("input", entSuggest);
   entSearch?.addEventListener("blur", () => setTimeout(() => { ($("ent-suggest") as HTMLElement).hidden = true; }, 150));
   $("ent-new")?.addEventListener("click", () => entNewProduct(entSearch.value.trim()));
@@ -1667,10 +1747,10 @@ const posData = {
      condition → same variant; other condition → new variant on that listing;
      no listing → new product) and STAGED onto the draft in batches. Nothing
      applies to stock until Finish, exactly like typed/scanned lines. */
-  const importCatalog = () => items.map((p: any) => ({
+  const importCatalog = () => draftItems().map((p: any) => ({
     id: p.id, title: p.title, platform: p.platform || "", franchise: p.franchise || "", altNames: p.altNames || [],
     categoryId: p.categoryId, pcId: p.pcId || "",
-    variants: (p.variants || []).map((v: any) => ({
+    variants: draftVariants(p).map((v: any) => ({
       id: v.id, completenessCode: v.completenessCode || "", gradeCode: v.gradeCode || "", priceCents: v.priceCents || 0,
       quantity: v.quantity, barcodes: (v.barcodes || []).map((b: any) => b.barcode),
       inventoryTypeId: v.inventoryTypeId || retailTypeId || "",
@@ -1680,6 +1760,7 @@ const posData = {
     id: res.variantId, condition: p.condition, completeness: null, completenessCode: p.completenessCode, gradeCode: p.gradeCode,
     sku: null, internalCode: res.internalCode || "", labelCode: "", priceCents: p.priceCents, onlinePriceCents: null, costCents: null,
     quantity: 0, onlineVisible: false, inventoryTypeId: p.inventoryTypeId || retailTypeId, locationId: "",
+    pendingEntryId: entryId, // hidden until this draft is finished
     barcodes: p.barcode ? [{ id: "primary:" + res.variantId, barcode: p.barcode, label: "Primary", primary: true }] : [],
   });
   async function enrichInBackground(list: any[]) {
@@ -1731,6 +1812,9 @@ const posData = {
             qty: r.row.qty, costCents: r.row.costCents, tagPcId: r.row.pcId && !(r.product && r.product.pcId) ? r.row.pcId : undefined,
             importKey: keyFor(r),
           };
+          // Bulk lot etc.: recorded on the entry (what was paid) — no listing, no stock.
+          // One line at the sheet's total (cost × qty) so the books match what was paid.
+          if (r.nonInventory) return { kind: "nonInventory", description: `${r.row.title}${r.row.platform ? ` (${r.row.platform})` : ""}${r.row.qty > 1 ? ` ×${r.row.qty}` : ""}`, ...base, qty: 1, costCents: r.row.costCents == null ? null : r.row.costCents * r.row.qty };
           if (r.product && r.variant) return { kind: "variant", variantId: r.variant.id, productId: r.product.id, ...base };
           const v = { completenessCode: r.row.completenessCode, gradeCode: r.row.gradeCode, condition: condText(r), priceCents: priceOf(r), barcode: r.row.upc || null, inventoryTypeId: ch.inventoryTypeId || undefined };
           if (r.product) return { kind: "newVariant", productId: r.product.id, ...v, ...base };
@@ -1779,14 +1863,15 @@ const posData = {
               id: res.productId, title: r.row.title, slug: res.slug || r.row.title.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""),
               platform: r.row.platform, franchise: "", genre: "", description: "", imageUrl: "", altNames: [], categoryId: p.categoryId,
               categoryName: cat?.name ?? "", categoryColor: cat?.color ?? "#2ce6e0", ebayId: "", pcId: r.row.pcId || "", supplierLinks: [],
-              variants: [mkImportedVariant(res, p)],
+              // Hidden from the grid until this draft is finished.
+              pendingEntryId: entryId, variants: [], pendingVariants: [mkImportedVariant(res, p)],
             };
             items.push(np); newProducts.push(np);
           } else {
             const lp = items.find((x) => x.id === res.productId);
             // Only a row that CREATED the condition carries its fields — and a
             // replay of one the grid already shows must not add it twice.
-            if (lp && res.newVariant && p.kind !== "variant" && !lp.variants.some((x: any) => x.id === res.variantId)) lp.variants.push(mkImportedVariant(res, p));
+            if (lp && res.newVariant && p.kind !== "variant" && !everyVariant(lp).some((x: any) => x.id === res.variantId)) (lp.pendingVariants ||= []).push(mkImportedVariant(res, p));
             if (lp && p.tagPcId) lp.pcId = p.tagPcId;
           }
         });
@@ -1854,8 +1939,17 @@ const posData = {
       });
       // Reflect the now-applied quantities in the grid data.
       (j.items || []).forEach((it: any) => {
-        const lv = items.flatMap((p) => p.variants).find((x: any) => x.id === it.variant?.id);
+        const lv = items.flatMap(everyVariant).find((x: any) => x.id === it.variant?.id);
         if (lv && it.variant) lv.quantity = it.variant.quantity;
+      });
+      // Finish published this draft's hidden listings / stock rows — show them.
+      const done = entryId;
+      const touched = new Set((j.items || []).map((it: any) => it.variant?.id).filter(Boolean));
+      items.forEach((p: any) => {
+        const pv: any[] = p.pendingVariants || [];
+        const live = pv.filter((v) => v.pendingEntryId === done || touched.has(v.id));
+        if (live.length) { live.forEach((v) => (v.pendingEntryId = "")); p.variants.push(...live); p.pendingVariants = pv.filter((v) => !live.includes(v)); }
+        if (p.pendingEntryId && (p.pendingEntryId === done || p.variants.some((v: any) => touched.has(v.id)))) p.pendingEntryId = "";
       });
       const finished = entryHuman;
       clearEntry();
@@ -1888,7 +1982,7 @@ const posData = {
   // Manager-only: fetch covers for items that have no image. Additive only —
   // never overwrites or deletes (the enrich endpoint fills empty fields only).
   document.getElementById("resync-img")?.addEventListener("click", async () => {
-    const pending = items.filter((p) => !p.imageUrl);
+    const pending = liveItems().filter((p) => !p.imageUrl);
     if (!pending.length) { toast("All items already have images"); return; }
     if (!confirm(`Fetch covers for ${pending.length} item(s) with no image? This only fills empty listings — nothing is overwritten or deleted.`)) return;
     const btn = document.getElementById("resync-img") as HTMLButtonElement;
@@ -1941,8 +2035,12 @@ const posData = {
           itemId: j.itemId, variantId: j.variantId, qty: body.quantity || 1, costCents: null,
           priceCents: body.priceCents, wasNew: true, supplier: null, title: newItem.title,
           platform: newItem.platform || newItem.categoryName || "", cond: condLabel(newItem.variants[0]),
-          completenessCode: comp || "", gradeCode: grade || "",
+          completenessCode: comp || "", gradeCode: grade || "", kind: "stock",
         });
+        // A listing made on the draft screen is hidden until the draft is finished.
+        newItem.pendingEntryId = entryId;
+        newItem.pendingVariants = newItem.variants.map((v: any) => ({ ...v, pendingEntryId: entryId }));
+        newItem.variants = [];
         renderEnt();
         ($("ent-search") as HTMLInputElement).value = "";
       }

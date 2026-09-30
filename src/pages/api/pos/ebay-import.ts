@@ -135,11 +135,16 @@ export const POST: APIRoute = async ({ locals, request }) => {
     // -- UPC backfill step 1: variants missing a UPC barcode ----------------
     if (mode === "upc-list") {
       if (!isManager) return json({ error: "Managers only" }, 403);
-      const { data } = await fetchAll((from, to) => admin.from("product_variants")
-        .select("id, product:products(title, platform), product_barcodes(label)")
+      let { data, error: lErr }: { data: any[]; error: any } = await fetchAll((from, to) => admin.from("product_variants")
+        .select("id, pending_entry_id, product:products(title, platform, pending_entry_id), product_barcodes(label)")
         .order("id")
         .range(from, to));
+      if (lErr) ({ data } = await fetchAll((from, to) => admin.from("product_variants")
+        .select("id, product:products(title, platform), product_barcodes(label)")
+        .order("id")
+        .range(from, to)));
       const todo = (data || [])
+        .filter((v: any) => !v.pending_entry_id && !v.product?.pending_entry_id) // not a draft's unfinished rows
         .filter((v: any) => !(v.product_barcodes || []).some((bc: any) => bc.label === "UPC"))
         .map((v: any) => ({ variantId: v.id, title: v.product?.title, platform: v.product?.platform }))
         .filter((v: any) => v.title);

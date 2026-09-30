@@ -11,12 +11,22 @@ export const GET: APIRoute = async ({ locals }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
   // Soft-deleted products don't need attention (fallback covers pre-migration DBs).
   // Paged — one request stops at 1,000 listings.
-  let res = await fetchAll((from, to) => locals.supabase
+  // A draft's not-yet-finished listings (migration 20260930000001) aren't counted.
+  let res: { data: any[]; error: any } = await fetchAll((from, to) => locals.supabase
     .from("products")
-    .select("id, image_url, description, product_variants(completeness_code)")
+    .select("id, image_url, description, product_variants(completeness_code, pending_entry_id)")
     .is("deleted_at", null)
+    .is("pending_entry_id", null)
     .order("id")
     .range(from, to));
+  if (res.error) {
+    res = await fetchAll((from, to) => locals.supabase
+      .from("products")
+      .select("id, image_url, description, product_variants(completeness_code)")
+      .is("deleted_at", null)
+      .order("id")
+      .range(from, to));
+  }
   if (res.error) {
     res = await fetchAll((from, to) => locals.supabase
       .from("products")
@@ -29,7 +39,8 @@ export const GET: APIRoute = async ({ locals }) => {
   for (const p of res.data ?? []) {
     const noImage = !p.image_url;
     const noDesc = !p.description;
-    const noCond = (p.product_variants ?? []).some((v: any) => !v.completeness_code);
+    // A draft's not-yet-finished stock rows don't count (same as the grid).
+    const noCond = (p.product_variants ?? []).some((v: any) => !v.pending_entry_id && !v.completeness_code);
     if (noImage || noDesc || noCond) count++;
   }
   return json({ ok: true, count });
