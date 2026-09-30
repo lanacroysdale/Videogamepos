@@ -499,9 +499,18 @@ export function officialTitleFor(original: string, candidate: { name: string; si
   // hardware set ("Wii ZAPPER with …"), a ROM hack ("Pokémon Red RUMOR",
   // "Pokémon MOON Emerald", "FAKEMON FireRed"), a series entry ("…: Mini-Land
   // Mayhem!") or one game of a trilogy.
-  const sig = (w: string) => w.length >= 3 && !STOP_WORDS.has(w);
-  if (!ow.filter(sig).every((w) => nearWord(w, nw, nj))) return null;
-  if (!nw.filter(sig).every((w) => ADDABLE_WORDS.has(w) || nearWord(w, ow, oj))) return null;
+  // Two-letter words count too: "Ms. Pac-Man" isn't "Pac-Man", "Donkey Kong
+  // Jr." isn't "Donkey Kong", "Mega Man ZX" isn't "Mega Man".
+  const sig = (w: string) => !STOP_WORDS.has(w) && (w.length >= 3 || (w.length === 2 && !/^\d+$/.test(w)));
+  // (A sheet may end with the platform the official name leaves out: "Sonic
+  // Color DS" → "Sonic Colors".)
+  if (!ow.every((w, i) => !sig(w) || near(ow, i, nw, nj) || (PLATFORM_WORDS.has(w) && closingAt(ow, i, ow.length)))) return null;
+  // Words the official name adds are allowed only in their usual place, never
+  // in a subtitle: "Tomb Raider" isn't "Tomb Raider: Legend".
+  const head = official.match(/^(.*)(?::|\s[-–—]\s)/);
+  const subStart = head ? norm(head[1]).split(" ").filter(Boolean).length : nw.length;
+  const specific = ow.filter((w) => w.length >= 3 && !STOP_WORDS.has(w) && !numbers(w)).length >= 3;
+  if (!nw.every((w, i) => !sig(w) || near(nw, i, ow, oj) || (i < subStart && addableAt(nw, i, subStart, specific)))) return null;
   // A word the sheet repeats must repeat in the official name too:
   // "Mario Party 10 MARIO [amiibo Bundle]" names which amiibo it comes with.
   const count = (ws: string[], w: string) => ws.filter((x) => x === w).length;
@@ -511,6 +520,13 @@ export function officialTitleFor(original: string, candidate: { name: string; si
   if (o === n && /\b[A-Z]{3,}\b/.test(official.replace(/\b(HD|DX|3D|DS|GBA|NES|SNES|USA|VR|II|III|IV|VI|VII|VIII|XL)\b/g, "")) && !/\b[A-Z]{3,}\b/.test(bareOrig)) return null;
   const fixed = `${official}${quals ? " " + quals : ""}`;
   return fixed === original.trim() ? null : fixed;
+}
+/** Is word `i` of `ws` in the other title? Two-letter words must match
+ *  exactly, or joined with a neighbor ("Yo-kai" ~ "Yokai"). */
+function near(ws: string[], i: number, other: string[], otherJoined: string): boolean {
+  const w = ws[i];
+  if (w.length > 2) return nearWord(w, other, otherJoined);
+  return other.includes(w) || other.includes(w + (ws[i + 1] ?? "")) || other.includes((ws[i - 1] ?? "") + w);
 }
 /** Is `w` (from one title) present in the other title's words — allowing a
  *  typo ("aweakening" ~ "awakening", "robot" ~ "robobot") or a joined word
@@ -542,13 +558,32 @@ function editDistance(a: string, b: string, cap: number): number {
   }
   return prev[b.length];
 }
-// Words an official title may ADD without making it a different product:
-// "… Version" (Pokémon), "The Legend of Zelda", "Super Mario Party Jamboree",
-// "Donkey Kong Country Returns", "Olympic Games", and platform names
-// ("Super Smash Bros. for Wii U").
-const ADDABLE_WORDS = new Set(["version", "legend", "super", "country", "games", "game", "nintendo", "wii", "switch", "3ds", "gamecube", "playstation", "xbox", "sega", "sony", "microsoft"]);
+// Words an official title may ADD without making it a different product —
+// each only in its usual place (before any subtitle):
+// - "The Legend of …" up front ("Zelda Links Awakening" → "The Legend of Zelda: …");
+// - a closing "Version" / "Game(s)" ("Pokémon Red Version", "… Olympic Games");
+// - platform names up front or at the end ("Wii Sports Resort", "Mario Kart
+//   DS", "Super Smash Bros. for Wii U");
+// - a leading "Super" and Donkey Kong's "Country" — only when the sheet title
+//   is specific (3+ distinctive words: "Mario Party Jamboree", "Donkey Kong
+//   Returns"). A short one may be another real game: "Street Fighter II" isn't
+//   "Super Street Fighter II", "Donkey Kong" isn't "Donkey Kong Country".
+function addableAt(nw: string[], i: number, end: number, specific: boolean): boolean {
+  const w = nw[i];
+  if (w === "legend") return nw[i + 1] === "of" && (i === 0 || (i === 1 && nw[0] === "the"));
+  if (w === "super") return i === 0 && specific;
+  if (w === "country") return specific && nw[i - 2] === "donkey" && nw[i - 1] === "kong";
+  if (CLOSING_WORDS.has(w)) return closingAt(nw, i, end);
+  if (PLATFORM_WORDS.has(w)) return i === 0 || closingAt(nw, i, end);
+  return false;
+}
+/** Only closing words (Version / Game / platform names) follow word `i`. */
+const closingAt = (ws: string[], i: number, end: number) =>
+  ws.slice(i + 1, end).every((x) => x.length < 2 || CLOSING_WORDS.has(x) || PLATFORM_WORDS.has(x));
+const CLOSING_WORDS = new Set(["version", "game", "games"]);
+const PLATFORM_WORDS = new Set(["nintendo", "wii", "switch", "ds", "3ds", "gba", "gbc", "gamecube", "playstation", "xbox", "sega", "sony", "microsoft"]);
 const EDITION_WORDS = new Set(["edition", "deluxe", "complete", "legendary", "definitive", "ultimate", "remastered", "remaster", "anniversary", "collectors", "collector", "limited", "special", "goty", "hd", "dx", "3d", "gold", "platinum", "reloaded"]);
-const STOP_WORDS = new Set(["the", "and", "for", "of", "a", "an", "in", "on", "to"]);
+const STOP_WORDS = new Set(["the", "and", "for", "of", "a", "an", "in", "on", "to", "at", "by", "or"]);
 
 interface Prepared {
   product: CatalogProduct;

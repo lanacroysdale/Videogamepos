@@ -342,12 +342,12 @@ export function openImportDialog(o: ImportDialogOpts) {
   async function lookupOfficialTitles(rows: ImportRow[]) {
     if (fixInFlight) return;
     fixInFlight = true;
-    { const go = $("tli-go") as HTMLButtonElement; go.disabled = true; go.textContent = "Checking titles…"; }
+    if (useOfficial) { const go = $("tli-go") as HTMLButtonElement; go.disabled = true; go.textContent = "Checking titles…"; }
     const uniq = [...new Map(rows.map((r) => [fixKey(r), r])).values()];
     try {
       for (let i = 0; i < uniq.length; i += 200) {
         const chunk = uniq.slice(i, i + 200);
-        $("tli-sum").textContent = `Checking titles against the game database… ${Math.min(i + 200, uniq.length)}/${uniq.length}`;
+        if (useOfficial) $("tli-sum").textContent = `Checking titles against the game database… ${Math.min(i + 200, uniq.length)}/${uniq.length}`;
         let results: any[] = [];
         try {
           const r = await fetch("/api/pos/title-fix", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ items: chunk.map((x) => ({ title: x.title, platform: x.platform })) }) });
@@ -472,9 +472,11 @@ export function openImportDialog(o: ImportDialogOpts) {
     $("tli-sum").innerHTML = live.length
       ? `<strong>${live.length}</strong> lines · <strong>${n.units}</strong> units — <strong>${n.ex}</strong> existing · <strong>${n.cond}</strong> new conditions · <strong>${n.nw + n.rev}</strong> new listings${n.rev ? ` (<strong style="color:var(--magenta)">${n.rev}</strong> need review)` : ""}${n.ni ? ` · <strong>${n.ni}</strong> non-inventory (recorded, no stock)` : ""}${live.some((r) => r.row.titleFrom) ? ` · ✎ <strong>${live.filter((r) => r.row.titleFrom).length}</strong> title${live.filter((r) => r.row.titleFrom).length === 1 ? "" : "s"} corrected` : ""}${nopl ? ` · <span class="warn">${nopl} without a platform</span>` : ""}${totals ? ` · <span class="tli-muted">${totals} totals row${totals === 1 ? "" : "s"} skipped</span>` : ""}`
       : (resolved.length ? "Every row is skipped." : "Choose a file to begin.");
-    // Wait for the official-title check — importing now would keep the typos.
-    ($("tli-go") as HTMLButtonElement).disabled = !live.length || busy || fixInFlight;
-    $("tli-go").textContent = fixInFlight ? "Checking titles…" : live.length ? `Import ${live.length} line${live.length === 1 ? "" : "s"}` : "Import";
+    // Wait for the official-title check — importing now would keep the typos
+    // (unless official titles are switched off).
+    const waiting = useOfficial && fixInFlight;
+    ($("tli-go") as HTMLButtonElement).disabled = !live.length || busy || waiting;
+    $("tli-go").textContent = waiting ? "Checking titles…" : live.length ? `Import ${live.length} line${live.length === 1 ? "" : "s"}` : "Import";
   }
 
   $("tli-go").addEventListener("click", async () => {
