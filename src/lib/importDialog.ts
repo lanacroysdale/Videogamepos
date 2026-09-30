@@ -321,7 +321,7 @@ export function openImportDialog(o: ImportDialogOpts) {
       const isNewListing = match.status === "new-product" || match.status === "review";
       if (useOfficial && isNewListing && !row.kind && !row.lot && !keepSheet.has(row.n)) {
         if (!titleFix.has(fixKey(row))) wanted.push(row);
-        const fixed = officialTitleFor(row.title, titleFix.get(fixKey(row)));
+        const fixed = officialTitleFor(row.title, titleFix.get(fixKey(row)), row.platform);
         if (fixed) {
           row = { ...row, title: fixed, titleFrom: row.title };
           match = matchRow(row, prepared, o.platforms, typeFilter());

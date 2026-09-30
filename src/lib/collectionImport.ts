@@ -9,7 +9,7 @@
 //   • no listing                               → a NEW PRODUCT
 // so a loose and a CIB copy of the same game land on one listing.
 
-import { PLATFORM_ALIASES, resolveStaticPlatforms, platformNameExact, type PlatformAlias, type TaxoEntry } from "./smartSearch";
+import { PLATFORM_ALIASES, resolveStaticPlatforms, platformNameExact, withoutTrailingPlatform, type PlatformAlias, type TaxoEntry } from "./smartSearch";
 
 // Built-in platform names — catalog-only spellings are treated more strictly.
 const BUILTIN = new Set(PLATFORM_ALIASES.map((p) => p.canonical));
@@ -479,16 +479,17 @@ export const OFFICIAL_TITLE_SIM = 0.6;
  * Party 8" never becomes "Mario Party 9". Bracket qualifiers ([Collector's
  * Edition], [JP]) aren't part of the game name, so they're carried over.
  */
-export function officialTitleFor(original: string, candidate: { name: string; sim: number } | null | undefined): string | null {
+export function officialTitleFor(original: string, candidate: { name: string; sim: number } | null | undefined, platform?: string | null): string | null {
   if (!candidate?.name || !(candidate.sim >= OFFICIAL_TITLE_SIM)) return null;
   const official = candidate.name.trim();
   const quals = (original.match(/\[[^\]]*\]|\([^)]*\)/g) || []).join(" ");
-  const bareOrig = original.replace(/\[[^\]]*\]|\([^)]*\)/g, " ").replace(/\s+/g, " ").trim();
+  // The row's own platform on the end isn't part of the name ("Street Fighter
+  // II Super Nintendo"); the lookup was made without it too.
+  const bareOrig = withoutTrailingPlatform(original.replace(/\[[^\]]*\]|\([^)]*\)/g, " ").replace(/\s+/g, " ").trim(), platform);
   const o = norm(bareOrig), n = norm(official);
   // Numbers must agree: "Mario Party 8" never becomes "Mario Party 9".
   if (numbers(dropArticle(o)) !== numbers(dropArticle(n))) return null;
   const ow = o.split(" ").filter(Boolean), nw = n.split(" ").filter(Boolean);
-  const oj = ow.join(""), nj = nw.join("");
   // Editions / versions must match BOTH ways: a sheet's "Legendary edition"
   // isn't the base game, and an added "DX" / "HD" is a different release
   // (often a ROM hack: "Pokémon Blue DX").
@@ -502,15 +503,13 @@ export function officialTitleFor(original: string, candidate: { name: string; si
   // Two-letter words count too: "Ms. Pac-Man" isn't "Pac-Man", "Donkey Kong
   // Jr." isn't "Donkey Kong", "Mega Man ZX" isn't "Mega Man".
   const sig = (w: string) => !STOP_WORDS.has(w) && (w.length >= 3 || (w.length === 2 && !/^\d+$/.test(w)));
-  // (A sheet may end with the platform the official name leaves out: "Sonic
-  // Color DS" → "Sonic Colors".)
-  if (!ow.every((w, i) => !sig(w) || near(ow, i, nw, nj) || (PLATFORM_WORDS.has(w) && closingAt(ow, i, ow.length)))) return null;
+  if (!ow.every((w, i) => !sig(w) || near(ow, i, nw))) return null;
   // Words the official name adds are allowed only in their usual place, never
   // in a subtitle: "Tomb Raider" isn't "Tomb Raider: Legend".
   const head = official.match(/^(.*)(?::|\s[-–—]\s)/);
   const subStart = head ? norm(head[1]).split(" ").filter(Boolean).length : nw.length;
-  const specific = ow.filter((w) => w.length >= 3 && !STOP_WORDS.has(w) && !numbers(w)).length >= 3;
-  if (!nw.every((w, i) => !sig(w) || near(nw, i, ow, oj) || (i < subStart && addableAt(nw, i, subStart, specific)))) return null;
+  const specific = ow.filter((w) => w.length >= 3 && !STOP_WORDS.has(w) && !PLATFORM_WORDS.has(w) && !numbers(w)).length >= 3;
+  if (!nw.every((w, i) => !sig(w) || near(nw, i, ow) || (i < subStart && addableAt(nw, i, subStart, specific)))) return null;
   // A word the sheet repeats must repeat in the official name too:
   // "Mario Party 10 MARIO [amiibo Bundle]" names which amiibo it comes with.
   const count = (ws: string[], w: string) => ws.filter((x) => x === w).length;
@@ -518,15 +517,25 @@ export function officialTitleFor(original: string, candidate: { name: string; si
   // Same words, only styling differs: fix punctuation ("Luigis" → "Luigi's"),
   // but don't turn "Carrion" into all-caps "CARRION".
   if (o === n && /\b[A-Z]{3,}\b/.test(official.replace(/\b(HD|DX|3D|DS|GBA|NES|SNES|USA|VR|II|III|IV|VI|VII|VIII|XL)\b/g, "")) && !/\b[A-Z]{3,}\b/.test(bareOrig)) return null;
+  // …nor "Super Mario Bros. 2" into the database's odd "Super Mario Bros. -2".
+  if (o === n && /\s-\d/.test(official) && !/\s-\d/.test(bareOrig)) return null;
   const fixed = `${official}${quals ? " " + quals : ""}`;
   return fixed === original.trim() ? null : fixed;
 }
 /** Is word `i` of `ws` in the other title? Two-letter words must match
- *  exactly, or joined with a neighbor ("Yo-kai" ~ "Yokai"). */
-function near(ws: string[], i: number, other: string[], otherJoined: string): boolean {
+ *  exactly — or be part of a word written apart, whole words on both sides:
+ *  "Yu-Gi-Oh" ~ "Yugioh", "R.C." ~ "RC", "Yo-kai" ~ "Yokai". */
+function near(ws: string[], i: number, other: string[]): boolean {
   const w = ws[i];
-  if (w.length > 2) return nearWord(w, other, otherJoined);
-  return other.includes(w) || other.includes(w + (ws[i + 1] ?? "")) || other.includes((ws[i - 1] ?? "") + w);
+  if (w.length > 2) return nearWord(w, other, other.join(""));
+  if (other.includes(w)) return true;
+  let a = i, b = i;
+  while (a > 0 && ws[a - 1].length <= 2) a--;
+  while (b < ws.length - 1 && ws[b + 1].length <= 2) b++;
+  const run = ws.slice(a, b + 1).join("");
+  const spans = new Set<string>();
+  for (let j = 0; j < other.length; j++) for (let k = j, acc = ""; k < other.length && acc.length < 40; k++) spans.add(acc += other[k]);
+  return [run, run + (ws[b + 1] ?? ""), (ws[a - 1] ?? "") + run].some((c) => spans.has(c));
 }
 /** Is `w` (from one title) present in the other title's words — allowing a
  *  typo ("aweakening" ~ "awakening", "robot" ~ "robobot") or a joined word
@@ -574,7 +583,8 @@ function addableAt(nw: string[], i: number, end: number, specific: boolean): boo
   if (w === "super") return i === 0 && specific;
   if (w === "country") return specific && nw[i - 2] === "donkey" && nw[i - 1] === "kong";
   if (CLOSING_WORDS.has(w)) return closingAt(nw, i, end);
-  if (PLATFORM_WORDS.has(w)) return i === 0 || closingAt(nw, i, end);
+  // Up front, closing, or a brand in "Sonic & SEGA All-Stars Racing".
+  if (PLATFORM_WORDS.has(w)) return i === 0 || closingAt(nw, i, end) || (i === 2 && nw[1] === "and");
   return false;
 }
 /** Only closing words (Version / Game / platform names) follow word `i`. */

@@ -1,5 +1,6 @@
 import type { APIRoute } from "astro";
 import { lbPlatform } from "../../../lib/launchbox";
+import { withoutTrailingPlatform } from "../../../lib/smartSearch";
 
 export const prerender = false;
 const json = (d: unknown, s = 200) => new Response(JSON.stringify(d), { status: s, headers: { "content-type": "application/json" } });
@@ -20,8 +21,9 @@ export const POST: APIRoute = async ({ locals, request }) => {
   for (let i = 0; i < items.length; i += CONC) {
     await Promise.all(items.slice(i, i + CONC).map(async (it, k) => {
       const lb = lbPlatform(it.platform);
-      // Bracketed qualifiers ([Collector's Edition], [JP]) aren't part of the game's name.
-      const title = String(it.title ?? "").replace(/\[[^\]]*\]|\([^)]*\)/g, " ").replace(/\s+/g, " ").trim();
+      // Bracketed qualifiers ([Collector's Edition], [JP]) and the row's own
+      // platform on the end ("… Super Nintendo") aren't part of the game's name.
+      const title = withoutTrailingPlatform(String(it.title ?? "").replace(/\[[^\]]*\]|\([^)]*\)/g, " ").replace(/\s+/g, " ").trim(), it.platform);
       if (!lb || title.length < 2) return;
       const { data, error } = await sb.rpc("lookup_box_art", { p_title: title, p_platform: lb });
       const best = Array.isArray(data) ? data[0] : data;
