@@ -183,50 +183,25 @@ export function mapCategoryName(item: any): string {
 // The public eBay listing URL for an item id (used for "View on eBay").
 export const ebayItemUrl = (legacyItemId: string) => `https://www.ebay.com/itm/${legacyItemId}`;
 
-// ---- UPC lookup (best-effort, free) ----------------------------------------
-const sigWords = (s: string) =>
-  new Set(String(s).toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((w) => w.length > 2));
-// Do the matched listing and our product share enough words to trust its UPC?
-function titlesMatch(ours: string, theirs: string): boolean {
-  const a = sigWords(ours), b = sigWords(theirs);
-  if (!a.size) return false;
-  let common = 0;
-  for (const w of a) if (b.has(w)) common++;
-  return common / a.size >= 0.5;
-}
-// Normalised platform key — guards against sequel/platform confusion (e.g. our
-// PS1 "Metal Gear Solid" matching a PS4 "Metal Gear Solid V").
-const normPlat = (p?: string | null) =>
-  String(p || "").toLowerCase()
-    .replace(/\b(sony|microsoft|nintendo|sega|console|system|entertainment|video game)\b/g, " ")
-    .replace(/playstation/g, "ps")
-    .replace(/[^a-z0-9]+/g, " ").trim();
-const platMatch = (ours?: string | null, theirs?: string | null) => {
-  const a = normPlat(ours), b = normPlat(theirs);
-  return !a || !b ? false : a === b; // require a confident platform match
-};
+// ---- eBay product catalog (for listing UPCs; see upcFinder.ts) --------------
+// Video Games (the leaf category under Video Games & Consoles).
+const VIDEO_GAMES = "139973";
 
-// Search eBay for a product and return a UPC from a matching listing's item
-// specifics. Guarded by a title match so we don't attach a wrong barcode.
-export async function findUpc(
-  title: string,
-  platform?: string | null,
-): Promise<{ upc: string | null; matchedTitle: string | null }> {
-  const q = (platform ? `${title} ${platform}` : title).slice(0, 100);
-  const p = new URLSearchParams({ q, limit: "3" });
-  let summaries: any[] = [];
-  try { summaries = (await ebayGet(`/item_summary/search?${p.toString()}`)).itemSummaries || []; }
-  catch { return { upc: null, matchedTitle: null }; }
-  for (const s of summaries.slice(0, 2)) {
-    if (!s.legacyItemId) continue;
-    try {
-      const mi = mapItem(await getItem(String(s.legacyItemId)));
-      if (mi.upc && /^\d{8,14}$/.test(mi.upc) && titlesMatch(title, mi.title) && platMatch(platform, mi.platform))
-        return { upc: mi.upc, matchedTitle: mi.title };
-    } catch { /* skip this candidate */ }
-  }
-  return { upc: null, matchedTitle: null };
+/** Active eBay listings for a game, each tagged with its eBay CATALOG product
+ *  (epid) when the seller listed it against one. */
+export async function searchGameListings(q: string, limit = 50): Promise<{ total: number; items: { epid: string; legacyItemId: string; title: string }[] }> {
+  const p = new URLSearchParams({ q: q.slice(0, 100), category_ids: VIDEO_GAMES, limit: String(limit) });
+  const j = await ebayGet(`/item_summary/search?${p.toString()}`);
+  const items = ((j.itemSummaries || []) as any[]).map((it) => ({
+    epid: String(it.epid || ""), legacyItemId: String(it.legacyItemId || ""), title: String(it.title || ""),
+  }));
+  return { total: Number(j.total) || 0, items };
 }
+
+/** One listing with eBay's catalog product attached: product.title, product.gtins
+ *  (eBay's own UPC/EAN list, not what the seller typed), product.aspectGroups. */
+export const getItemWithProduct = (legacyItemId: string) =>
+  ebayGet(`/item/get_item_by_legacy_id?legacy_item_id=${encodeURIComponent(legacyItemId)}&fieldgroups=PRODUCT`);
 
 // Our completeness code (L / IB / CIB / NEW) inferred from title + specifics.
 function deriveCompleteness(title: string, aspects: Record<string, string>, conditionId: string): string {

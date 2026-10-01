@@ -1,4 +1,5 @@
 import { checkAvailability } from "./ebay";
+import { fetchAll } from "./fetchAll";
 import { syncableTypeIds } from "./inventoryTypes";
 
 // Pull stock DOWN from eBay: for every product imported from eBay (tagged
@@ -11,10 +12,12 @@ export async function syncEbayStock(admin: any) {
   // not eBay's to zero — treat them as not-live. Null pre-migration → no gate.
   const allowedTypeIds = await syncableTypeIds(admin);
   const variantCols = `id, quantity, online_visible${allowedTypeIds ? ", inventory_type_id" : ""}`;
-  const { data: prods } = await admin
+  const { data: prods } = await fetchAll((from, to) => admin
     .from("products")
     .select(`id, title, tags, product_variants(${variantCols})`)
-    .not("tags", "is", null);
+    .not("tags", "is", null)
+    .order("id")
+    .range(from, to));
 
   const tagged = (prods || [])
     .map((p: any) => ({ ...p, ebayId: (p.tags || []).find((t: string) => t.startsWith("ebay:"))?.slice(5) }))
