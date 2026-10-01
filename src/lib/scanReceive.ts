@@ -6,6 +6,7 @@
 // target) exactly like a wedge scanner: value + input event + Enter. Pages
 // that can look a code up pass `describe` so the phone gets told what it hit.
 import { hostPairing, resumeHost, type HostSession, type LinkStatus, type ScanMsg } from "./scanChannel";
+import { qrSvg } from "./qr";
 
 export type ReceiverOpts = {
   target: () => HTMLInputElement | null;          // page's default scan input
@@ -89,8 +90,10 @@ export function openPairDialog(o: ReceiverOpts): void {
   overlay.innerHTML = `
     <div style="width:100%;max-width:420px;background:var(--panel,#111);border:1px solid var(--border-strong,#444);padding:1.2rem 1.3rem;color:var(--text,#eee);text-align:center;">
       <h3 style="margin:0 0 0.6rem;">📱 Pair your phone</h3>
-      <p style="margin:0 0 1rem;color:var(--muted,#999);font-size:0.88rem;">On your phone, sign into the POS and open <strong>📱 Scan</strong> (pos.timelag.co/scan), then enter:</p>
-      <div id="scanrx-code" style="font-family:var(--font-mono,monospace);font-size:2.4rem;letter-spacing:0.3em;color:var(--cyan,#2ce6e0);margin-bottom:1rem;">······</div>
+      <p style="margin:0 0 0.8rem;color:var(--muted,#999);font-size:0.88rem;">Point your phone's camera at this code — it opens the scanner already paired:</p>
+      <div id="scanrx-qr" style="width:200px;height:200px;margin:0 auto 0.8rem;background:#fff;display:grid;place-items:center;color:#999;font-size:0.8rem;">…</div>
+      <p style="margin:0 0 0.4rem;color:var(--muted-2,#888);font-size:0.8rem;">Or open <strong>📱 Scan</strong> on the phone (${location.host}${scanPath()}) and enter:</p>
+      <div id="scanrx-code" style="font-family:var(--font-mono,monospace);font-size:2rem;letter-spacing:0.3em;color:var(--cyan,#2ce6e0);margin-bottom:1rem;">······</div>
       <p id="scanrx-status" style="margin:0 0 1rem;color:var(--muted-2,#888);font-size:0.82rem;">Waiting for the phone…</p>
       <button id="scanrx-cancel" type="button" style="font:inherit;padding:0.45rem 0.9rem;background:transparent;color:var(--muted,#999);border:1px solid var(--border,#333);cursor:pointer;">Cancel</button>
     </div>`;
@@ -101,7 +104,12 @@ export function openPairDialog(o: ReceiverOpts): void {
   let paired = false;
   const chipShown = () => paired;
   const pending = hostPairing({
-    onCode: (c) => { const el = overlay.querySelector("#scanrx-code"); if (el) el.textContent = c.slice(0, 3) + " " + c.slice(3); },
+    onCode: (c) => {
+      const el = overlay.querySelector("#scanrx-code");
+      if (el) el.textContent = c.slice(0, 3) + " " + c.slice(3);
+      const qr = overlay.querySelector("#scanrx-qr");
+      if (qr) qr.innerHTML = qrSvg(`${location.origin}${scanPath()}?code=${c}`, { px: 200, quiet: 3 });
+    },
     onPaired: () => {
       paired = true;
       session = pending;
@@ -120,6 +128,9 @@ export function openPairDialog(o: ReceiverOpts): void {
   const cancelPending = () => { if (!paired) pending.stop(); };
   overlay.querySelector("#scanrx-cancel")!.addEventListener("click", () => { close(); cancelPending(); });
 }
+
+// The phone's scan page on this host (clean /scan on the POS host, /app/scan on the marketing one).
+const scanPath = () => (location.pathname.startsWith("/app") ? "/app/scan" : "/scan");
 
 // ---------- Page adoption ----------
 export function initScanReceiver(o: ReceiverOpts): void {

@@ -5,6 +5,10 @@ import "../../styles/global.css";
 import "../../styles/app.css";
 
 let error = "";
+// Where to go after signing in: a LOCAL path only ("/scan?code=…"), never
+// another site ("//evil.com", "https://…") or back to the login page.
+const safeNext = (v: string | null) => (v && /^\/(?![\/\\])[^\s]*$/.test(v) && !/^\/(app\/)?login\b/.test(v) ? v : "");
+const nextPath = safeNext(Astro.url.searchParams.get("next"));
 if (Astro.request.method === "POST") {
   const form = await Astro.request.formData();
   const email = String(form.get("email") ?? "").trim();
@@ -13,7 +17,7 @@ if (Astro.request.method === "POST") {
   if (err) {
     error = err.message;
   } else {
-    return Astro.redirect("/dashboard");
+    return Astro.redirect(nextPath || "/dashboard");
   }
 }
 ---
@@ -81,7 +85,11 @@ if (Astro.request.method === "POST") {
         msg.hidden = true;
         const r = await fetch("/api/pos/card-login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ card_code: code }) });
         const j = await r.json();
-        if (r.ok && j.ok) { window.location.href = "/dashboard"; return; }
+        if (r.ok && j.ok) {
+          const nx = new URLSearchParams(location.search).get("next") || "";
+          window.location.href = /^\/(?![\/\\])[^\s]*$/.test(nx) && !/^\/(app\/)?login\b/.test(nx) ? nx : "/dashboard";
+          return;
+        }
         msg.textContent = j.error || "Card login failed"; msg.hidden = false;
       }
       document.getElementById("card-signin")!.addEventListener("click", () => cardLogin(codeInput.value.trim()));
