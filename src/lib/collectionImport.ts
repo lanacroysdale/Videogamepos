@@ -281,7 +281,7 @@ const CONSOLE_RE = /\b(console|handheld system)\b|\bsystem\s*$|\b(new\s)?(2ds|3d
 const ACCESSORY_RE = /\b(controllers?|joy-?cons?|nunchuks?|wii (u )?remote|remote plus|ac adapter|power adapter|charger|charging grip|charging station|battery pack|carrying case|microphone|memory card|dock|stylus|rumble pak|expansion pak|transfer pak|link cable)\b/i;
 const COLLECTIBLE_RE = /\bamiibo\b|\bskylanders?\b|\blego dimensions\b|\bdisney infinity\b|\bfigures?\b/i;
 /** What kind of item the name reads as, so it can default to the right category. */
-function itemKind(title: string, platform: string): ImportRow["kind"] {
+export function itemKind(title: string, platform: string): ImportRow["kind"] {
   // Judge by the name OUTSIDE brackets: "Wii Console [Wii Sports Bundle]" is a
   // console, "Zelda Skyward Sword [Controller Bundle]" is the game.
   const outside = title.replace(/\[[^\]]*\]|\([^)]*\)/g, " ").trim();
@@ -500,9 +500,10 @@ export function officialTitleFor(original: string, candidate: { name: string; si
   // hardware set ("Wii ZAPPER with …"), a ROM hack ("Pokémon Red RUMOR",
   // "Pokémon MOON Emerald", "FAKEMON FireRed"), a series entry ("…: Mini-Land
   // Mayhem!") or one game of a trilogy.
-  // Two-letter words count too: "Ms. Pac-Man" isn't "Pac-Man", "Donkey Kong
-  // Jr." isn't "Donkey Kong", "Mega Man ZX" isn't "Mega Man".
-  const sig = (w: string) => !STOP_WORDS.has(w) && (w.length >= 3 || (w.length === 2 && !/^\d+$/.test(w)));
+  // Short words count too: "Ms. Pac-Man" isn't "Pac-Man", "Donkey Kong Jr."
+  // isn't "Donkey Kong", "Mega Man ZX" isn't "Mega Man", and a single letter
+  // makes another game: "Sonic R", "Mario Kart R" (a ROM hack), "Picross e".
+  const sig = (w: string) => !STOP_WORDS.has(w) && (w.length >= 3 || /^[a-z]$/.test(w) || (w.length === 2 && !/^\d+$/.test(w)));
   if (!ow.every((w, i) => !sig(w) || near(ow, i, nw))) return null;
   // Words the official name adds are allowed only in their usual place, never
   // in a subtitle: "Tomb Raider" isn't "Tomb Raider: Legend".
@@ -591,9 +592,9 @@ function addableAt(nw: string[], i: number, end: number, specific: boolean): boo
 const closingAt = (ws: string[], i: number, end: number) =>
   ws.slice(i + 1, end).every((x) => x.length < 2 || CLOSING_WORDS.has(x) || PLATFORM_WORDS.has(x));
 const CLOSING_WORDS = new Set(["version", "game", "games"]);
-const PLATFORM_WORDS = new Set(["nintendo", "wii", "switch", "ds", "3ds", "gba", "gbc", "gamecube", "playstation", "xbox", "sega", "sony", "microsoft"]);
+const PLATFORM_WORDS = new Set(["nintendo", "wii", "u", "switch", "ds", "3ds", "gba", "gbc", "gamecube", "playstation", "xbox", "sega", "sony", "microsoft"]);
 const EDITION_WORDS = new Set(["edition", "deluxe", "complete", "legendary", "definitive", "ultimate", "remastered", "remaster", "anniversary", "collectors", "collector", "limited", "special", "goty", "hd", "dx", "3d", "gold", "platinum", "reloaded"]);
-const STOP_WORDS = new Set(["the", "and", "for", "of", "a", "an", "in", "on", "to", "at", "by", "or"]);
+const STOP_WORDS = new Set(["the", "and", "n", "for", "of", "a", "an", "in", "on", "to", "at", "by", "or"]); // "n" = "'n'" ("Tilt 'n' Tumble")
 
 interface Prepared {
   product: CatalogProduct;

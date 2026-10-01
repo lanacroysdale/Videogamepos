@@ -557,7 +557,7 @@ const posData = {
   import { initScanReceiver, openPairDialog } from "../../lib/scanReceive";
   import { barcodeEq } from "../../lib/gtin";
   import { openImportDialog } from "../../lib/importDialog";
-  import { newListingKey, officialTitleFor, norm as normImport } from "../../lib/collectionImport";
+  import { newListingKey, officialTitleFor, itemKind, norm as normImport } from "../../lib/collectionImport";
 
   const data = JSON.parse(document.getElementById("pos-data")!.textContent!);
   let items: any[] = data.items;
@@ -2077,7 +2077,8 @@ const posData = {
   let fixSuggestions: { p: any; to: string; sim: number }[] = [];
   document.getElementById("fix-titles")?.addEventListener("click", async () => {
     const btn = document.getElementById("fix-titles") as HTMLButtonElement;
-    const list = liveItems().filter((p: any) => p.title && p.platform);
+    // Games only — a console named after its platform ("Super Nintendo") has no game title to fix.
+    const list = liveItems().filter((p: any) => p.title && p.platform && itemKind(p.title, p.platform) === "");
     if (!list.length) { toast("No listings to check"); return; }
     btn.disabled = true; const orig = btn.textContent;
     fixSuggestions = [];
