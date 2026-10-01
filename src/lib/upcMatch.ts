@@ -66,7 +66,9 @@ export function upcEligible(p: { title: string; platform?: string | null; catego
 
 /** Our title as a RELEASE name: bracket qualifiers count ("[Nintendo
  *  Selects]" and "[Greatest Hits]" have their own UPCs). */
-const releaseName = (title: string) => title.replace(/[[\]()]/g, " ").replace(/\bvideo ?game\b/gi, " ").replace(/\s+/g, " ").trim();
+const releaseName = (title: string, dropVideoGame: boolean) =>
+  (dropVideoGame ? title.replace(/\bvideo ?game\b/gi, " ") : title).replace(/[[\]()]/g, " ").replace(/\s+/g, " ").trim();
+const VIDEO_GAME = /\bvideo ?game\b/i;
 
 /** An eBay catalog title reduced to the game's name: "(Nintendo 3DS, 2011)",
  *  "- Nintendo Switch", "Standard Edition" and the platform up front go;
@@ -96,7 +98,9 @@ const bothEnds = (s: string, platform: string) => withoutLeadingPlatform(without
  *  every distinctive word on both sides (typo-tolerant), extra words only in
  *  their usual place ("The Legend of", a closing "Version"). */
 export function sameRelease(ours: string, theirs: string, platform: string): boolean {
-  const a = bothEnds(releaseName(ours), platform);
+  // "Video Game" is noise only when BOTH names have it ("LEGO Pirates of the
+  // Caribbean: The Video Game"); "Ghostbusters: The Video Game" ≠ "Ghostbusters".
+  const a = bothEnds(releaseName(ours, VIDEO_GAME.test(String(theirs ?? ""))), platform);
   const b = catalogName(theirs, platform);
   if (!norm(a) || !norm(b)) return false;
   if (norm(a) === norm(b)) return true;
@@ -139,17 +143,27 @@ export function aspectMap(groups: unknown, extra?: unknown): Map<string, string[
  *  except region / condition tags. Try this before sameGameName. */
 export function sameBoxRelease(ours: string, theirs: string, platform: string): boolean {
   const cleaned = String(ours ?? "").replace(/\[([^\]]*)\]|\(([^)]*)\)/g, (m, a, b) => (NOT_A_RELEASE.test(String(a ?? b ?? "").trim()) ? " " : m));
-  return sameRelease(cleaned, theirs, platform);
+  return sameRelease(cleaned, dbName(theirs), platform);
 }
+// LaunchBox tells same-named games apart by year — "Punch-Out!! (1987)" vs
+// "(1990)", "DOOM (1993)" vs "DOOM" (2016) — so a database name's "(year)" is
+// part of the name (an eBay catalog title's "(Platform, Year)" is not).
+const dbName = (t: string) => String(t ?? "").replace(/\(\s*((?:19|20)\d\d)\s*\)/g, " $1 ");
 const NOT_A_RELEASE = /^(jp|jpn|japan|japanese|import|pal|eu|europe|uk|asia|asian english|ntsc(-[uj](\/c)?)?|cib|complete|complete in box|loose|sealed|new|used|boxed|box only|manual only|game only|disc only|cart only|cartridge only)$/i;
 
 export function sameGameName(ours: string, theirs: string, platform: string): boolean {
-  const a = gameName(String(ours ?? "").replace(/\[[^\]]*\]|\([^)]*\)/g, " "));
-  const b = gameName(String(theirs ?? ""));
+  // Our tags go — except a year ("Doom [1993]" is the 1993 game).
+  const a = gameName(String(ours ?? "").replace(/[[(]\s*((?:19|20)\d\d)\s*[\])]/g, " $1 ").replace(/\[[^\]]*\]|\([^)]*\)/g, " "), true);
+  const b = gameName(dbName(theirs), false);
   return !!a && !!b && sameRelease(a, b, platform);
 }
-const gameName = (t: string) => t
-  .replace(/\b(?:(?:nintendo\s+)?switch\s+2|(?:nintendo\s+)?wii\s+u|nintendo\s+switch|\d+(?:st|nd|rd|th)\s+anniversary|game of the year|day one|[\w'’-]+)\s+edition\b/gi, " ")
+// Retail editions of the same game. From OUR title any "<word> Edition" goes
+// (it's how the store names its copy); from a database name only these —
+// "Mario 64 Sonic Edition" / "FireRed Rocket Edition" are ROM hacks.
+const RETAIL_EDITION = /\b(?:(?:nintendo\s+)?switch\s+2|(?:nintendo\s+)?wii\s+u|nintendo\s+switch|\d+(?:st|nd|rd|th)\s+anniversary|anniversary|game of the year|goty|day one|launch|special|deluxe|collector['’]?s|limited|definitive|complete|premium|standard|gold|platinum|ultimate|bonus)\s+edition\b/gi;
+const gameName = (t: string, ours: boolean) => t
+  .replace(RETAIL_EDITION, " ")
+  .replace(ours ? /\b[\w'’-]+\s+edition\b/gi : /$^/, " ")
   .replace(/^\s*new play control!?:?\s*/i, " ")
   // A publisher/brand prefix and ", Inc." aren't the game ("Tom Clancy's
   // Splinter Cell 3D", "Sid Meier's Civilization VI", "WarioWare, Inc.").
