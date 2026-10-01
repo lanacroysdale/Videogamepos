@@ -11,6 +11,9 @@ const { error: delProbeErr } = await Astro.locals.supabase.from("products").sele
 // Listings / stock rows an unfinished entry draft created aren't offered yet.
 const { error: pendProbeErr } = await Astro.locals.supabase.from("products").select("pending_entry_id").limit(1);
 const pend = pendProbeErr ? "" : ", pending_entry_id";
+// Listing UPCs (migration 20260930000003): scanning a customer's box finds the title.
+const { error: upcProbeErr } = await Astro.locals.supabase.from("product_upcs").select("id").limit(1);
+const upcEmbed = upcProbeErr ? "" : ", product_upcs(upc)";
 const [{ data: margins }, { data: categories }, { data: completeness }, { data: grades }, { data: productRows }] = await Promise.all([
   supabase.from("trade_margins").select("*").order("sort_order"),
   supabase.from("categories").select("id,name").order("sort_order"),
@@ -19,7 +22,7 @@ const [{ data: margins }, { data: categories }, { data: completeness }, { data: 
   // Paged — one request stops at 1,000 listings.
   fetchAll((from, to) => supabase
     .from("products")
-    .select(`id, title, platform, franchise, alternative_names, tags, category_id${delProbeErr ? "" : ", deleted_at"}${pend}, product_variants(price_cents, completeness_code, grade_code, barcode${pend}, product_barcodes(barcode))`)
+    .select(`id, title, platform, franchise, alternative_names, tags, category_id${delProbeErr ? "" : ", deleted_at"}${pend}${upcEmbed}, product_variants(price_cents, completeness_code, grade_code, barcode${pend}, product_barcodes(barcode))`)
     .order("title")
     .order("id")
     .range(from, to)),
@@ -46,6 +49,7 @@ const catalog = (products ?? []).map((p: any) => ({
   altNames: p.alternative_names ?? [],
   categoryId: p.category_id,
   pcId: (p.tags ?? []).find((t: string) => t.startsWith("pricecharting:"))?.slice(13) ?? "",
+  upcs: (p.product_upcs ?? []).map((u: any) => u.upc),
   variants: (p.product_variants ?? []).map((v: any) => ({
     priceCents: v.price_cents,
     completenessCode: v.completeness_code ?? "",
@@ -149,6 +153,7 @@ const posData = {
   .ti-sug-title { font-weight:600; }
   .ti-sug-meta { color:var(--muted-2); font-size:0.78rem; }
   .ti-sug-price { margin-left:auto; color:var(--green); font-weight:700; font-family:var(--font-mono); }
+  .ti-sug-head { padding:0.35rem 0.6rem; font-size:0.7rem; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:var(--muted); background:rgba(44,230,224,.05); border-bottom:1px solid var(--border); }
 </style>
 
 <script>
@@ -220,8 +225,21 @@ const posData = {
     const q = raw.trim();
     if (q.length < 6) return null;
     // GTIN-aware: a 12-digit camera read matches a 13-digit EAN on file.
+    // The listing's UPC first (it fits every condition), then a condition's own code.
+    for (const p of catalog) if ((p.upcs || []).some((u: string) => barcodeEq(u, q))) return { p, v: null };
     for (const p of catalog) for (const v of p.variants) if ((v.barcodes || []).some((b: string) => barcodeEq(b, q))) return { p, v };
     return null;
+  }
+  // The distinct conditions a listing is stocked in (several inventory types can
+  // repeat one), each at its highest price — best first.
+  function conditionsOf(p: any): { completenessCode: string; gradeCode: string; priceCents: number }[] {
+    const by = new Map<string, { completenessCode: string; gradeCode: string; priceCents: number }>();
+    for (const v of p.variants || []) {
+      const k = `${v.completenessCode}|${v.gradeCode}`;
+      const cur = by.get(k);
+      if (!cur || v.priceCents > cur.priceCents) by.set(k, { completenessCode: v.completenessCode, gradeCode: v.gradeCode, priceCents: v.priceCents });
+    }
+    return [...by.values()].sort((a, b) => b.priceCents - a.priceCents);
   }
   // Typeahead: as the employee types, suggest catalog matches + a resale value.
   function showSuggest(tr: HTMLElement, r: Row) {
@@ -239,8 +257,25 @@ const posData = {
       render();
       // Land the cursor at the end of the filled description so the employee
       // can append " cib" etc. and keep the typeahead flowing.
-      const fresh = $("ti-body").querySelector<HTMLInputElement>(`tr[data-key="${r.key}"] [data-desc]`);
+      const freshRow = $("ti-body").querySelector<HTMLElement>(`tr[data-key="${r.key}"]`);
+      const fresh = freshRow?.querySelector<HTMLInputElement>("[data-desc]");
       if (fresh) { fresh.focus(); fresh.setSelectionRange(fresh.value.length, fresh.value.length); }
+      // Or pick the condition from the ones we stock (typing " cib" still works).
+      const conds = conditionsOf(bc.p);
+      const fbox = freshRow?.querySelector<HTMLElement>("[data-suggest]");
+      if (fbox && conds.length > 1) {
+        fbox.innerHTML = `<div class="ti-sug-head">Which condition?</div>` + conds.map((c, i) => `<div class="ti-sug" data-ci="${i}">
+          <span class="ti-sug-title">${esc([complLabel(c.completenessCode), gradeLabel(c.gradeCode)].filter(Boolean).join(" · ") || "Used")}</span>
+          <span class="ti-sug-price">${money(c.priceCents)}</span></div>`).join("");
+        fbox.hidden = false;
+        fbox.querySelectorAll<HTMLElement>("[data-ci]").forEach((el) => el.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          const c = conds[+el.dataset.ci!];
+          pickSuggestion(r, bc.p, { completenessCode: c.completenessCode, gradeCode: c.gradeCode });
+          fbox.hidden = true;
+          render();
+        }));
+      }
       return;
     }
     const parsed = parseQuery(q);
@@ -336,7 +371,8 @@ const posData = {
       const bc = findByBarcode(code);
       if (!bc) return null;
       const top = bc.p.variants.length ? Math.max(...bc.p.variants.map((x: any) => x.priceCents)) : 0;
-      return `${bc.p.title}${bc.p.platform ? ` (${bc.p.platform})` : ""}${top ? ` · resale up to ${money(top)}` : ""}`;
+      const n = conditionsOf(bc.p).length;
+      return `${bc.p.title}${bc.p.platform ? ` (${bc.p.platform})` : ""}${top ? ` · resale up to ${money(top)}` : ""}${n > 1 ? ` · ${n} conditions — choose on the station` : ""}`;
     },
   };
   initScanReceiver(scanTarget);
@@ -350,7 +386,7 @@ const posData = {
       mode: "trade",
       catalog: catalog.map((p: any) => ({
         id: p.id, title: p.title, platform: p.platform || "", franchise: p.franchise || "", altNames: p.altNames || [],
-        categoryId: p.categoryId, pcId: p.pcId || "",
+        categoryId: p.categoryId, pcId: p.pcId || "", upcs: p.upcs || [],
         variants: (p.variants || []).map((v: any) => ({ completenessCode: v.completenessCode || "", gradeCode: v.gradeCode || "", priceCents: v.priceCents || 0, barcodes: v.barcodes || [] })),
       })),
       completeness, grades, platforms: PLATFORMS, categories,

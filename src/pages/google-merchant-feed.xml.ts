@@ -23,9 +23,11 @@ export const GET: APIRoute = async () => {
   // Inventory-type gate: non-syncable pools (e.g. Personal Collection) stay out
   // of the feed. Null pre-migration → filter skipped.
   const allowedTypeIds = await syncableTypeIds(admin);
+  // Listing UPCs (migration 20260930000003) → <g:gtin>.
+  const { error: upcProbeErr } = await admin.from("product_upcs").select("id").limit(1);
   let feedQ = admin
     .from("product_variants")
-    .select("price_cents, online_price_cents, quantity, condition, completeness_code, product:products(id, title, slug, platform, brand, genre, description, image_url, category:categories(name))")
+    .select(`price_cents, online_price_cents, quantity, condition, completeness_code, product:products(id, title, slug, platform, brand, genre, description, image_url, category:categories(name)${upcProbeErr ? "" : ", product_upcs(upc)"})`)
     .eq("online_visible", true)
     .gt("quantity", 0);
   if (allowedTypeIds) feedQ = feedQ.in("inventory_type_id", allowedTypeIds);
@@ -53,7 +55,7 @@ export const GET: APIRoute = async () => {
       <g:price>${(cents / 100).toFixed(2)} USD</g:price>
       <g:condition>${gCondition(v)}</g:condition>
       ${p.brand ? `<g:brand>${esc(p.brand)}</g:brand>` : ""}
-      <g:identifier_exists>no</g:identifier_exists>
+      ${p.product_upcs?.[0]?.upc ? `<g:gtin>${esc(p.product_upcs[0].upc)}</g:gtin>` : "<g:identifier_exists>no</g:identifier_exists>"}
       <g:product_type>${esc(p.category?.name || "Video Games")}</g:product_type>
       <g:google_product_category>Electronics &gt; Video Games</g:google_product_category>
     </item>`,

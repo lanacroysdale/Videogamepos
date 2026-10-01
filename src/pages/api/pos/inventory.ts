@@ -1,4 +1,6 @@
 import type { APIRoute } from "astro";
+import { attachUpcs } from "../../../lib/upcFinder";
+import { canonicalUpc } from "../../../lib/upcMatch";
 
 export const prerender = false;
 
@@ -43,6 +45,17 @@ export const POST: APIRoute = async ({ locals, request }) => {
   // Rows a DRAFT creates stay hidden until Finish (migration 20260930000001).
   const pendingFor = async (entryId: string | null | undefined) =>
     entryId && (await hasCol("products", "pending_entry_id")) ? { pending_entry_id: String(entryId) } : {};
+  // A game's UPC is its LISTING's — every condition shares it (migration
+  // 20260930000003). A valid UPC that arrives with a sheet row or a new
+  // product also becomes the listing's, if it has none yet. Best-effort: a
+  // code another listing already uses is left alone.
+  const seedListingUpc = async (productId: string, raw: unknown, source: "import" | "manual") => {
+    const upc = canonicalUpc(raw == null ? "" : String(raw));
+    if (!upc || !productId || !(await hasCol("product_upcs", "id"))) return;
+    const { data: have } = await sb.from("product_upcs").select("id").eq("product_id", productId).limit(1);
+    if (have?.length) return;
+    await attachUpcs(sb, productId, [upc], source, source === "import" ? "From the imported sheet" : null).catch(() => {});
+  };
 
   // /shop/<slug> looks the slug up with maybeSingle(), so it MUST be unique:
   // "mario-kart-64", else "…-<platform>", else a numeric suffix.
@@ -239,6 +252,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
           if (!v) throw new Error("Variant not found");
           const st = await stageOrMerge(v.id, v.price_cents ?? 0, qty, cost, false, v.product_id, "");
           if (r.tagPcId && r.productId) await tagPc(r.productId, r.tagPcId).catch(() => {});
+          await seedListingUpc(v.product_id, r.barcode, "import");
           return { res: { ok: true, itemId: st.itemId, variantId: v.id, productId: v.product_id, internalCode: v.internal_code ?? "", merged: st.merged }, created: "" };
         }
         const variantRow = {
@@ -255,6 +269,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
         // Put the row on `productId`: its matching stock row if one exists,
         // else a new one.
         const onListing = async (productId: string, reused: boolean) => {
+          await seedListingUpc(productId, r.barcode, "import");
           const existing = await findVariant(productId, variantRow);
           if (existing) {
             const st = await stageOrMerge(existing.id, existing.price_cents ?? 0, qty, cost, false, productId, "");
@@ -301,6 +316,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
             .select("id, internal_code, price_cents").single();
           if (vErr) throw new Error(vErr.message);
           const st = await stageOrMerge(v.id, v.price_cents ?? 0, qty, cost, true, prod.id, "product");
+          await seedListingUpc(prod.id, r.barcode, "import");
           return { res: { ok: true, itemId: st.itemId, variantId: v.id, productId: prod.id, slug: prod.slug, internalCode: v.internal_code ?? "", newProduct: true }, created: "product" };
         }
         throw new Error("Unknown row kind");
@@ -735,6 +751,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
         .select()
         .single();
       if (vErr) return json({ error: vErr.message }, 500);
+      await seedListingUpc(prod.id, b.barcode, "manual");
       if (b.stageEntryId) {
         const { data: st, error: stErr } = await sb.from("inventory_entry_items").insert({
           entry_id: b.stageEntryId, variant_id: variant.id,
