@@ -415,6 +415,7 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
               <div class="lt-toggles" style="border-top:1px solid var(--border);padding-top:0.5rem;">
                 <label><input type="checkbox" id="lt-bctext" /> Code digits</label>
                 <label><input type="checkbox" id="lt-2lines" /> 2-line titles</label>
+                <label title="“The Legend of Zelda: …” prints as “Legend of Zelda: …”"><input type="checkbox" id="lt-dropthe" /> Drop a leading “The”</label>
                 <label><input type="checkbox" id="lt-default" /> ⭐ Default</label>
               </div>
             </div>
@@ -1337,6 +1338,7 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       shows.forEach((cb) => (cb.checked = !!t.show[cb.dataset.ltshow!]));
       $("lt-bctext").checked = !!t.barcodeShowText;
       $("lt-2lines").checked = t.titleMaxLines === 2;
+      $("lt-dropthe").checked = t.titleDropThe !== false;
       $("lt-default").checked = !!t.isDefault;
       ltList(); ltPreview();
     }
@@ -1360,6 +1362,7 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       shows.forEach((cb) => (t.show[cb.dataset.ltshow!] = cb.checked));
       t.barcodeShowText = $("lt-bctext").checked;
       t.titleMaxLines = $("lt-2lines").checked ? 2 : 1;
+      t.titleDropThe = $("lt-dropthe").checked;
       if ($("lt-default").checked) lts.forEach((x: any, i: number) => (x.isDefault = i === sel));
       else if (t.isDefault) $("lt-default").checked = true; // always exactly one default — move it by starring another template
       ltList(); ltPreview();

@@ -98,6 +98,7 @@ export type LabelTemplate = {
   logoRotate: "upright" | "sideways";    // sideways = rotated with the spine price
   logoSide: "left" | "right";            // logo before/after the price (read order); no-spine: lower corner
   titleMaxChars: number;                 // 10–60 — hard cut-off (… beyond this)
+  titleDropThe: boolean;                 // print "Legend of Zelda: …" — a leading "The" spends room for nothing
   isDefault?: boolean;
 };
 
@@ -127,7 +128,7 @@ export const DEFAULT_TEMPLATE: LabelTemplate = {
   spineText: "",
   barcodeHeightMm: 8,
   barcodeShowText: true,
-  titleMaxLines: 1,
+  titleMaxLines: 2,
   fontScale: 1,
   priceScale: 1.25,
   fontKey: "system",
@@ -136,7 +137,8 @@ export const DEFAULT_TEMPLATE: LabelTemplate = {
   logoHeightMm: 8,
   logoRotate: "upright",
   logoSide: "left",
-  titleMaxChars: 28,
+  titleMaxChars: 56,
+  titleDropThe: true,
   isDefault: true,
 };
 
@@ -186,6 +188,7 @@ export function sanitizeLabelTemplates(raw: any): LabelTemplate[] {
       logoRotate: t.logoRotate === "sideways" ? "sideways" : "upright",
       logoSide: t.logoSide === "right" ? "right" : "left",
       titleMaxChars: clamp(t.titleMaxChars, 10, 60, d.titleMaxChars),
+      titleDropThe: t.titleDropThe !== false,
       isDefault: t.isDefault === true,
     });
     // Cross-clamps: independent ranges can still combine into impossible
@@ -220,6 +223,21 @@ const money = (c: number) => {
 export const MIN_MODULE_MM = 0.25;
 export function barcodeFits(text: string, availWidthMm: number): boolean {
   try { return code128Modules(text) * MIN_MODULE_MM <= availWidthMm; } catch { return false; }
+}
+
+// Whole-word wrap into at most `maxLines` lines of `maxChars`, or null if the
+// title doesn't fit without cutting a word or dropping text.
+function wrapWords(title: string, maxChars: number, maxLines: number): string[] | null {
+  const lines: string[] = [];
+  let cur = "";
+  for (const w of title.split(/\s+/).filter(Boolean)) {
+    if (w.length > maxChars) return null;
+    if (!cur) cur = w;
+    else if (cur.length + 1 + w.length <= maxChars) cur += " " + w;
+    else { lines.push(cur); cur = w; }
+  }
+  if (cur) lines.push(cur);
+  return lines.length && lines.length <= maxLines ? lines : null;
 }
 
 // Crude character-budget title wrap (SVG has no native wrapping).
@@ -383,13 +401,26 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
   const colW = contentW - sideW;                            // title/meta column
   const colCx = fx + (sideRight ? colW / 2 : sideW + colW / 2);
   if (tpl.show.title) {
-    const raw = item.title.replace(/\s+/g, " ").trim();
+    const full = item.title.replace(/\s+/g, " ").trim();
+    // "The Legend of Zelda: …" → "Legend of Zelda: …" (only when a real name is left).
+    const raw = tpl.titleDropThe && /^the\s+\S{3,}/i.test(full) ? full.replace(/^the\s+/i, "") : full;
     const cut = raw.length > tpl.titleMaxChars ? raw.slice(0, Math.max(1, tpl.titleMaxChars - 1)).trimEnd() + "…" : raw;
-    const perLine = Math.max(6, Math.ceil(cut.length / tpl.titleMaxLines));
-    const size = Math.min(4.8 * fs * fsc, Math.max(2.6 * fs, colW / (perLine * chW)));
-    const maxChars = Math.max(4, Math.floor(colW / (size * chW)));
+    // Fit the REAL words: one line while it reads at a decent size, else two
+    // (when allowed) — capped smaller so the price below keeps its size.
+    const minSize = 2.6 * fs;
+    const fit = (lines: 1 | 2, hi: number): { size: number; lines: string[] } | null => {
+      for (let size = hi; size >= minSize - 1e-6; size -= 0.1) {
+        const w = wrapWords(cut, Math.max(4, Math.floor(colW / (size * chW))), lines);
+        if (w) return { size, lines: w };
+      }
+      return null;
+    };
+    let pick = fit(1, 4.8 * fs * fsc);
+    if (tpl.titleMaxLines === 2 && (!pick || pick.size < 3.0 * fs)) pick = fit(2, Math.max(minSize, 3.1 * fs * fsc)) ?? pick;
+    if (!pick) pick = { size: minSize, lines: wrapTitle(cut, Math.max(4, Math.floor(colW / (minSize * chW))), tpl.titleMaxLines) };
+    const size = pick.size;
     y += size * (FP.titleTop ?? 1); // per-font lift: tall display faces start higher
-    for (const line of wrapTitle(cut, maxChars, tpl.titleMaxLines)) {
+    for (const line of pick.lines) {
       parts.push(`<text x="${colCx.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="middle" font-family="${fam}" font-weight="${wHeavy}"${titleStyleAttr}${ls(size)} font-size="${size.toFixed(2)}" fill="#000">${esc(line)}</text>`);
       y += size * 1.15;
     }
