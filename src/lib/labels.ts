@@ -276,7 +276,8 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
   const wMid = FP.noBold ? "400" : "700";
   const ls = (sz: number) => (FP.spacing ? ` letter-spacing="${(FP.spacing * sz).toFixed(2)}"` : "");
   const titleStyleAttr = FP.titleItalic ? ' font-style="italic"' : "";
-  const INSET = 2; // safe inset for printer drift
+  const INSET = 1.5; // safe inset for printer drift (sides + top)
+  const BOTTOM = 1.2; // the barcode sits low: every mm up there is title room
   const spineW = tpl.spine === "none" ? 0 : tpl.spineWidthMm;
   const faceX = tpl.spine === "left" ? spineW : 0;
   const faceW = W - spineW;
@@ -294,7 +295,7 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
   const bcPayload = item.labelCode || item.internalCode;
   const wantBarcode = tpl.show.barcode && !!bcPayload;
   const bcTextMm = wantBarcode && tpl.barcodeShowText ? 2.4 * fs : 0;
-  const bcY = H - INSET - tpl.barcodeHeightMm - bcTextMm;
+  const bcY = H - BOTTOM - tpl.barcodeHeightMm - bcTextMm;
   let bcModules = 0;
   let bcFullWidth = false;
   if (wantBarcode) {
@@ -321,11 +322,20 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
     // top-down spine) or AFTER it ('right', the bottom end) — logoSide is in
     // read order, so it follows spineDir when the direction flips.
     const logoAtTop = (tpl.logoSide !== "right") === (tpl.spineDir !== "up");
+    // Spine content hugs the label's OUTER edge (the case spine), not the
+    // middle of the strip — a thin case (Switch) would otherwise carry it
+    // round onto the front. One shared centre line keeps logo + price aligned.
+    const spPriceH = tpl.show.price ? 4.8 * fs * tpl.priceScale * fsc * 0.72 : 0;
+    const spTagH = tpl.show.spineText && tpl.spineText.trim() ? 2.0 * fs * fsc : 0;
+    const spLogoAcross = tpl.show.logo && tpl.logoUrl && tpl.logoRotate === "sideways" ? Math.min(tpl.logoHeightMm, spineW - 1.6) : 0;
+    const spAcross = Math.min(spineW - 1.6, Math.max(spPriceH + (spPriceH && spTagH ? 0.9 : 0) + spTagH, spLogoAcross, 2));
+    const spEdge = 1.0;
+    const spCx = tpl.spine === "left" ? sx + spEdge + spAcross / 2 : sx + spineW - spEdge - spAcross / 2;
     let regionA = 0; // pair region between the logo and the spine's other end
     let regionB = spineBottom;
     if (tpl.show.logo) {
       if (tpl.logoUrl) {
-        const cx = sx + spineW / 2;
+        const cx = spCx;
         if (tpl.logoRotate === "sideways") {
           // Rotated with the price: image length runs down the spine.
           const len = Math.max(4, Math.min(tpl.logoHeightMm * 1.8, spineBottom * 0.4));
@@ -347,7 +357,7 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
     }
     const tagline = tpl.show.spineText ? tpl.spineText.trim() : "";
     if (tpl.show.price || tagline) {
-      const cx = sx + spineW / 2;
+      const cx = spCx;
       // Price + tagline sit side-by-side across the spine (a 32mm spine can't
       // fit both end-to-end); the PAIR is optically centered on the spine's
       // width so it lines up under the centered logo.
@@ -400,14 +410,26 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
   const sideW = nsSide ? Math.min(contentW * 0.38, Math.max(lgW, lgName.length * nameF * 0.62, nsTagline.length * tagF * 0.56)) + 0.8 : 0;
   const colW = contentW - sideW;                            // title/meta column
   const colCx = fx + (sideRight ? colW / 2 : sideW + colW / 2);
+  const metaBits = [
+    tpl.show.category ? item.categoryName : "",
+    tpl.show.condition ? item.condShort : "",
+    tpl.show.sku && item.sku ? item.sku : "",
+  ].filter(Boolean);
+  // The price is a FIXED size (owner spec) and the barcode is pinned low, so
+  // the title gets exactly the height left between the top and the price.
+  const floorY = wantBarcode ? bcY - 0.8 : H - BOTTOM;
+  const priceFontFixed = 6.0 * fs * tpl.priceScale * fsc * (FP.priceBoost ?? 1);
+  const metaPart = metaBits.length ? metaSize * 0.72 + (FP.titleGap ?? 1.0) + metaSize * 1.08 : 0;
+  const titleBudget = floorY - INSET - metaPart - (tpl.show.price ? priceFontFixed * 0.74 + 0.6 : 0);
+  const sizeCap = (n: number) => Math.max(1.6, titleBudget / ((FP.titleTop ?? 1) + (n - 1) * 1.15 + 0.19));
   if (tpl.show.title) {
     const full = item.title.replace(/\s+/g, " ").trim();
     // "The Legend of Zelda: …" → "Legend of Zelda: …" (only when a real name is left).
     const raw = tpl.titleDropThe && /^the\s+\S{3,}/i.test(full) ? full.replace(/^the\s+/i, "") : full;
     const cut = raw.length > tpl.titleMaxChars ? raw.slice(0, Math.max(1, tpl.titleMaxChars - 1)).trimEnd() + "…" : raw;
-    // Fit the REAL words: one line while it reads at a decent size, else two
-    // (when allowed) — capped smaller so the price below keeps its size.
-    const minSize = 2.6 * fs;
+    // Fit the REAL words into the room above the price: one line while it
+    // reads at a decent size, else two (when allowed), else one cut line.
+    const minSize = Math.min(2.6 * fs, sizeCap(1));
     const fit = (lines: 1 | 2, hi: number): { size: number; lines: string[] } | null => {
       for (let size = hi; size >= minSize - 1e-6; size -= 0.1) {
         const w = wrapWords(cut, Math.max(4, Math.floor(colW / (size * chW))), lines);
@@ -415,9 +437,9 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
       }
       return null;
     };
-    let pick = fit(1, 4.8 * fs * fsc);
-    if (tpl.titleMaxLines === 2 && (!pick || pick.size < 3.0 * fs)) pick = fit(2, Math.max(minSize, 3.1 * fs * fsc)) ?? pick;
-    if (!pick) pick = { size: minSize, lines: wrapTitle(cut, Math.max(4, Math.floor(colW / (minSize * chW))), tpl.titleMaxLines) };
+    let pick = fit(1, Math.min(4.8 * fs * fsc, sizeCap(1)));
+    if (tpl.titleMaxLines === 2 && (!pick || pick.size < 3.0 * fs) && sizeCap(2) >= minSize) pick = fit(2, Math.min(4.8 * fs * fsc, sizeCap(2))) ?? pick;
+    if (!pick) pick = { size: minSize, lines: wrapTitle(cut, Math.max(4, Math.floor(colW / (minSize * chW))), 1) };
     const size = pick.size;
     y += size * (FP.titleTop ?? 1); // per-font lift: tall display faces start higher
     for (const line of pick.lines) {
@@ -431,11 +453,6 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
   } else {
     y += 3.2 * fs;
   }
-  const metaBits = [
-    tpl.show.category ? item.categoryName : "",
-    tpl.show.condition ? item.condShort : "",
-    tpl.show.sku && item.sku ? item.sku : "",
-  ].filter(Boolean);
   if (metaBits.length) {
     parts.push(`<text x="${colCx.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="middle" font-family="${fam}"${ls(metaSize)} font-size="${metaSize.toFixed(2)}" fill="#000">${esc(metaBits.join("  ·  "))}</text>`);
     y += metaSize * 1.08;
@@ -458,12 +475,11 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
       parts.push(`<text x="${ax.toFixed(2)}" y="${sy.toFixed(2)}" text-anchor="${anchor}" font-family="${fam}" font-weight="${wMid}" font-size="${tagF.toFixed(2)}" letter-spacing="0.15" fill="#000">${esc(nsTagline)}</text>`);
     }
   }
-  // Face price: big, centered — and ALWAYS clear of the barcode strip: the
-  // baseline is clamped ≥1.2mm above the bars, and the font shrinks only if a
-  // tall title/meta stack leaves genuinely too little room.
-  const floorY = wantBarcode ? bcY - 1.0 : H - INSET;
+  // Face price: big, centered — and ALWAYS clear of the barcode strip. Its size
+  // is fixed; the title above was fitted to leave it room (it only shrinks on
+  // a template too small to hold it at all).
   if (tpl.show.price) {
-    let priceFont = 6.0 * fs * tpl.priceScale * fsc * (FP.priceBoost ?? 1);
+    let priceFont = priceFontFixed;
     const room = floorY - y;
     // Digits carry no descenders, so 0.74 (cap height + air) is the honest
     // block height — the old 0.82 was leaving ~10% of the price on the table.
