@@ -84,6 +84,7 @@ export type LabelTemplate = {
     logo: boolean; title: boolean; category: boolean; condition: boolean;
     price: boolean; invType: boolean; location: boolean; sku: boolean; barcode: boolean;
     spineText: boolean;
+    spineCondition: boolean;             // "CIB" / "NEW" on the spine, between logo and price
   };
   spineText: string;                     // tagline under the spine price, e.g. "Buy | Sell | Chill"
   barcodeHeightMm: number;               // 5–20
@@ -124,7 +125,7 @@ export const DEFAULT_TEMPLATE: LabelTemplate = {
   spine: "left", // front-to-spine: face on the case FRONT, flap wraps the spine
   spineDir: "down",
   spineWidthMm: 13,
-  show: { logo: true, title: true, category: true, condition: true, price: true, invType: true, location: true, sku: false, barcode: true, spineText: true },
+  show: { logo: true, title: true, category: true, condition: true, price: true, invType: true, location: true, sku: false, barcode: true, spineText: true, spineCondition: false },
   spineText: "",
   barcodeHeightMm: 8,
   barcodeShowText: true,
@@ -173,7 +174,7 @@ export function sanitizeLabelTemplates(raw: any): LabelTemplate[] {
         logo: t.show?.logo !== false, title: t.show?.title !== false, category: t.show?.category !== false,
         condition: t.show?.condition !== false, price: t.show?.price !== false, invType: t.show?.invType !== false,
         location: t.show?.location !== false, sku: t.show?.sku === true, barcode: t.show?.barcode !== false,
-        spineText: t.show?.spineText !== false,
+        spineText: t.show?.spineText !== false, spineCondition: t.show?.spineCondition === true,
       },
       spineText: String(t.spineText ?? "").slice(0, 30),
       barcodeHeightMm: clamp(t.barcodeHeightMm, 5, 20, d.barcodeHeightMm),
@@ -331,20 +332,43 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
     const spAcross = Math.min(spineW - 1.6, Math.max(spPriceH + (spPriceH && spTagH ? 0.9 : 0) + spTagH, spLogoAcross, 2));
     const spEdge = 1.0;
     const spCx = tpl.spine === "left" ? sx + spEdge + spAcross / 2 : sx + spineW - spEdge - spAcross / 2;
-    let regionA = 0; // pair region between the logo and the spine's other end
+    // Along the spine: [logo] [condition] [price] — the logo end first. A
+    // 32mm spine can't always hold a full-size logo AND a long price (mono
+    // "$139.99"), so the logo gives way first; the price only shrinks as a
+    // last resort instead of running off the label.
+    const tagline = tpl.show.spineText ? tpl.spineText.trim() : "";
+    const advance = chW + (FP.spacing ?? 0);
+    const priceStr = tpl.show.price ? money(item.priceCents) : "";
+    const condStr = tpl.show.spineCondition ? (item.condShort.split("·")[0] || "").trim().slice(0, 8) : "";
+    let pF = 4.8 * fs * tpl.priceScale * fsc;
+    let cF = 2.6 * fs * fsc;
+    const tagF = 2.0 * fs * fsc;
+    const pairLen = () => Math.max(priceStr.length * pF * advance, tagline.length * tagF * 0.6);
+    const blockLen = () => (priceStr || tagline ? pairLen() : 0) + (condStr ? condStr.length * cF * advance + (priceStr || tagline ? 1.2 : 0) : 0);
+    const room = spineBottom - 1.2 - 1.0; // logo-end margin, far-end margin
+    let logoLen = 0;
+    if (tpl.show.logo && tpl.logoUrl) {
+      const want = tpl.logoRotate === "sideways" ? Math.max(4, Math.min(tpl.logoHeightMm * 1.8, spineBottom * 0.4)) : Math.max(3, Math.min(tpl.logoHeightMm, spineBottom * 0.4));
+      // Never smaller than its width across the spine: a square logo keeps its full size.
+      const min = tpl.logoRotate === "sideways" ? Math.min(want, Math.max(4, Math.min(tpl.logoHeightMm, spineW - 1.6))) : 3;
+      logoLen = Math.max(min, Math.min(want, room - 0.8 - blockLen()));
+    } else if (tpl.show.logo && item.storeName) logoLen = 3.2;
+    const fitRoom = room - (logoLen ? logoLen + 0.8 : 0);
+    if (blockLen() > fitRoom && blockLen() > 0) { const k = Math.max(0.55, fitRoom / blockLen()); pF *= k; cF *= k; }
+    let regionA = 0; // the block's region: between the logo and the spine's other end
     let regionB = spineBottom;
     if (tpl.show.logo) {
       if (tpl.logoUrl) {
         const cx = spCx;
         if (tpl.logoRotate === "sideways") {
           // Rotated with the price: image length runs down the spine.
-          const len = Math.max(4, Math.min(tpl.logoHeightMm * 1.8, spineBottom * 0.4));
+          const len = logoLen;
           const across = Math.min(tpl.logoHeightMm, spineW - 1.6);
           const ly = logoAtTop ? 1.2 + len / 2 : spineBottom - 1.2 - len / 2;
           parts.push(`<image href="${esc(tpl.logoUrl)}" x="${(cx - len / 2).toFixed(2)}" y="${(ly - across / 2).toFixed(2)}" width="${len.toFixed(2)}" height="${across.toFixed(2)}" preserveAspectRatio="xMidYMid meet" transform="rotate(${rot} ${cx.toFixed(2)} ${ly.toFixed(2)})"/>`);
           if (logoAtTop) regionA = 1.2 + len + 0.8; else regionB = spineBottom - 1.2 - len - 0.8;
         } else {
-          const lh = Math.max(3, Math.min(tpl.logoHeightMm, spineBottom * 0.4));
+          const lh = logoLen;
           const ly = logoAtTop ? 1.2 : spineBottom - 1.2 - lh;
           parts.push(`<image href="${esc(tpl.logoUrl)}" x="${(sx + 0.8).toFixed(2)}" y="${ly.toFixed(2)}" width="${(spineW - 1.6).toFixed(2)}" height="${lh.toFixed(2)}" preserveAspectRatio="xMidYMid meet"/>`);
           if (logoAtTop) regionA = ly + lh + 0.8; else regionB = ly - 0.8;
@@ -355,30 +379,37 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
         if (logoAtTop) regionA = 4.4; else regionB = spineBottom - 4.4;
       }
     }
-    const tagline = tpl.show.spineText ? tpl.spineText.trim() : "";
-    if (tpl.show.price || tagline) {
+    if (priceStr || tagline || condStr) {
       const cx = spCx;
-      // Price + tagline sit side-by-side across the spine (a 32mm spine can't
-      // fit both end-to-end); the PAIR is optically centered on the spine's
-      // width so it lines up under the centered logo.
-      const priceH = tpl.show.price ? 4.8 * fs * tpl.priceScale * fsc * 0.72 : 0;
-      const tagH = tagline ? 2.0 * fs * fsc : 0;
-      const gap = priceH && tagH ? 0.9 : 0;
-      const total = priceH + gap + tagH;
-      let cy = regionA + (regionB - regionA) / 2;
+      const len = blockLen();
+      let mid = regionA + (regionB - regionA) / 2;
       // Per-font nudge toward the logo end of the spine (never onto it).
       if (FP.spineShift) {
-        cy += logoAtTop ? -FP.spineShift : FP.spineShift;
-        cy = Math.max(regionA + total / 2 + 0.6, Math.min(regionB - total / 2 - 0.6, cy));
+        mid += logoAtTop ? -FP.spineShift : FP.spineShift;
+        mid = Math.max(regionA + len / 2 + 0.6, Math.min(regionB - len / 2 - 0.6, mid));
       }
+      const start = mid - len / 2;
+      const condLen = condStr ? condStr.length * cF * advance : 0;
+      const pLen = priceStr || tagline ? pairLen() : 0;
+      // The condition sits on the logo side of the price.
+      const condC = logoAtTop ? start + condLen / 2 : start + len - condLen / 2;
+      const cy = logoAtTop ? start + len - pLen / 2 : start + pLen / 2;
+      if (condStr) {
+        parts.push(`<text x="${cx.toFixed(2)}" y="${condC.toFixed(2)}" transform="rotate(${rot} ${cx.toFixed(2)} ${condC.toFixed(2)})" text-anchor="middle" dominant-baseline="central" font-family="${fam}" font-weight="${wMid}"${ls(cF)} font-size="${cF.toFixed(2)}" fill="#000">${esc(condStr)}</text>`);
+      }
+      // Price + tagline sit side-by-side ACROSS the spine.
+      const priceH = priceStr ? pF * 0.72 : 0;
+      const tagH = tagline ? tagF : 0;
+      const gap = priceH && tagH ? 0.9 : 0;
+      const total = priceH + gap + tagH;
       const rotAttr = `transform="rotate(${rot} ${cx.toFixed(2)} ${cy.toFixed(2)})"`;
       const priceDy = tagH ? -(total / 2 - priceH / 2) : 0;
       const tagDy = priceH ? total / 2 - tagH / 2 : 0;
-      if (tpl.show.price) {
-        parts.push(`<text x="${cx.toFixed(2)}" y="${cy.toFixed(2)}" ${rotAttr} dy="${priceDy.toFixed(2)}" text-anchor="middle" dominant-baseline="central" font-family="${fam}" font-weight="${wHeavy}"${ls(4.8 * fs * tpl.priceScale * fsc)} font-size="${(4.8 * fs * tpl.priceScale * fsc).toFixed(2)}" fill="#000">${esc(money(item.priceCents))}</text>`);
+      if (priceStr) {
+        parts.push(`<text x="${cx.toFixed(2)}" y="${cy.toFixed(2)}" ${rotAttr} dy="${priceDy.toFixed(2)}" text-anchor="middle" dominant-baseline="central" font-family="${fam}" font-weight="${wHeavy}"${ls(pF)} font-size="${pF.toFixed(2)}" fill="#000">${esc(priceStr)}</text>`);
       }
       if (tagline) {
-        parts.push(`<text x="${cx.toFixed(2)}" y="${cy.toFixed(2)}" ${rotAttr} dy="${tagDy.toFixed(2)}" text-anchor="middle" dominant-baseline="central" font-family="${fam}" font-weight="${wMid}" font-size="${(2.0 * fs * fsc).toFixed(2)}" letter-spacing="0.2" fill="#000">${esc(tagline)}</text>`);
+        parts.push(`<text x="${cx.toFixed(2)}" y="${cy.toFixed(2)}" ${rotAttr} dy="${tagDy.toFixed(2)}" text-anchor="middle" dominant-baseline="central" font-family="${fam}" font-weight="${wMid}" font-size="${tagF.toFixed(2)}" letter-spacing="0.2" fill="#000">${esc(tagline)}</text>`);
       }
     }
   }
@@ -427,9 +458,11 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
     // "The Legend of Zelda: …" → "Legend of Zelda: …" (only when a real name is left).
     const raw = tpl.titleDropThe && /^the\s+\S{3,}/i.test(full) ? full.replace(/^the\s+/i, "") : full;
     const cut = raw.length > tpl.titleMaxChars ? raw.slice(0, Math.max(1, tpl.titleMaxChars - 1)).trimEnd() + "…" : raw;
-    // Fit the REAL words into the room above the price: one line while it
-    // reads at a decent size, else two (when allowed), else one cut line.
-    const minSize = Math.min(2.6 * fs, sizeCap(1));
+    // The title is small and steady — it only lets staff confirm the label
+    // matches the game; the PRICE is the big thing. One line if it fits,
+    // else two (when allowed), shrinking a little before cutting.
+    const base = Math.min(2.9 * fs * fsc, sizeCap(1));
+    const minSize = Math.min(2.3 * fs * fsc, base);
     const fit = (lines: 1 | 2, hi: number): { size: number; lines: string[] } | null => {
       for (let size = hi; size >= minSize - 1e-6; size -= 0.1) {
         const w = wrapWords(cut, Math.max(4, Math.floor(colW / (size * chW))), lines);
@@ -437,8 +470,9 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
       }
       return null;
     };
-    let pick = fit(1, Math.min(4.8 * fs * fsc, sizeCap(1)));
-    if (tpl.titleMaxLines === 2 && (!pick || pick.size < 3.0 * fs) && sizeCap(2) >= minSize) pick = fit(2, Math.min(4.8 * fs * fsc, sizeCap(2))) ?? pick;
+    let pick = fit(1, base);
+    if (pick && pick.size < base - 1e-6 && tpl.titleMaxLines === 2 && sizeCap(2) >= base) pick = fit(2, Math.min(base, sizeCap(2))) ?? pick;
+    if (!pick && tpl.titleMaxLines === 2 && sizeCap(2) >= minSize) pick = fit(2, Math.min(base, sizeCap(2)));
     if (!pick) pick = { size: minSize, lines: wrapTitle(cut, Math.max(4, Math.floor(colW / (minSize * chW))), 1) };
     const size = pick.size;
     y += size * (FP.titleTop ?? 1); // per-font lift: tall display faces start higher

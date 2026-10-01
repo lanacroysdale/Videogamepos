@@ -408,8 +408,8 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
             <div class="lt-group">
               <div class="lt-group-h">👁 Show on label</div>
               <div class="lt-toggles" id="lt-shows">
-                {["logo","title","category","condition","price","invType","location","sku","barcode","spineText"].map((k) => (
-                  <label><input type="checkbox" data-ltshow={k} /> {k === "invType" ? "Inv. type" : k === "sku" ? "SKU" : k === "spineText" ? "Tagline" : k[0].toUpperCase() + k.slice(1)}</label>
+                {["logo","title","category","condition","price","invType","location","sku","barcode","spineText","spineCondition"].map((k) => (
+                  <label><input type="checkbox" data-ltshow={k} /> {k === "invType" ? "Inv. type" : k === "sku" ? "SKU" : k === "spineText" ? "Tagline" : k === "spineCondition" ? "Condition on spine" : k[0].toUpperCase() + k.slice(1)}</label>
                 ))}
               </div>
               <div class="lt-toggles" style="border-top:1px solid var(--border);padding-top:0.5rem;">
