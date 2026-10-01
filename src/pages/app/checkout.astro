@@ -311,6 +311,9 @@ const posData = { catalog, categories: categories ?? [], customer };
     if (pick) {
       list.innerHTML = `<div class="pick-head"><span>Which condition? — <strong>${esc(pick.title)}</strong></span><button type="button" class="pick-cancel" data-pick-cancel>Cancel</button></div>`
         + pick.rows.map((v) => prodRowHtml(v)).join("");
+      // mousedown → preventDefault: picking must not pull focus out of the
+      // search box, or the next wedge scan would type into nothing.
+      list.querySelectorAll<HTMLElement>("[data-pick-cancel], [data-add]").forEach((el) => el.addEventListener("mousedown", (e) => e.preventDefault()));
       list.querySelector("[data-pick-cancel]")?.addEventListener("click", () => { pick = null; renderProducts(); });
       list.querySelectorAll<HTMLButtonElement>("[data-add]").forEach((b) =>
         b.addEventListener("click", () => { pick = null; addVariant(b.dataset.add!); renderProducts(); }));

@@ -272,6 +272,7 @@ const posData = {
           e.preventDefault();
           const c = conds[+el.dataset.ci!];
           pickSuggestion(r, bc.p, { completenessCode: c.completenessCode, gradeCode: c.gradeCode });
+          r.resaleCents = c.priceCents; // exactly the price the chooser showed
           fbox.hidden = true;
           render();
         }));

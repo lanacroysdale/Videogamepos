@@ -14,8 +14,9 @@ import { searchGameListings, getItemWithProduct, ebayConfigured } from "./ebay";
 import { sameRelease, platformAgrees, regionAgrees, aspectMap, usUpcs, upcEligible, upcForms } from "./upcMatch";
 import { withoutTrailingPlatform } from "./smartSearch";
 import { fetchAll } from "./fetchAll";
+import { barcodeEq } from "./gtin";
 
-export type UpcStatus = "found" | "not_found" | "ambiguous" | "conflict" | "error";
+export type UpcStatus = "found" | "not_found" | "ambiguous" | "conflict" | "error" | "rejected";
 export interface UpcLookup { status: UpcStatus; upcs: string[]; evidence: string }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -110,7 +111,7 @@ export interface FillResult { id: string; status: UpcStatus | "has" | "ineligibl
  */
 export async function fillListingUpcs(admin: any, opts: { productIds?: string[]; force?: boolean; deadline?: number; max?: number } = {}): Promise<{ results: FillResult[]; stopped?: string }> {
   if (!ebayConfigured()) return { results: [], stopped: "eBay isn't connected on the server (EBAY_CLIENT_ID / EBAY_CLIENT_SECRET)" };
-  const cols = "id, title, platform, deleted_at, upc_status, upc_checked_at, category:categories(name), product_upcs(id, upc, source)";
+  const cols = "id, title, platform, deleted_at, upc_status, upc_checked_at, upc_rejected, category:categories(name), product_upcs(id, upc, source)";
   let rows: any[] = [];
   if (opts.productIds?.length) {
     const { data, error } = await admin.from("products").select(cols).in("id", opts.productIds.slice(0, 50));
@@ -140,10 +141,15 @@ export async function fillListingUpcs(admin: any, opts: { productIds?: string[];
     let evidence = look.evidence;
     let upcs = have;
     if (look.status === "found") {
-      const fresh = look.upcs.filter((u) => !have.some((h: any) => h.upc === u));
+      // Never re-attach a code a manager removed from this listing.
+      const rejected: string[] = p.upc_rejected || [];
+      const allowed = look.upcs.filter((u) => !rejected.some((r) => barcodeEq(r, u)));
+      if (!allowed.length) { status = "rejected"; evidence = `eBay's UPC ${look.upcs.join(", ")} was removed by a manager — add the right one by hand`; }
+      const fresh = allowed.filter((u) => !have.some((h: any) => h.upc === u));
       const { added, conflicts } = await attachUpcs(admin, p.id, fresh, "ebay", look.evidence);
       upcs = [...have, ...added];
-      if (!upcs.length && conflicts.length) { status = "conflict"; evidence = conflicts.join("; "); }
+      if (status === "rejected") { /* evidence set above */ }
+      else if (!upcs.length && conflicts.length) { status = "conflict"; evidence = conflicts.join("; "); }
       else if (conflicts.length) evidence += ` — skipped ${conflicts.join("; ")}`;
     }
     await admin.from("products").update({ upc_status: status, upc_checked_at: new Date().toISOString() }).eq("id", p.id);
@@ -158,7 +164,8 @@ export async function fillListingUpcs(admin: any, opts: { productIds?: string[];
 
 // How long before the automatic lookup tries a listing again.
 // "rejected" = a manager removed the automatic UPC: never automatically again.
-const RETRY_DAYS: Record<string, number> = { not_found: 30, ambiguous: 60, conflict: 60, error: 1, rejected: Infinity };
+// "found" with no UPC left = someone removed it by hand: look again in a month.
+const RETRY_DAYS: Record<string, number> = { found: 30, not_found: 30, ambiguous: 60, conflict: 60, error: 1, rejected: Infinity };
 
 /** Listings the automatic lookup should try now: eligible, no UPC yet, not
  *  tried recently — never-tried first, then the longest ago. */

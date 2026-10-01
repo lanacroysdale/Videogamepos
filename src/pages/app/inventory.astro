@@ -1215,7 +1215,7 @@ const posData = {
     const block = $("upc-block");
     const redraw = () => { block.innerHTML = upcBlockHtml(p); bindUpcBlock(p); render(); };
     block.querySelectorAll<HTMLElement>("[data-upcdel]").forEach((btn) => btn.addEventListener("click", async () => {
-      try { const j = await upcApi({ action: "remove", id: btn.dataset.upcdel }); p.upcs = j.upcs; if (!j.upcs.length) p.upcStatus = "rejected"; redraw(); } catch (e: any) { alert(e.message); }
+      try { const j = await upcApi({ action: "remove", id: btn.dataset.upcdel }); p.upcs = j.upcs; if (j.status) p.upcStatus = j.status; redraw(); } catch (e: any) { alert(e.message); }
     }));
     const inp = block.querySelector<HTMLInputElement>("#upc-new")!;
     const add = async () => {
@@ -1810,12 +1810,11 @@ const posData = {
             <span class="ti-sug-meta">${t && t.key !== "retail" ? esc((t.icon || "") + " " + t.name) + " · " : ""}${v.quantity} in stock</span>
             <span class="ti-sug-price">${money(v.priceCents)}</span>
           </div>`;
-        }).join("") + `<div class="ti-sug" data-cv-other><span class="ti-sug-title">＋ Another condition</span><span class="ti-sug-meta">stage one, then change its condition on the line</span></div>`;
+        }).join("");
         box.hidden = false;
         box.querySelectorAll<HTMLElement>("[data-cv]").forEach((el) => el.addEventListener("mousedown", (e) => {
           e.preventDefault(); box.hidden = true; stageVariant(upcP, vs[+el.dataset.cv!]);
         }));
-        box.querySelector("[data-cv-other]")?.addEventListener("mousedown", (e) => { e.preventDefault(); box.hidden = true; stageVariant(upcP, vs[0]); });
         return;
       }
     }

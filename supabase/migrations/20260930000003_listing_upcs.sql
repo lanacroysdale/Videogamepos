@@ -12,9 +12,10 @@
 --    GTIN, so the 12-digit "045496742843" and 13-digit "0045496742843" are the
 --    same code.
 -- 2) products.upc_status / upc_checked_at: the automatic lookup's last result
---    ('found' | 'not_found' | 'ambiguous' | 'conflict' | 'error'), so the
---    daily run skips listings it tried recently, and "Needs UPC" can explain
---    why a listing has none.
+--    ('found' | 'not_found' | 'ambiguous' | 'conflict' | 'error' | 'rejected'),
+--    so the daily run skips listings it tried recently, and "Needs UPC" can
+--    explain why a listing has none. upc_rejected: codes a manager removed —
+--    never attached automatically again.
 --
 -- Apply in the Supabase SQL editor. Safe to re-run.
 -- ============================================================================
@@ -36,6 +37,9 @@ create policy product_upcs_staff on public.product_upcs for all using (public.is
 
 alter table public.products add column if not exists upc_status text;
 alter table public.products add column if not exists upc_checked_at timestamptz;
+-- Codes a manager removed from this listing: the automatic lookup never
+-- attaches them again.
+alter table public.products add column if not exists upc_rejected text[] not null default '{}';
 
 -- Codes already saved as a condition's "UPC" barcode (eBay imports) become
 -- their listing's UPC too. Stored as the 12-digit UPC-A when it is one.
