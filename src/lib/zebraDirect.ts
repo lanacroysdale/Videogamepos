@@ -82,7 +82,38 @@ export function buildZpl(bitmap: { hex: string; rowBytes: number; rows: number; 
   const total = bitmap.rowBytes * bitmap.rows;
   // ^MNY gap tracking + ^PW/^LL pin the geometry so the printer never
   // free-runs past the label gap; ^PQ prints N copies of the one format.
-  return `^XA^MNY^PW${bitmap.pw}^LL${bitmap.rows}^LH0,0^FO0,0^GFA,${total},${total},${bitmap.rowBytes},${bitmap.hex}^FS^PQ${Math.max(1, Math.min(500, copies))}^XZ`;
+  return `^XA^MNY^PW${bitmap.pw}^LL${bitmap.rows}^LH0,0^FO0,0^GFA,${total},${total},${bitmap.rowBytes},${compressGfa(bitmap.hex, bitmap.rowBytes)}^FS^PQ${Math.max(1, Math.min(500, copies))}^XZ`;
+}
+
+// ZPL's ASCII compression for ^GFA hex (every Zebra printer reads it): a row
+// equal to the one above is ":", a row of zeros is ",", trailing zeros end
+// with ",", and runs of one hex digit get a count (G–Y = 1–19, g–z = 20–400).
+// A label is mostly white, so this cuts each one from ~20 KB to a few KB —
+// a whole entry of labels no longer overwhelms the Browser Print agent.
+export function compressGfa(hex: string, rowBytes: number): string {
+  const w = rowBytes * 2;
+  let out = "", prev = "";
+  for (let i = 0; i < hex.length; i += w) {
+    const row = hex.slice(i, i + w);
+    if (row === prev) { out += ":"; continue; }
+    prev = row;
+    const body = row.replace(/0+$/, "");
+    if (!body) { out += ","; continue; }
+    for (let j = 0; j < body.length;) {
+      let k = j;
+      while (k < body.length && body[k] === body[j] && k - j < 400) k++; // a count tops out at 400
+      out += runCode(k - j) + body[j];
+      j = k;
+    }
+    if (body.length < w) out += ",";
+  }
+  return out;
+}
+function runCode(n: number): string {
+  let s = "";
+  if (n >= 20) { s += String.fromCharCode(102 + Math.floor(n / 20)); n %= 20; } // g=20 … z=400
+  if (n > 1 || (n === 1 && s)) s += String.fromCharCode(70 + n); // G=1 … Y=19
+  return s;
 }
 
 // Render every job and hand the ZPL to the agent's chosen printer.
@@ -91,18 +122,33 @@ export async function printDirect(device: any, jobs: ZebraJob[], tpl: LabelTempl
   if (!real.length) return 0;
   await ensureLabelFont(tpl);
   const deps = { styleTag: await fontStyleTag(tpl), logoData: tpl.logoUrl ? await inlineLogo(tpl.logoUrl) : "" };
-  let zpl = "";
-  let n = 0;
+  // Sent in small batches, one after another: one huge request for a whole
+  // entry is what the agent refuses, and a failure part-way says how far it got.
+  const BATCH_BYTES = 48_000;
+  let zpl = "", inBatch = 0, sent = 0, queued = 0;
+  const flush = async () => {
+    if (!zpl) return;
+    const r = await fetch(`${AGENT}/write`, { method: "POST", body: JSON.stringify({ device, data: zpl }), signal: AbortSignal.timeout(30000) })
+      .catch((e) => { throw new ZebraError(`Couldn't reach Zebra Browser Print (${e?.message || e}).`, sent); });
+    if (!r.ok) {
+      const why = (await r.text().catch(() => "")).trim().slice(0, 200);
+      throw new ZebraError(`Zebra Browser Print couldn't send to the printer (${r.status}${why ? `: ${why}` : ""}).`, sent);
+    }
+    sent += inBatch; zpl = ""; inBatch = 0;
+  };
   for (const j of real) {
     const bmp = await labelToZplBitmap(tpl, j.item, tune, deps);
-    zpl += buildZpl(bmp, j.copies);
-    n += Math.min(500, j.copies);
+    const one = buildZpl(bmp, j.copies);
+    if (zpl && zpl.length + one.length > BATCH_BYTES) await flush();
+    zpl += one;
+    inBatch += Math.min(500, j.copies);
+    queued += Math.min(500, j.copies);
   }
-  const r = await fetch(`${AGENT}/write`, {
-    method: "POST",
-    body: JSON.stringify({ device, data: zpl }),
-    signal: AbortSignal.timeout(20000),
-  });
-  if (!r.ok) throw new Error(`The Zebra agent refused the job (${r.status})`);
-  return n;
+  await flush();
+  return queued;
+}
+
+/** A direct print that stopped: `sent` labels were already handed to the printer. */
+export class ZebraError extends Error {
+  constructor(message: string, public sent: number) { super(message); }
 }

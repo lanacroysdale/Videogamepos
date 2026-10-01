@@ -325,7 +325,10 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
         btn.textContent = `✓ Sent ${n} label${n === 1 ? "" : "s"}`;
         setTimeout(close, 900);
       } catch (e: any) {
-        alert("Direct print failed: " + e.message + "\n\nIs Zebra Browser Print running on this computer?");
+        const sent = Number(e?.sent) || 0;
+        alert(`Direct print stopped${sent ? ` after ${sent} label${sent === 1 ? "" : "s"}` : ""}: ${e.message}\n\n`
+          + "Check that the Zebra is on and ready (green light, not paused, labels loaded, lid closed), and that it's the default printer in the Zebra Browser Print menu-bar app."
+          + (sent ? `\n\nThe first ${sent} label${sent === 1 ? " was" : "s were"} already sent — remove those from the list before printing again.` : ""));
         btn.disabled = false; btn.textContent = orig;
       }
     });
