@@ -75,10 +75,12 @@ export function catalogName(title: string, platform: string): string {
   const canon = resolveStaticPlatform(platform);
   const s = String(title ?? "").replace(/\(([^)]*)\)|\[([^\]]*)\]/g, (_m, a, b) => {
     const inner = String(a ?? b ?? "");
-    const platformOrYear = inner.split(/[,/]/).every((part) => {
+    const US_TAG = /^(ntsc(-u(\/c)?)?|us|usa|north america|us version|region free|video ?game)$/i;
+    if (US_TAG.test(inner.trim())) return " ";
+    const platformOrYear = inner.split(/,/).every((part) => {
       const t = part.trim();
       return !t || /^(19|20)\d\d$/.test(t) || (canon !== null && resolveStaticPlatforms(t).includes(canon) && t.split(/\s+/).length <= 5)
-        || /^(ntsc(-u\/c)?|us|usa|north america|us version|region free|video ?game)$/i.test(t);
+        || US_TAG.test(t);
     });
     return platformOrYear ? " " : ` ${inner} `;
   }).replace(/\bstandard edition\b|\bvideo ?game\b/gi, " ").replace(/\s+/g, " ").trim();

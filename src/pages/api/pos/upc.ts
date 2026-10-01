@@ -60,14 +60,20 @@ export const POST: APIRoute = async ({ locals, request }) => {
 
     if (b.action === "remove") {
       if (!manager) return json({ error: "Managers only" }, 403);
-      const { data: row } = await admin.from("product_upcs").select("id, product_id, source").eq("id", b.id).maybeSingle();
+      const { data: row } = await admin.from("product_upcs").select("id, product_id, upc, source").eq("id", b.id).maybeSingle();
       if (!row) return json({ ok: true, upcs: [] });
       await admin.from("product_upcs").delete().eq("id", row.id);
       const { data: all } = await admin.from("product_upcs").select("id, upc, source").eq("product_id", row.product_id).order("created_at");
-      // Removing an automatic match means it was wrong: don't re-add it.
-      if (row.source === "ebay" && !(all || []).length)
-        await admin.from("products").update({ upc_status: "rejected", upc_checked_at: new Date().toISOString() }).eq("id", row.product_id);
-      return json({ ok: true, upcs: all || [] });
+      // Removing an automatic match means it was wrong: remember the code so
+      // no lookup ever attaches it to this listing again.
+      let status: string | null = null;
+      if (row.source === "ebay") {
+        const { data: prod } = await admin.from("products").select("upc_rejected").eq("id", row.product_id).maybeSingle();
+        const rejected = [...new Set([...(prod?.upc_rejected || []), row.upc])];
+        status = (all || []).length ? null : "rejected";
+        await admin.from("products").update({ upc_rejected: rejected, ...(status ? { upc_status: status, upc_checked_at: new Date().toISOString() } : {}) }).eq("id", row.product_id);
+      }
+      return json({ ok: true, upcs: all || [], status });
     }
 
     return json({ error: "Unknown action" }, 400);
