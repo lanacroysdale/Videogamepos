@@ -27,9 +27,9 @@ const variantCols = `id, condition, completeness_code, grade_code, price_cents, 
 // pre-migration DB still serves the page (nothing is soft-deleted there anyway).
 const productCols = `id, title, slug, platform, franchise, genre, description, image_url, trailer_url, release_year, brand, alternative_names, tags, category:categories(name), product_variants(${variantCols})`;
 // Newest columns first, dropping one at a time for a DB that predates them
-// (pending_entry_id: migration 20260930000001).
+// (pending_entry_id: migration 20260930000001; product_upcs: 20260930000003).
 let res: { data: any; error: any } = { data: null, error: true };
-for (const extra of ["deleted_at, pending_entry_id, ", "deleted_at, ", ""]) {
+for (const extra of ["product_upcs(upc), deleted_at, pending_entry_id, ", "deleted_at, pending_entry_id, ", "deleted_at, ", ""]) {
   res = (await admin.from("products").select(`${extra}${productCols}`).eq("slug", slug).maybeSingle()) as { data: any; error: any };
   if (!res.error) break;
 }
@@ -87,9 +87,9 @@ function ytEmbed(url: string | null | undefined) {
 const trailer = ytEmbed(product?.trailer_url);
 const lowest = variants.length ? variants[0].displayCents : null;
 
-// UPC — first UPC barcode across variants.
-let upc: string | null = null;
-for (const v of product?.product_variants ?? []) {
+// UPC — the listing's (shared by every condition), else a condition's UPC barcode.
+let upc: string | null = product?.product_upcs?.[0]?.upc ?? null;
+for (const v of upc ? [] : product?.product_variants ?? []) {
   const b = (v.product_barcodes ?? []).find((bc: any) => bc.label === "UPC" && bc.barcode);
   if (b) { upc = b.barcode; break; }
 }

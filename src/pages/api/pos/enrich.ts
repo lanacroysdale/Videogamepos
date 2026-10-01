@@ -3,6 +3,8 @@ import { createSupabaseAdminClient } from "../../../lib/supabase";
 import { searchGame, igdbConfigured } from "../../../lib/igdb";
 import { lbPlatform, lbImageUrl } from "../../../lib/launchbox";
 import { copyImageToStorage } from "../../../lib/storage";
+import { sameGameName, sameBoxRelease } from "../../../lib/upcMatch";
+import { withoutTrailingPlatform } from "../../../lib/smartSearch";
 
 export const prerender = false;
 const json = (d: unknown, s = 200) =>
@@ -23,10 +25,16 @@ export const POST: APIRoute = async ({ locals, request }) => {
 
   const admin = createSupabaseAdminClient();
 
+  // Only the SAME game's art and details — a near-miss name is often another
+  // game ("My Friend Pedro" ≠ "My Friend Peppa Pig", "Advance Wars 2" ≠
+  // "Advance Wars", a ROM hack ≠ "Pokémon FireRed"). Unsure → leave it empty.
+  const platform = String(b.platform ?? "");
+  const same = (name: string) => sameGameName(title, name, platform);
+
   // 1. IGDB metadata (description, trailer, release year, alt-names, fallback cover).
   let meta: Awaited<ReturnType<typeof searchGame>> = null;
   if (igdbConfigured()) {
-    try { meta = await searchGame(title, b.platform); } catch { meta = null; }
+    try { meta = await searchGame(title, b.platform, same); } catch { meta = null; }
   }
 
   // 2. LaunchBox retail box art — preferred cover source. Defaults to the 3D
@@ -35,9 +43,21 @@ export const POST: APIRoute = async ({ locals, request }) => {
   let coverUrl: string | null = meta?.coverUrl ?? null;
   let coverSource: string | null = meta?.coverUrl ? "igdb" : null;
   try {
-    const { data: lb } = await admin.rpc("lookup_box_art", { p_title: title, p_platform: lbPlatform(b.platform) });
-    const best = Array.isArray(lb) ? lb[0] : lb;
-    if (best && (best.sim ?? 0) >= 0.4) {
+    // The closest few names on that platform, not just the closest one: the
+    // nearest can be a hack or a sequel while the real game is next in line.
+    const lbp = lbPlatform(b.platform);
+    const q = withoutTrailingPlatform(title.replace(/\[[^\]]*\]|\([^)]*\)/g, " ").replace(/\s+/g, " ").trim(), platform);
+    let cands: any[] = [];
+    const { data: found, error: sErr } = await admin.rpc("search_games", { p_query: q, p_platform: lbp, p_limit: 10 });
+    if (!sErr && Array.isArray(found)) cands = found;
+    if (!cands.length) {
+      const { data: lb } = await admin.rpc("lookup_box_art", { p_title: q, p_platform: lbp });
+      cands = Array.isArray(lb) ? lb : lb ? [lb] : [];
+    }
+    const art = cands.filter((c: any) => (c.box_front || c.box_3d) && (c.sim ?? 0) >= 0.4);
+    // That exact release's box first ("… [Classic NES Series]"), else the game's.
+    const best = art.find((c: any) => sameBoxRelease(title, String(c.name ?? ""), platform)) || art.find((c: any) => same(String(c.name ?? "")));
+    if (best) {
       const threeD = b.flat ? null : best.box_3d;
       const file = threeD || best.box_front;
       if (file) { coverUrl = lbImageUrl(file); coverSource = threeD ? "launchbox-3d" : "launchbox"; }

@@ -61,11 +61,14 @@ const variantExtraCols = `${hasTypes ? ", inventory_type_id, location_id" : ""}$
 // counts and every other page hide them.
 const { error: pendProbeErr } = await supabase.from("products").select("pending_entry_id").limit(1);
 const pendCol = pendProbeErr ? "" : ", pending_entry_id";
+// Listing UPCs + the automatic lookup's last result (migration 20260930000003).
+const { error: upcProbeErr } = await supabase.from("product_upcs").select("id").limit(1);
+const upcCols = upcProbeErr ? "" : ", upc_status, upc_checked_at, product_upcs(id, upc, source, evidence)";
 // Paged — one request stops at 1,000 listings (later titles silently vanished).
 const { data: products } = await fetchAll((from, to) => supabase
   .from("products")
   .select(
-    `id, title, slug, platform, franchise, genre, description, image_url, alternative_names, tags, category_id${delProbeErr ? "" : ", deleted_at"}${pendCol}, category:categories(name,color)${srcProbeErr ? "" : ", product_suppliers(id, label, url)"}, product_variants(id, condition, completeness, completeness_code, grade_code, sku, barcode, internal_code, price_cents, online_price_cents, cost_cents, quantity, online_visible${variantExtraCols}${pendCol}, product_barcodes(id, barcode, label))`,
+    `id, title, slug, platform, franchise, genre, description, image_url, alternative_names, tags, category_id${delProbeErr ? "" : ", deleted_at"}${pendCol}${upcCols}, category:categories(name,color)${srcProbeErr ? "" : ", product_suppliers(id, label, url)"}, product_variants(id, condition, completeness, completeness_code, grade_code, sku, barcode, internal_code, price_cents, online_price_cents, cost_cents, quantity, online_visible${variantExtraCols}${pendCol}, product_barcodes(id, barcode, label))`,
   )
   .order("title")
   .order("id")
@@ -111,6 +114,9 @@ const allRows = (products ?? []).map((p: any) => ({
   ebayId: (p.tags ?? []).find((t: string) => t.startsWith("ebay:"))?.slice(5) ?? "",
   pcId: (p.tags ?? []).find((t: string) => t.startsWith("pricecharting:"))?.slice(13) ?? "",
   supplierLinks: p.product_suppliers ?? [], // manager-only via RLS (staff get [])
+  upcs: (p.product_upcs ?? []).map((u: any) => ({ id: u.id, upc: u.upc, source: u.source, evidence: u.evidence ?? "" })),
+  upcStatus: p.upc_status ?? "",
+  upcCheckedAt: p.upc_checked_at ?? null,
   // Live stock rows only; a draft's not-yet-finished rows sit apart.
   variants: (p.product_variants ?? []).filter((v: any) => !v.pending_entry_id).map(mapVariant),
   pendingVariants: (p.product_variants ?? []).filter((v: any) => v.pending_entry_id).map(mapVariant),
@@ -144,6 +150,7 @@ const posData = {
   draftsReady: !draftProbeErr,
   sourcesReady: !srcProbeErr,
   receivedOnReady: !roProbeErr,
+  upcReady: !upcProbeErr,
 };
 ---
 
@@ -153,6 +160,7 @@ const posData = {
     {isManager && <button id="ebay-sync" class="btn btn-ghost btn-sm" title="Check eBay for ended / out-of-stock listings and zero them on the website (never raises local stock)">🔁 Sync eBay stock</button>}
     {isManager && <button id="resync-img" class="btn btn-ghost btn-sm" title="Fetch covers for items with no image (only fills empties)">🔄 Resync images</button>}
     {isManager && <button id="fix-titles" class="btn btn-ghost btn-sm" title="Suggest official game titles (from the game database) for listings with typos — you approve each one">✎ Fix titles</button>}
+    {isManager && !upcProbeErr && <button id="fill-upcs" class="btn btn-ghost btn-sm" title="Look up UPCs on eBay's product catalog for games that don't have one (attaches only sure matches)">🏷 Fill missing UPCs</button>}
     <button id="phone-scan-btn" class="btn btn-ghost btn-sm" title="Pair your phone as a wireless scanner">📱 Phone</button>
     <a href="/entries" class="btn btn-ghost btn-sm" title="Past receiving entries + label reprints">📥 Entries</a>
     <button id="inv-import" class="btn btn-ghost btn-sm" title="Import a collection .csv (PriceCharting export or any Title / Platform / Condition sheet) as staged lines on an entry">📄 Import CSV</button>
@@ -255,6 +263,7 @@ const posData = {
       <button class="chip filt" data-filt="web">On web</button>
       <button class="chip filt" data-filt="ebay">🛒 eBay imports</button>
       <button class="chip filt warn-chip" data-filt="attention" id="attn-chip">⚠ Needs attention</button>
+      {!upcProbeErr && <button class="chip filt" data-filt="needsupc" id="upc-chip" title="Games with no UPC yet — scanning their box won't find them">Needs UPC</button>}
       {(invTypesSrv ?? []).filter((t: any) => t.key !== "retail").map((t: any) => (
         <button class="chip tfilt" data-invtype={t.id} title={`Only ${t.name} stock`}>{t.icon} {t.name}</button>
       ))}
@@ -491,6 +500,8 @@ const posData = {
   .bc-chip button { background:none; border:none; color:var(--magenta); cursor:pointer; padding:0; }
   .bc-add { display:flex; gap:0.35rem; flex-wrap:wrap; margin-top:0.3rem; }
   .bc-add input { width:9rem; padding:0.3rem 0.45rem; }
+  .upc-block { border-color:var(--cyan); }
+  .upc-note { font-size:0.76rem; color:var(--muted-2); margin:0.2rem 0; }
 
   .inv-toast { position:fixed; bottom:1.2rem; left:50%; transform:translateX(-50%); z-index:90; background:var(--green); color:#062a12; font-weight:700; padding:0.55rem 1.1rem; border-radius:999px; box-shadow:0 8px 24px rgba(0,0,0,.4); font-size:0.88rem; }
 
@@ -558,6 +569,7 @@ const posData = {
   import { barcodeEq } from "../../lib/gtin";
   import { openImportDialog } from "../../lib/importDialog";
   import { newListingKey, officialTitleFor, itemKind, norm as normImport } from "../../lib/collectionImport";
+  import { upcEligible } from "../../lib/upcMatch";
 
   const data = JSON.parse(document.getElementById("pos-data")!.textContent!);
   let items: any[] = data.items;
@@ -569,7 +581,7 @@ const posData = {
   const esc = (s: any) => String(s ?? "").replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m] as string));
   const money = (c: number) => (c / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
   const toCents = (v: string) => Math.max(0, Math.round(parseFloat(v) * 100) || 0);
-  const state = { q: "", cat: "", sort: "title", instock: false, web: false, ebay: false, attention: false, parsed: null as any };
+  const state = { q: "", cat: "", sort: "title", instock: false, web: false, ebay: false, attention: false, needsupc: false, parsed: null as any };
   const selected = new Set<string>(); // product ids selected for bulk edit
 
   /* ---------- Smart find-or-create (shared module: src/lib/smartSearch.ts) ---------- */
@@ -691,6 +703,11 @@ const posData = {
   const totalQty = (p: any) => p.variants.reduce((s: number, v: any) => s + v.quantity, 0);
   const maxPrice = (p: any) => Math.max(0, ...p.variants.map((v: any) => v.priceCents));
   const anyWeb = (p: any) => p.variants.some((v: any) => v.onlineVisible);
+  // Listing UPCs (every condition shares them). "Needs UPC" = a US game on a
+  // known platform with none yet — scanning its box would find nothing.
+  const upcReady: boolean = !!(data as any).upcReady;
+  const upcsOf = (p: any): string[] => (p.upcs || []).map((u: any) => u.upc);
+  const needsUpc = (p: any) => upcReady && !upcsOf(p).length && upcEligible({ title: p.title, platform: p.platform, categoryName: p.categoryName });
   // What a listing is still missing (drives the "needs attention" inbox + badge).
   function issues(p: any): string[] {
     const out: string[] = [];
@@ -751,6 +768,7 @@ const posData = {
           </div>
           <div class="inv-tags">${tags}</div>
           ${skus.length ? `<div class="inv-sku">${esc(skus[0])}${skus.length > 1 ? ` +${skus.length - 1}` : ""}</div>` : ""}
+          ${upcsOf(p).length ? `<div class="inv-sku" title="UPC — scanning it finds this listing">UPC ${esc(upcsOf(p)[0])}${upcsOf(p).length > 1 ? ` +${upcsOf(p).length - 1}` : ""}</div>` : ""}
           <div class="inv-variants">${p.variants.map(vchip).join("")}</div>
           ${issues(p).length ? `<div class="inv-warn">⚠ Needs: ${issues(p).join(", ")}</div>` : ""}
         </div>
@@ -770,7 +788,7 @@ const posData = {
     const rawQ = (state.q || "").trim();
     if (rawQ.length >= 2) {
       const Q = rawQ.toUpperCase();
-      const codeHits = liveItems().filter((p) => p.variants.some((v: any) =>
+      const codeHits = liveItems().filter((p) => upcsOf(p).some((u) => barcodeEq(u, rawQ)) || p.variants.some((v: any) =>
         (v.sku && v.sku.toUpperCase().includes(Q)) ||
         (v.internalCode && v.internalCode === Q) ||
         (v.labelCode && v.labelCode === rawQ) ||
@@ -783,6 +801,7 @@ const posData = {
       if (state.web && !anyWeb(p)) return false;
       if (state.ebay && !p.ebayId) return false;
       if (state.attention && issues(p).length === 0) return false;
+      if (state.needsupc && !needsUpc(p)) return false;
       if ((state as any).invType && !p.variants.some((v: any) => v.inventoryTypeId === (state as any).invType)) return false;
       return true;
     });
@@ -823,6 +842,9 @@ const posData = {
     const attn = liveItems().filter((p) => issues(p).length).length;
     const chip = document.getElementById("attn-chip");
     if (chip) chip.textContent = `⚠ Needs attention${attn ? ` (${attn})` : ""}`;
+    const nu = liveItems().filter(needsUpc).length;
+    const upcChip = document.getElementById("upc-chip");
+    if (upcChip) upcChip.textContent = `Needs UPC${nu ? ` (${nu})` : ""}`;
     updateBulkBar();
   }
 
@@ -955,6 +977,7 @@ const posData = {
 
       <div class="m-section">
         <div class="m-label">Barcodes</div>
+        ${upcReady ? `<div class="bc-block upc-block" id="upc-block">${upcBlockHtml(p)}</div>` : ""}
         <div id="bc-blocks">${bcBlocks}</div>
       </div>
 
@@ -971,6 +994,7 @@ const posData = {
     if (p.ebayId) { ebayLink.href = `https://www.ebay.com/itm/${p.ebayId}`; ebayLink.hidden = false; } else { ebayLink.hidden = true; }
 
     bindBarcodes(p);
+    if (upcReady) bindUpcBlock(p);
     bindReprice(p);
     wireModalComps();
     $("add-cond").addEventListener("click", () => addCondition(p));
@@ -1146,6 +1170,74 @@ const posData = {
           <button class="btn btn-ghost btn-sm" data-bcadd>Add</button>
         </div>
       </div>`;
+  }
+
+  // The listing's UPC(s): one code for the game, whatever the condition.
+  const UPC_SOURCE: Record<string, string> = { ebay: "eBay catalog", manual: "entered", import: "from sheet" };
+  function upcStatusLine(p: any): string {
+    if ((p.upcs || []).length) return "";
+    const when = p.upcCheckedAt ? ` (checked ${new Date(p.upcCheckedAt).toLocaleDateString()})` : "";
+    const why: Record<string, string> = {
+      not_found: "eBay's catalog didn't have a sure match", ambiguous: "eBay lists more than one release that could be this one",
+      conflict: "eBay's UPC is already on another listing", error: "eBay didn't answer", rejected: "a manager removed the automatic UPC",
+    };
+    if (p.upcStatus && why[p.upcStatus]) return `No UPC yet — ${why[p.upcStatus]}${when}. Scan the box's barcode into the field to add it.`;
+    return needsUpc(p) ? "No UPC yet — it's looked up automatically, or scan the box's barcode into the field." : "No UPC — scan or type it if this item has one.";
+  }
+  function upcBlockHtml(p: any) {
+    const chips = (p.upcs || []).map((u: any) =>
+      `<span class="bc-chip" title="${esc(u.evidence || UPC_SOURCE[u.source] || "")}">${esc(u.upc)} · ${esc(UPC_SOURCE[u.source] || u.source)}${data.isManager ? ` <button data-upcdel="${u.id}" title="Remove">✕</button>` : ""}</span>`).join("");
+    const line = upcStatusLine(p);
+    return `
+      <div class="bc-head" style="display:flex;align-items:center;gap:0.5rem;">UPC <span style="font-weight:400;font-family:var(--font-body,inherit);">· the game's code, shared by every condition</span></div>
+      <div data-upclist>${chips}</div>
+      ${line ? `<div class="upc-note">${esc(line)}</div>` : ""}
+      <div class="bc-add">
+        <input id="upc-new" inputmode="numeric" placeholder="Scan or type the UPC">
+        <button class="btn btn-ghost btn-sm" type="button" id="upc-add">Add</button>
+        ${!(p.upcs || []).length || data.isManager ? `<button class="btn btn-ghost btn-sm" type="button" id="upc-find" title="Look it up on eBay's product catalog">🔎 Find on eBay</button>` : ""}
+      </div>`;
+  }
+  async function upcApi(body: any) {
+    const r = await fetch("/api/pos/upc", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) throw new Error(j.error || "UPC request failed");
+    return j;
+  }
+  // A lookup's answer for one listing → the loaded item.
+  function applyUpcResult(res: any) {
+    const p = items.find((x: any) => x.id === res.id);
+    if (!p) return;
+    if (Array.isArray(res.upcs)) p.upcs = res.upcs;
+    if (!["has", "ineligible", "skipped"].includes(res.status)) { p.upcStatus = res.status; p.upcCheckedAt = new Date().toISOString(); }
+  }
+  function bindUpcBlock(p: any) {
+    const block = $("upc-block");
+    const redraw = () => { block.innerHTML = upcBlockHtml(p); bindUpcBlock(p); render(); };
+    block.querySelectorAll<HTMLElement>("[data-upcdel]").forEach((btn) => btn.addEventListener("click", async () => {
+      try { const j = await upcApi({ action: "remove", id: btn.dataset.upcdel }); p.upcs = j.upcs; if (j.status) p.upcStatus = j.status; redraw(); } catch (e: any) { alert(e.message); }
+    }));
+    const inp = block.querySelector<HTMLInputElement>("#upc-new")!;
+    const add = async () => {
+      const code = inp.value.trim();
+      if (!code) return;
+      try { const j = await upcApi({ action: "add", productId: p.id, upc: code }); p.upcs = j.upcs; p.upcStatus = "found"; redraw(); } catch (e: any) { alert(e.message); }
+    };
+    block.querySelector("#upc-add")!.addEventListener("click", add);
+    // Wedge scanners end with Enter.
+    inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); add(); } });
+    block.querySelector("#upc-find")?.addEventListener("click", async (e) => {
+      const btn = e.currentTarget as HTMLButtonElement;
+      btn.disabled = true; btn.textContent = "Looking…";
+      try {
+        const j = await upcApi({ action: "fill", productIds: [p.id], force: (p.upcs || []).length > 0 });
+        const res = j.results?.[0];
+        if (res) applyUpcResult(res);
+        if (j.stopped && !res) alert(j.stopped);
+        else if (res && res.status !== "found" && res.status !== "has") alert(res.evidence || "No sure match on eBay.");
+        redraw();
+      } catch (err: any) { alert(err.message); btn.disabled = false; btn.textContent = "🔎 Find on eBay"; }
+    });
   }
 
   function bcChip(b: any) {
@@ -1562,8 +1654,15 @@ const posData = {
       const q = code.trim();
       if (!q) return null;
       const flat = (entryMode ? draftItems() : liveItems()).flatMap((p) => (entryMode ? draftVariants(p) : p.variants).map((v: any) => ({ p, v })));
-      let hit = flat.find(({ v }: any) =>
-        (v.barcodes || []).some((b: any) => barcodeEq(b.barcode, q)) || (v.labelCode && v.labelCode === q) || (v.internalCode && v.internalCode === q.toUpperCase()));
+      let hit = flat.find(({ v }: any) => (v.labelCode && v.labelCode === q) || (v.internalCode && v.internalCode === q.toUpperCase()));
+      // A game's UPC: the station asks which condition when it has several.
+      const upcP = hit ? null : (entryMode ? draftItems() : liveItems()).find((p: any) => upcsOf(p).some((u) => barcodeEq(u, q)));
+      if (upcP) {
+        const vs = entryMode ? draftVariants(upcP) : upcP.variants;
+        if (vs.length === 1) hit = { p: upcP, v: vs[0] };
+        else return `${upcP.title}${upcP.platform ? ` (${upcP.platform})` : ""} · ${vs.length ? `${vs.length} conditions${entryMode ? " — choose on the station" : ""}` : "no stock rows yet"}`;
+      }
+      if (!hit) hit = flat.find(({ v }: any) => (v.barcodes || []).some((b: any) => barcodeEq(b.barcode, q)));
       if (!hit) {
         const skuExact = flat.filter(({ v }: any) => v.sku && v.sku.toUpperCase() === q.toUpperCase());
         if (skuExact.length === 1) hit = skuExact[0];
@@ -1693,8 +1792,33 @@ const posData = {
     const q = entSearch.value.trim();
     if (q.length < 2) { box.hidden = true; return; }
     const flat = draftItems().flatMap((p) => draftVariants(p).map((v: any) => ({ p, v })));
-    const hit = flat.find(({ v }: any) =>
-      (v.barcodes || []).some((b: any) => barcodeEq(b.barcode, q)) || (v.labelCode && v.labelCode === q) || (v.internalCode && v.internalCode === q.toUpperCase()));
+    // Our printed label codes name one condition → stage it.
+    const own = flat.find(({ v }: any) => (v.labelCode && v.labelCode === q) || (v.internalCode && v.internalCode === q.toUpperCase()));
+    if (own) { entSearch.value = ""; box.hidden = true; stageVariant(own.p, own.v); return; }
+    // The game's UPC fits every condition: one → stage it; several → ask
+    // (the box stays open and unfocused, so the next scan simply replaces it).
+    const upcP = draftItems().find((p: any) => upcsOf(p).some((u) => barcodeEq(u, q)));
+    if (upcP) {
+      const vs = draftVariants(upcP);
+      if (vs.length === 1) { entSearch.value = ""; box.hidden = true; stageVariant(upcP, vs[0]); return; }
+      if (vs.length > 1) {
+        entSearch.value = "";
+        box.innerHTML = `<div class="ti-sug-head">Which condition? — ${esc(upcP.title)}${upcP.platform ? ` (${esc(upcP.platform)})` : ""}</div>` + vs.map((v: any, i: number) => {
+          const t = typeById.get(v.inventoryTypeId);
+          return `<div class="ti-sug" data-cv="${i}">
+            <span class="ti-sug-title">${esc(condLabel(v))}</span>
+            <span class="ti-sug-meta">${t && t.key !== "retail" ? esc((t.icon || "") + " " + t.name) + " · " : ""}${v.quantity} in stock</span>
+            <span class="ti-sug-price">${money(v.priceCents)}</span>
+          </div>`;
+        }).join("");
+        box.hidden = false;
+        box.querySelectorAll<HTMLElement>("[data-cv]").forEach((el) => el.addEventListener("mousedown", (e) => {
+          e.preventDefault(); box.hidden = true; stageVariant(upcP, vs[+el.dataset.cv!]);
+        }));
+        return;
+      }
+    }
+    const hit = flat.find(({ v }: any) => (v.barcodes || []).some((b: any) => barcodeEq(b.barcode, q)));
     if (hit) { entSearch.value = ""; box.hidden = true; stageVariant(hit.p, hit.v); return; }
     // A unique exact-SKU hit stages instantly too (wedge scanners send SKUs).
     const skuExact = flat.filter(({ v }: any) => v.sku && v.sku.toUpperCase() === q.toUpperCase());
@@ -1816,7 +1940,7 @@ const posData = {
      applies to stock until Finish, exactly like typed/scanned lines. */
   const importCatalog = () => draftItems().map((p: any) => ({
     id: p.id, title: p.title, platform: p.platform || "", franchise: p.franchise || "", altNames: p.altNames || [],
-    categoryId: p.categoryId, pcId: p.pcId || "",
+    categoryId: p.categoryId, pcId: p.pcId || "", upcs: upcsOf(p),
     variants: draftVariants(p).map((v: any) => ({
       id: v.id, completenessCode: v.completenessCode || "", gradeCode: v.gradeCode || "", priceCents: v.priceCents || 0,
       quantity: v.quantity, barcodes: (v.barcodes || []).map((b: any) => b.barcode),
@@ -1829,6 +1953,50 @@ const posData = {
     quantity: 0, onlineVisible: false, inventoryTypeId: p.inventoryTypeId || retailTypeId, locationId: "",
     pendingEntryId: entryId, // hidden until this draft is finished
     barcodes: p.barcode ? [{ id: "primary:" + res.variantId, barcode: p.barcode, label: "Primary", primary: true }] : [],
+  });
+  // Every listing an import put stock on (new or existing) — the UPC lookup
+  // skips ones that already have a UPC or aren't games without an eBay call.
+  const touchedListings = (results: any[]) => [...new Set(results.filter((r) => r?.ok && r.productId).map((r) => String(r.productId)))];
+  // Listing UPCs from eBay's catalog, a few listings per request, after covers
+  // are on their way. Stops quietly if the page closes — the daily run and
+  // "Fill missing UPCs" catch the rest.
+  async function upcFillInBackground(ids: string[]) {
+    if (!upcReady || !ids.length) return;
+    let found = 0;
+    for (let i = 0; i < ids.length; i += 3) {
+      try {
+        const r = await upcApi({ action: "fill", productIds: ids.slice(i, i + 3) });
+        for (const res of r.results || []) { applyUpcResult(res); if (res.status === "found") found++; }
+        if (r.stopped) break;
+      } catch { break; }
+    }
+    render();
+    if (found) toast(`🏷 UPCs attached for ${found} listing${found === 1 ? "" : "s"}`);
+  }
+  document.getElementById("fill-upcs")?.addEventListener("click", async () => {
+    const btn = document.getElementById("fill-upcs") as HTMLButtonElement;
+    const orig = btn.textContent;
+    btn.disabled = true; btn.textContent = "Checking…";
+    try {
+      const todo: any[] = (await upcApi({ action: "missing" })).items || [];
+      if (!todo.length) { toast("Every game that can get a UPC automatically has one (or was checked today)"); return; }
+      if (!confirm(`Look up UPCs on eBay's product catalog for ${todo.length} game${todo.length === 1 ? "" : "s"}? Only sure matches are attached; the rest stay under "Needs UPC". Takes about ${Math.max(1, Math.round(todo.length * 3 / 60))} min — keep this tab open.`)) return;
+      const tally = { found: 0, none: 0, unsure: 0 };
+      for (let i = 0; i < todo.length; i += 3) {
+        btn.textContent = `UPCs ${Math.min(i + 3, todo.length)}/${todo.length}…`;
+        const r = await upcApi({ action: "fill", productIds: todo.slice(i, i + 3).map((x) => x.id) });
+        for (const res of r.results || []) {
+          applyUpcResult(res);
+          if (res.status === "found") tally.found++;
+          else if (res.status === "not_found") tally.none++;
+          else if (res.status === "ambiguous" || res.status === "conflict") tally.unsure++;
+        }
+        render();
+        if (r.stopped) { alert(r.stopped); break; }
+      }
+      toast(`🏷 UPCs: ${tally.found} attached · ${tally.none} not on eBay · ${tally.unsure} unsure — see "Needs UPC"`);
+    } catch (e: any) { alert(e.message); }
+    finally { btn.disabled = false; btn.textContent = orig; }
   });
   async function enrichInBackground(list: any[]) {
     let done = 0, added = 0; const CONC = 3;
@@ -1915,6 +2083,7 @@ const posData = {
         } catch (e) {
           if (results.length) { await mirrorImported(results); await loadEntry(entryId); setEntryMode(true); render(); }
           if (newProducts.length) enrichInBackground(newProducts); // covers for what DID get created
+          upcFillInBackground(touchedListings(results));
           throw new Error(`${(e as any)?.message || "A batch failed"}. ${idempotent
             ? "Press Import again: rows that already made it onto the draft are recognized and won't be added twice."
             : "Rows from the failed batch MAY already be on the draft (look before pressing Import again, or apply migration 20260929000001 for automatic protection)."}`);
@@ -1961,6 +2130,7 @@ const posData = {
         // again) — say which, so a genuinely new identical row can be added by hand.
         if (replayed.length) alert(`${replayed.length} row(s) were already on this draft from an earlier import of “${ch.fileName}”, so they weren't added again:\n\n${replayed.slice(0, 15).join("\n")}${replayed.length > 15 ? "\n…" : ""}\n\nIf any of these is a SECOND copy, raise its qty on the draft.`);
         if (newProducts.length) enrichInBackground(newProducts);
+        upcFillInBackground(touchedListings(results));
       },
     });
   }
@@ -2199,6 +2369,8 @@ const posData = {
           } else { toast("✓ Product added"); }
         } catch { toast("✓ Product added"); }
       }
+      // Its UPC (the one typed/scanned into Barcode counts; else eBay's catalog).
+      upcFillInBackground([newItem.id]);
     } catch (e: any) { alert(e.message); }
   });
 

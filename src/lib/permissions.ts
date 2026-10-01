@@ -32,7 +32,7 @@ export const PERMISSIONS: PermissionDef[] = [
   { key: "settings.manage", group: "Pages", label: "Settings", description: "Open Settings and change store settings (appearance, labels, low-stock, AI, notifications)." },
   { key: "menu.manage", group: "Pages", label: "Menu builder", description: "Edit the food & beverage menu: sections, items, sizes, modifiers, photos." },
   // ---- Inventory ----
-  { key: "inventory.manage", group: "Inventory", label: "Inventory admin", description: "Revert committed entries, supplier links, cost history, eBay import & stock sync, image resync." },
+  { key: "inventory.manage", group: "Inventory", label: "Inventory admin", description: "Revert committed entries, supplier links, cost history, eBay import & stock sync, image resync, filling / removing UPCs." },
   { key: "inventory_config.manage", group: "Inventory", label: "Inventory types & locations", description: "Add or edit inventory pools and storage locations." },
   // ---- Sales ----
   { key: "returns.override", group: "Sales", label: "Approve late returns", description: "Process a return after the return window has passed." },

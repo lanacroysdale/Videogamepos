@@ -418,6 +418,8 @@ export interface CatalogProduct {
   altNames?: string[];
   categoryId: string | null;
   pcId?: string;
+  /** The listing's UPCs (shared by every condition). */
+  upcs?: string[];
   variants: CatalogVariant[];
 }
 export interface Candidate { product: CatalogProduct; score: number }
@@ -461,7 +463,7 @@ const numbers = (s: string) => (s.match(/\b(?:\d+|(?=[ivx])x{0,3}(?:ix|iv|v?i{0,
 const REGION_CODE: Record<string, string> = { pal: "PAL", eu: "PAL", europe: "PAL", uk: "PAL", jp: "JP", jpn: "JP", japan: "JP", japanese: "JP", "ntsc j": "JP", asia: "ASIA", "asian english": "ASIA" };
 const regionCode = (r: string | null | undefined) => (r ? REGION_CODE[norm(r)] ?? norm(r).toUpperCase() : "");
 /** The market a title's bracket tag names: "Okami HD [JP]" → "JP", else "". */
-const titleRegion = (t: string) => {
+export const titleRegion = (t: string) => {
   for (const q of (t.match(/\[[^\]]*\]|\([^)]*\)/g) || []).map(norm)) if (REGION_CODE[q]) return REGION_CODE[q];
   return "";
 };
@@ -665,7 +667,7 @@ export function matchRow(row: ImportRow, prepared: Prepared[], platforms: Platfo
   for (const p of prepared) {
     let score = 0;
     if (row.pcId && p.product.pcId && p.product.pcId === row.pcId) score = 1;
-    else if (row.upc && p.product.variants.some((v) => (v.barcodes || []).some((b) => barcodeEq(b, row.upc)))) score = 1;
+    else if (row.upc && ((p.product.upcs || []).some((u) => barcodeEq(u, row.upc)) || p.product.variants.some((v) => (v.barcodes || []).some((b) => barcodeEq(b, row.upc))))) score = 1;
     else {
       // Platform gate: both resolved → must be equal; otherwise loose substring.
       const pp = norm(p.product.platform || "");

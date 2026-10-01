@@ -12,6 +12,10 @@ type Client = SupabaseClient<any, any, any>;
 
 export type PosCatalogRow = {
   variantId: string;
+  productId: string;
+  /** The LISTING's UPCs (every condition shares them) — a scan of one asks
+   *  which condition when the listing has several. */
+  upcs: string[];
   title: string;
   platform: string;
   condition: string | null;
@@ -43,18 +47,23 @@ export async function loadPosCatalog(supabase: Client): Promise<PosCatalogRow[]>
   // Rows an unfinished entry draft created (migration 20260930000001) aren't for sale yet.
   const { error: pendProbeErr } = await supabase.from("products").select("pending_entry_id").limit(1);
   const pend = pendProbeErr ? "" : ", pending_entry_id";
+  // Listing UPCs (migration 20260930000003).
+  const { error: upcProbeErr } = await supabase.from("product_upcs").select("id").limit(1);
+  const upcEmbed = upcProbeErr ? "" : ", product_upcs(upc)";
 
   // Paged: a single request stops at 1,000 rows, which silently dropped the
   // cheapest items from checkout scanning once the catalog grew past that.
   const { data: variantRows } = await fetchAll((from, to) => supabase
     .from("product_variants")
-    .select(`id, condition, completeness, price_cents, quantity, sku, barcode, internal_code${hasLabelCodes ? ", label_code" : ""}${hasTypes ? ", inventory_type_id" : ""}${pend}, product_barcodes(barcode), product:products(title, platform${delProbeErr ? "" : ", deleted_at"}${pend}, category:categories(id,name,color,is_trackable))`)
+    .select(`id, product_id, condition, completeness, price_cents, quantity, sku, barcode, internal_code${hasLabelCodes ? ", label_code" : ""}${hasTypes ? ", inventory_type_id" : ""}${pend}, product_barcodes(barcode), product:products(title, platform${delProbeErr ? "" : ", deleted_at"}${pend}${upcEmbed}, category:categories(id,name,color,is_trackable))`)
     .order("price_cents", { ascending: false })
     .order("id")
     .range(from, to));
 
   return (variantRows ?? []).filter((v: any) => !v.product?.deleted_at && !v.pending_entry_id && !v.product?.pending_entry_id).map((v: any) => ({
     variantId: v.id,
+    productId: v.product_id,
+    upcs: (v.product?.product_upcs ?? []).map((u: any) => u.upc),
     title: v.product?.title ?? "Item",
     platform: v.product?.platform ?? "",
     condition: v.condition,

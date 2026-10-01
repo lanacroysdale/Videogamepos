@@ -175,6 +175,15 @@ function stripPlatformEnd(title: string, platform: string | null | undefined, si
 // listed as "… DS", a Switch 2 game as "… Switch".
 const PLATFORM_FAMILY: Record<string, string> = { "Nintendo 3DS": "Nintendo DS", "Nintendo Switch 2": "Nintendo Switch" };
 const NOT_A_NAME = new Set(["super", "nintendo", "sony", "sega", "microsoft", "atari", "new", "game", "system", "console"]);
+/** Every word that names `canon` in any of its aliases, plus its maker
+ *  ("Sony PlayStation 2" → sony, playstation, 2, ps2). */
+export function platformWords(canon: string): Set<string> {
+  const out = new Set<string>();
+  for (const m of STATIC_ALIASES) if (m.canonical === canon) for (const w of m.alias.trim().split(" ")) if (w) out.add(w);
+  const maker = makerOf(canon);
+  if (maker) out.add(maker);
+  return out;
+}
 const makerOf = (canon: string) =>
   /^Sega/.test(canon) ? "sega" : /^(PlayStation|PSP)/.test(canon) ? "sony" : /^Xbox/.test(canon) ? "microsoft"
   : /Nintendo|NES|Wii|GameCube|Game Boy|Virtual Boy|Famicom/.test(canon) ? "nintendo" : "";

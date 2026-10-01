@@ -139,6 +139,8 @@ const posData = { catalog, categories: categories ?? [], customer };
   .prod-price { font-weight:700; flex:none; white-space:nowrap; }
   .prod-row[data-oos] .prod-price { color:var(--muted-2); }
   .prod-hint, .prod-more { color:var(--muted-2); font-size:0.84rem; text-align:center; padding:0.7rem 0.3rem; }
+  .pick-head { display:flex; align-items:center; justify-content:space-between; gap:0.6rem; padding:0.5rem 0.7rem; border:1px solid var(--cyan); background:rgba(44,230,224,.08); font-size:0.88rem; }
+  .pick-cancel { appearance:none; font:inherit; font-size:0.78rem; padding:0.2rem 0.6rem; border:1px solid var(--border); background:transparent; color:var(--muted-2); cursor:pointer; }
 </style>
 
 <script>
@@ -273,13 +275,13 @@ const posData = { catalog, categories: categories ?? [], customer };
   tilesEl.querySelectorAll<HTMLButtonElement>(".tile-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       const id = btn.dataset.cat!;
-      activeCat = activeCat === id ? null : id;
+      activeCat = activeCat === id ? null : id; pick = null;
       tilesEl.querySelectorAll(".tile-btn").forEach((b) => b.classList.remove("active"));
       if (activeCat) btn.classList.add("active");
       if (btn.dataset.track === "false" && activeCat) {
         const cat = categories.find((c) => c.id === id);
         addCustom(cat);
-        activeCat = null;
+        activeCat = null; pick = null;
         btn.classList.remove("active");
       }
       renderProducts();
@@ -296,8 +298,27 @@ const posData = { catalog, categories: categories ?? [], customer };
       return (`${v.title} ${v.platform} ${v.condition} ${v.sku ?? ""}`.toLowerCase().includes(q));
     });
   }
+  const prodRowHtml = (v: any) => `
+      <button class="prod-row" type="button" data-add="${v.variantId}"${v.qty <= 0 ? ' data-oos="1"' : ""}>
+        <span class="prod-info">
+          <span class="prod-title">${esc(v.title)}</span>
+          <span class="prod-meta">${esc(v.platform)}${v.condition ? " · " + esc(v.condition) : ""}${v.completeness ? " · " + esc(v.completeness) : ""}${v.typeName && v.typeName !== "Retail" ? " · " + esc(v.typeName) : ""} · ${v.qty <= 0 ? '<span class="oos">out of stock</span>' : v.qty + " in stock"}</span>
+        </span>
+        <span class="prod-price">${money(v.priceCents)}</span>
+      </button>`;
   function renderProducts() {
     const list = $("prod-list");
+    if (pick) {
+      list.innerHTML = `<div class="pick-head"><span>Which condition? — <strong>${esc(pick.title)}</strong></span><button type="button" class="pick-cancel" data-pick-cancel>Cancel</button></div>`
+        + pick.rows.map((v) => prodRowHtml(v)).join("");
+      // mousedown → preventDefault: picking must not pull focus out of the
+      // search box, or the next wedge scan would type into nothing.
+      list.querySelectorAll<HTMLElement>("[data-pick-cancel], [data-add]").forEach((el) => el.addEventListener("mousedown", (e) => e.preventDefault()));
+      list.querySelector("[data-pick-cancel]")?.addEventListener("click", () => { pick = null; renderProducts(); });
+      list.querySelectorAll<HTMLButtonElement>("[data-add]").forEach((b) =>
+        b.addEventListener("click", () => { pick = null; addVariant(b.dataset.add!); renderProducts(); }));
+      return;
+    }
     // Nothing below the grid until the cashier searches or picks a category.
     if (!activeCat && !search.trim()) {
       list.innerHTML = `<p class="prod-hint">Search or tap a category to add items.</p>`;
@@ -307,14 +328,7 @@ const posData = { catalog, categories: categories ?? [], customer };
     if (!all.length) { list.innerHTML = `<p class="empty">No matching items.</p>`; return; }
     const CAP = 40;
     const rows = all.slice(0, CAP);
-    list.innerHTML = rows.map((v) => `
-      <button class="prod-row" type="button" data-add="${v.variantId}"${v.qty === 0 ? ' data-oos="1"' : ""}>
-        <span class="prod-info">
-          <span class="prod-title">${esc(v.title)}</span>
-          <span class="prod-meta">${esc(v.platform)}${v.condition ? " · " + esc(v.condition) : ""}${v.completeness ? " · " + esc(v.completeness) : ""} · ${v.qty === 0 ? '<span class="oos">out of stock</span>' : v.qty + " in stock"}</span>
-        </span>
-        <span class="prod-price">${money(v.priceCents)}</span>
-      </button>`).join("")
+    list.innerHTML = rows.map((v) => prodRowHtml(v)).join("")
       + (all.length > CAP ? `<p class="prod-more">+${all.length - CAP} more — keep typing to narrow it down</p>` : "");
     list.querySelectorAll<HTMLButtonElement>("[data-add]").forEach((b) =>
       b.addEventListener("click", () => addVariant(b.dataset.add!)));
@@ -447,45 +461,65 @@ const posData = { catalog, categories: categories ?? [], customer };
   setInterval(() => { if (document.visibilityState === "visible") refreshCatalog(); }, 90_000);
 
   // ---------- Search + scan ----------
-  // Barcode auto-add (wedge scanners "type" the code): match the primary
-  // barcode, the printed internal label code (TL…, case-insensitive), or any
-  // extra barcode on file. UPC/EAN compare as GTINs so a 12-digit camera read
-  // still hits a barcode stored in 13-digit form. A UNIQUE exact-SKU match
-  // counts too (ambiguous SKUs stay a search).
-  function findByCode(raw: string): any | null {
+  // Barcode auto-add (wedge scanners "type" the code). In order:
+  //  1. our printed codes (internal label code TL…, numeric label code) — they
+  //     name ONE condition, so they never ask;
+  //  2. the LISTING's UPC — every condition shares it, so when the listing has
+  //     more than one sellable condition the cashier picks (below the search);
+  //  3. a condition's own barcode / extra barcodes;
+  //  4. a UNIQUE exact SKU (ambiguous SKUs stay a search).
+  // UPC/EAN compare as GTINs, so a 12-digit camera read still hits a code
+  // stored in 13-digit form. Returns the candidate rows (empty = no hit).
+  function resolveCode(raw: string): any[] {
     const code = raw.trim();
-    if (!code) return null;
-    const hit = catalog.find((v: any) =>
-      barcodeEq(v.barcode, code) ||
-      (v.labelCode && v.labelCode === code) ||
-      (v.internalCode && v.internalCode === code.toUpperCase()) ||
-      (v.altBarcodes && v.altBarcodes.some((b: string) => barcodeEq(b, code))));
-    if (hit) return hit;
+    if (!code) return [];
+    const own = catalog.find((v: any) => (v.labelCode && v.labelCode === code) || (v.internalCode && v.internalCode === code.toUpperCase()));
+    if (own) return [own];
+    const upcHits = catalog.filter((v: any) => (v.upcs || []).some((u: string) => barcodeEq(u, code)));
+    if (upcHits.length) {
+      const pids = new Set(upcHits.map((v: any) => v.productId));
+      const sellable = catalog.filter((v: any) => pids.has(v.productId) && !v.blocked);
+      if (!sellable.length) return [upcHits[0]]; // all blocked → addVariant explains why
+      const inStock = sellable.filter((v: any) => v.qty > 0);
+      return inStock.length ? inStock : sellable;
+    }
+    const hit = catalog.find((v: any) => barcodeEq(v.barcode, code) || (v.altBarcodes && v.altBarcodes.some((b: string) => barcodeEq(b, code))));
+    if (hit) return [hit];
     if (code.length >= 3) {
       const skuHits = catalog.filter((v: any) => v.sku && v.sku.toUpperCase() === code.toUpperCase());
-      if (skuHits.length === 1) return skuHits[0];
+      if (skuHits.length === 1) return skuHits;
     }
-    return null;
+    return [];
+  }
+  // "Which condition?" — shown in place of the search results. Never focused:
+  // a wedge scanner's Enter must not pick an option, and the next scan simply
+  // replaces it.
+  let pick: { title: string; code: string; rows: any[] } | null = null;
+  function takeHit(rows: any[], code: string): boolean {
+    if (!rows.length) return false;
+    if (rows.length === 1) { pick = null; addVariant(rows[0].variantId); }
+    else pick = { title: rows[0].title + (rows[0].platform ? ` (${rows[0].platform})` : ""), code, rows };
+    return true;
   }
   const looksScanned = (code: string) => /^[A-Za-z0-9-]{8,}$/.test(code);
   $("prod-search").addEventListener("input", (e) => {
     const input = e.target as HTMLInputElement;
     search = input.value;
     const code = search.trim();
-    const hit = findByCode(code);
-    if (hit) { addVariant(hit.variantId); search = ""; input.value = ""; }
+    pick = null;
+    if (takeHit(resolveCode(code), code)) { search = ""; input.value = ""; }
     else if (looksScanned(code)) {
       // A scan that misses may be an item added/edited since this station
       // loaded — re-pull the catalog once and retry (throttled inside).
       refreshCatalog().then((changed) => {
         if (!changed || input.value.trim() !== code) return;
-        const late = findByCode(code);
-        if (late) { addVariant(late.variantId); search = ""; input.value = ""; }
+        if (takeHit(resolveCode(code), code)) { search = ""; input.value = ""; }
         renderProducts();
       });
     }
     renderProducts();
   });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && pick) { pick = null; renderProducts(); } });
   $("scan-btn").addEventListener("click", () => { ($("prod-search") as HTMLInputElement).focus(); });
   // Phone-as-scanner: scans stream into the search box like a wedge scanner;
   // the phone is told what each one hit (or that nothing did).
@@ -493,8 +527,10 @@ const posData = { catalog, categories: categories ?? [], customer };
     target: () => $("prod-search") as HTMLInputElement,
     page: "Checkout",
     describe: (code: string) => {
-      const v = findByCode(code);
-      if (!v) return null;
+      const rows = resolveCode(code);
+      if (!rows.length) return null;
+      const v = rows[0];
+      if (rows.length > 1) return `${v.title}${v.platform ? ` (${v.platform})` : ""} · ${rows.length} conditions — choose on the register`;
       const cond = [v.completeness, v.condition].filter(Boolean).join(" ");
       return `${v.title}${v.platform ? ` (${v.platform})` : ""}${cond ? ` · ${cond}` : ""} · ${money(v.priceCents)}${v.qty <= 0 ? " · OUT OF STOCK" : ""}`;
     },
@@ -628,10 +664,9 @@ const posData = { catalog, categories: categories ?? [], customer };
   {
     const ap = new URLSearchParams(location.search).get("add");
     if (ap) {
-      const hit = catalog.find((v: any) =>
-        v.variantId === ap || barcodeEq(v.barcode, ap) || (v.labelCode && v.labelCode === ap) ||
-        (v.internalCode && v.internalCode === ap.toUpperCase()));
-      if (hit) addVariant(hit.variantId);
+      const exact = catalog.find((v: any) => v.variantId === ap);
+      if (exact) addVariant(exact.variantId);
+      else if (takeHit(resolveCode(ap), ap)) renderProducts();
       history.replaceState(null, "", location.pathname);
     }
   }

@@ -34,7 +34,10 @@ export interface GameMeta {
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 
-export async function searchGame(title: string, _platform?: string): Promise<GameMeta | null> {
+// `accept`: only a game it approves (by name or an alternative name) is used —
+// the closest IGDB hit can be a different game ("My Friend Pedro" → another
+// title); none approved → null rather than a wrong cover/description.
+export async function searchGame(title: string, _platform?: string, accept?: (name: string) => boolean): Promise<GameMeta | null> {
   if (!igdbConfigured()) return null;
   const token = await getToken();
   const safe = title.replace(/"/g, "");
@@ -60,7 +63,10 @@ export async function searchGame(title: string, _platform?: string): Promise<Gam
     return (b.total_rating_count ?? 0) - (a.total_rating_count ?? 0);
   });
 
-  const g = games[0];
+  const g = accept
+    ? games.find((x) => accept(String(x.name ?? "")) || (x.alternative_names ?? []).some((a: any) => a?.name && accept(String(a.name))))
+    : games[0];
+  if (!g) return null;
   const videoId = (g.videos ?? []).map((v: any) => v.video_id).find(Boolean);
   return {
     name: g.name,
