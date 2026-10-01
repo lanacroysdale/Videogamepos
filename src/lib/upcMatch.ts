@@ -66,7 +66,7 @@ export function upcEligible(p: { title: string; platform?: string | null; catego
 
 /** Our title as a RELEASE name: bracket qualifiers count ("[Nintendo
  *  Selects]" and "[Greatest Hits]" have their own UPCs). */
-const releaseName = (title: string) => title.replace(/[[\]()]/g, " ").replace(/\s+/g, " ").trim();
+const releaseName = (title: string) => title.replace(/[[\]()]/g, " ").replace(/\bvideo ?game\b/gi, " ").replace(/\s+/g, " ").trim();
 
 /** An eBay catalog title reduced to the game's name: "(Nintendo 3DS, 2011)",
  *  "- Nintendo Switch", "Standard Edition" and the platform up front go;
@@ -124,3 +124,35 @@ export function aspectMap(groups: unknown, extra?: unknown): Map<string, string[
   for (const a of Array.isArray(extra) ? extra : []) if (a?.name && a?.value) add(String(a.name), [String(a.value)]);
   return m;
 }
+
+/** Is a game-database name (LaunchBox / IGDB) the same GAME as our listing —
+ *  for its cover art and details? The UPC rules on the game's name: our
+ *  bracket tags ([Collector's Edition], [amiibo Bundle], [JP]…), "… Edition"
+ *  phrases and the "New Play Control!" re-release prefix don't count — the
+ *  box art is the game's. Everything else must still agree: a sequel number,
+ *  "Sonic R", another game that shares a word ("My Friend Peppa Pig"). */
+/** The same RELEASE for its box art: our bracket tags count as words
+ *  ("Excitebike [Classic NES Series]" → "Classic NES Series: Excitebike"),
+ *  except region / condition tags. Try this before sameGameName. */
+export function sameBoxRelease(ours: string, theirs: string, platform: string): boolean {
+  const cleaned = String(ours ?? "").replace(/\[([^\]]*)\]|\(([^)]*)\)/g, (m, a, b) => (NOT_A_RELEASE.test(String(a ?? b ?? "").trim()) ? " " : m));
+  return sameRelease(cleaned, theirs, platform);
+}
+const NOT_A_RELEASE = /^(jp|jpn|japan|japanese|import|pal|eu|europe|uk|asia|asian english|ntsc(-[uj](\/c)?)?|cib|complete|complete in box|loose|sealed|new|used|boxed|box only|manual only|game only|disc only|cart only|cartridge only)$/i;
+
+export function sameGameName(ours: string, theirs: string, platform: string): boolean {
+  const a = gameName(String(ours ?? "").replace(/\[[^\]]*\]|\([^)]*\)/g, " "));
+  const b = gameName(String(theirs ?? ""));
+  return !!a && !!b && sameRelease(a, b, platform);
+}
+const gameName = (t: string) => t
+  .replace(/\b(?:(?:nintendo\s+)?switch\s+2|(?:nintendo\s+)?wii\s+u|nintendo\s+switch|\d+(?:st|nd|rd|th)\s+anniversary|game of the year|day one|[\w'’-]+)\s+edition\b/gi, " ")
+  .replace(/^\s*new play control!?:?\s*/i, " ")
+  // A publisher/brand prefix and ", Inc." aren't the game ("Tom Clancy's
+  // Splinter Cell 3D", "Sid Meier's Civilization VI", "WarioWare, Inc.").
+  .replace(/^\s*(?:tom clancy|sid meier|james cameron|disney|marvel|tim burton|clive barker)(?:['’]s)?\s+/i, " ")
+  .replace(/,?\s*\binc\b\.?/gi, " ")
+  // "III" and "3" are the same number (multi-letter numerals only: "Mega Man X" stays).
+  .replace(/\b(ii|iii|iv|vi|vii|viii|ix)\b/gi, (m) => String({ ii: 2, iii: 3, iv: 4, vi: 6, vii: 7, viii: 8, ix: 9 }[m.toLowerCase() as "ii"]))
+  .replace(/\s+/g, " ").replace(/[\s:–—-]+$/, "").trim();
+
