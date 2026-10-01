@@ -287,6 +287,9 @@ export const POST: APIRoute = async ({ locals, request }) => {
           // replayed or failed after staging) — find it by title + platform.
           if (!productId && r.productRef && r.title) productId = (await findListing(String(r.title).trim().slice(0, 200), r.platform ? String(r.platform).slice(0, 80) : null)) ?? "";
           if (!productId) throw new Error(r.productRef ? "Its listing wasn't created (see the row it shares a listing with)" : "productId required");
+          // Another row of a listing THIS import created: its UPC counts too
+          // (the first row may not have had one).
+          if (r.productRef) await seedListingUpc(productId, r.barcode, "import");
           const out = await onListing(productId, false);
           if (r.tagPcId) await tagPc(productId, r.tagPcId).catch(() => {});
           return out;

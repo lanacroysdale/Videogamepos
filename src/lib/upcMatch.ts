@@ -6,7 +6,7 @@
 // the wrong game, a missing one just means "Needs UPC". So every rule here
 // rejects when unsure.
 import { officialTitleFor, norm, itemKind, titleRegion } from "./collectionImport";
-import { resolveStaticPlatform, resolveStaticPlatforms, withoutTrailingPlatform, withoutLeadingPlatform } from "./smartSearch";
+import { resolveStaticPlatform, resolveStaticPlatforms, withoutTrailingPlatform, withoutLeadingPlatform, platformWords } from "./smartSearch";
 
 /** GS1 check digit (UPC-A / EAN-13 / GTIN-14 all use the same mod-10 rule). */
 export function gtinValid(code: string): boolean {
@@ -77,10 +77,13 @@ export function catalogName(title: string, platform: string): string {
     const inner = String(a ?? b ?? "");
     const US_TAG = /^(ntsc(-u(\/c)?)?|us|usa|north america|us version|region free|video ?game)$/i;
     if (US_TAG.test(inner.trim())) return " ";
+    // Drop "(Nintendo 3DS/2DS, 2011)"-style tags — but only when nothing else
+    // is in them: "(PlayStation 2 Greatest Hits)" is a reprint with its own UPC.
+    const own = canon ? platformWords(canon) : new Set<string>();
+    const platformOnly = (t: string) => !!canon && t.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).every((w) => own.has(w));
     const platformOrYear = inner.split(/,/).every((part) => {
       const t = part.trim();
-      return !t || /^(19|20)\d\d$/.test(t) || (canon !== null && resolveStaticPlatforms(t).includes(canon) && t.split(/\s+/).length <= 5)
-        || US_TAG.test(t);
+      return !t || /^(19|20)\d\d$/.test(t) || platformOnly(t) || US_TAG.test(t);
     });
     return platformOrYear ? " " : ` ${inner} `;
   }).replace(/\bstandard edition\b|\bvideo ?game\b/gi, " ").replace(/\s+/g, " ").trim();
