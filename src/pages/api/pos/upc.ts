@@ -1,7 +1,7 @@
 import type { APIRoute } from "astro";
 import { createSupabaseAdminClient } from "../../../lib/supabase";
 import { fetchAll } from "../../../lib/fetchAll";
-import { fillListingUpcs, attachUpcs, upcTablesReady, needingUpc } from "../../../lib/upcFinder";
+import { fillListingUpcs, attachUpcs, upcTablesReady, needingUpc, identifyUpc } from "../../../lib/upcFinder";
 import { canonicalUpc } from "../../../lib/upcMatch";
 
 export const prerender = false;
@@ -14,6 +14,8 @@ const json = (d: unknown, s = 200) =>
 //   { action: "missing" } → listings that still need one (managers; the
 //       "Fill missing UPCs" button then fills them a few at a time).
 //   { action: "add", productId, upc } → a UPC typed or scanned by staff.
+//   { action: "identify", upc } → which game a scanned UPC is (eBay catalog →
+//       official title + box art), for a box that isn't in inventory yet.
 //   { action: "remove", id } → managers; an automatic UPC removed by hand is
 //       never auto-filled again for that listing ("rejected").
 export const POST: APIRoute = async ({ locals, request }) => {
@@ -21,6 +23,11 @@ export const POST: APIRoute = async ({ locals, request }) => {
   const b = await request.json().catch(() => ({}));
   const admin = createSupabaseAdminClient();
   const manager = locals.can("inventory.manage");
+  // What game is this UPC? (works before the migration too)
+  if (b.action === "identify") {
+    try { return json({ ok: true, ...(await identifyUpc(admin, String(b.upc ?? ""))) }); }
+    catch (e: any) { return json({ error: e?.message || "Lookup failed" }, 500); }
+  }
   if (!(await upcTablesReady(admin)))
     return json({ error: "Run supabase/migrations/20260930000003_listing_upcs.sql in the Supabase SQL editor first." }, 400);
 

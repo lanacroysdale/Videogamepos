@@ -10,9 +10,11 @@
 //      market (upcMatch.ts); two different matching products → "ambiguous".
 // Unsure → no UPC ("Needs UPC" shows it). Shared by the per-listing endpoint,
 // the "Fill missing UPCs" button and the daily cron trickle.
-import { searchGameListings, getItemWithProduct, ebayConfigured } from "./ebay";
-import { sameRelease, platformAgrees, regionAgrees, aspectMap, usUpcs, upcEligible, upcForms } from "./upcMatch";
-import { withoutTrailingPlatform } from "./smartSearch";
+import { searchGameListings, searchByGtin, getItemWithProduct, ebayConfigured } from "./ebay";
+import { sameRelease, platformAgrees, regionAgrees, aspectMap, usUpcs, upcEligible, upcForms, canonicalUpc, catalogTitleClean, sameBoxRelease, sameGameName } from "./upcMatch";
+import { withoutTrailingPlatform, resolveStaticPlatform } from "./smartSearch";
+import { itemKind } from "./collectionImport";
+import { lbPlatform, lbImageUrl } from "./launchbox";
 import { fetchAll } from "./fetchAll";
 import { barcodeEq } from "./gtin";
 
@@ -179,3 +181,89 @@ export function needingUpc(rows: any[], now = Date.now()): any[] {
     })
     .sort((a, b) => (a.upc_checked_at ? new Date(a.upc_checked_at).getTime() : 0) - (b.upc_checked_at ? new Date(b.upc_checked_at).getTime() : 0));
 }
+
+// ---------------------------------------------------------------------------
+// The other direction: a scanned UPC → which game is it? (for a box that isn't
+// in inventory yet). eBay's catalog names the product; only a catalog product
+// whose OWN UPC list holds this exact code counts. Its name is then matched to
+// our game database for the official title + box art.
+export interface UpcIdentity {
+  found: boolean;
+  upc: string;
+  title?: string;          // official title when the game database knows it, else eBay's
+  platform?: string;       // our platform name ("Nintendo 3DS")
+  catalogTitle?: string;   // eBay's catalog name, for reference
+  cover?: string | null;   // box art (LaunchBox) when matched
+  kind?: string;           // "" game | console | accessory | collectible
+  inCatalog?: { productId: string; title: string } | null;
+  pending?: boolean;       // inCatalog is on an unfinished entry draft
+  evidence: string;
+  error?: boolean;
+}
+const EBAY_ID = { searchGtin: searchByGtin, getItem: getItemWithProduct, configured: ebayConfigured };
+
+export async function identifyUpc(admin: any, raw: string, ebay = EBAY_ID): Promise<UpcIdentity> {
+  const upc = canonicalUpc(raw);
+  if (!upc) return { found: false, upc: String(raw ?? ""), evidence: "That isn't a valid UPC" };
+  // Already ours (another station added it since this page loaded)?
+  // A listing on an unfinished entry draft says so; a soft-deleted one doesn't count.
+  if (admin && (await upcTablesReady(admin))) {
+    const { data } = await admin.from("product_upcs").select("product_id, product:products(title, deleted_at, pending_entry_id)").in("upc", upcForms(upc)).limit(5);
+    const live = (data || []).find((r: any) => r.product && !r.product.deleted_at);
+    if (live) {
+      const title = live.product.title || "";
+      return live.product.pending_entry_id
+        ? { found: true, upc, inCatalog: { productId: live.product_id, title }, title, pending: true, evidence: "On an unfinished inventory entry" }
+        : { found: true, upc, inCatalog: { productId: live.product_id, title }, title, evidence: "Already in inventory" };
+    }
+  }
+  if (!ebay.configured()) return { found: false, upc, error: true, evidence: "eBay isn't connected on the server" };
+  let res;
+  try {
+    res = await ebay.searchGtin(upc);
+    if (!res.items.length && upc.length === 12) res = await ebay.searchGtin("0" + upc); // some listings carry the EAN-13 form
+  } catch (e: any) { return { found: false, upc, error: true, evidence: String(e?.message || e) }; }
+  const byProduct = new Map<string, string[]>();
+  for (const it of res.items) if (it.epid && it.legacyItemId) byProduct.set(it.epid, [...(byProduct.get(it.epid) ?? []), it.legacyItemId]);
+  const ranked = [...byProduct.entries()].sort((a, b) => b[1].length - a[1].length).slice(0, 3);
+  if (!ranked.length) return { found: false, upc, evidence: res.items.length ? "eBay has listings with this code but no catalog product" : "eBay doesn't know this code" };
+  let failures = 0, read = 0;
+  for (const [, ids] of ranked) {
+    let item: any = null;
+    for (const id of ids.slice(0, 2)) {
+      await sleep(GAP_MS); // eBay throttles bursts into empty answers
+      try { item = await ebay.getItem(id); read++; break; } catch { failures++; }
+    }
+    const prod = item?.product;
+    // The product must carry THIS code (any GTIN form — an import's EAN-13 too).
+    if (!prod?.title || !(Array.isArray(prod.gtins) ? prod.gtins : []).some((g: any) => canonicalUpc(String(g)) === upc)) continue;
+    const aspects = aspectMap(prod.aspectGroups, item.localizedAspects);
+    const platform = (aspects.get("platform") ?? []).map((v) => resolveStaticPlatform(v)).find(Boolean) || resolveStaticPlatform(String(prod.title)) || "";
+    // "(Controller Bundle)" / "(Nintendo Selects)" stay as "[…]" tags — the
+    // store's own title style — so the base game's box art can still match.
+    const clean = catalogTitleClean(String(prod.title), platform, { bracketTags: true }) || String(prod.title).trim();
+    // Judged on eBay's own title, where "(Controller Bundle)" stays in brackets
+    // — that's a game with a controller, not an accessory.
+    const kind = itemKind(String(prod.title), platform);
+    // A game's name loses a trailing " - Nintendo 3DS"; hardware keeps its platform words.
+    const catalogTitle = kind ? clean : withoutTrailingPlatform(clean, platform);
+    let title = catalogTitle, cover: string | null = null;
+    // A game: the game database's official name + box art (same release first).
+    const lbp = platform && !kind ? lbPlatform(platform) : null;
+    if (admin && lbp) {
+      const { data } = await admin.rpc("search_games", { p_query: catalogTitle.replace(/\[[^\]]*\]/g, " ").replace(/\s+/g, " ").trim(), p_platform: lbp, p_limit: 10 });
+      const cands: any[] = Array.isArray(data) ? data : [];
+      // The official NAME only from the same release ("Halo 3 Legendary
+      // Edition" stays itself); the same game's box art is fine for the picture.
+      const same = cands.find((c) => sameBoxRelease(catalogTitle, String(c.name ?? ""), platform));
+      const art = same || cands.find((c) => sameGameName(catalogTitle, String(c.name ?? ""), platform));
+      if (same) title = String(same.name);
+      if (art) { const f = art.box_3d || art.box_front; cover = f ? lbImageUrl(f) : null; }
+    }
+    return { found: true, upc, title, platform, catalogTitle, cover, kind, inCatalog: null, evidence: `eBay catalog: ${prod.title}` };
+  }
+  // Nothing readable because eBay failed (not because it doesn't know the code) → retryable.
+  if (!read && failures) return { found: false, upc, error: true, evidence: "eBay didn't answer — try again in a moment" };
+  return { found: false, upc, evidence: "eBay's catalog products for this code don't list it as their UPC" };
+}
+

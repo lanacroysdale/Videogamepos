@@ -198,6 +198,16 @@ export async function searchGameListings(q: string, limit = 50): Promise<{ total
   return { total: Number(j.total) || 0, items };
 }
 
+/** Active listings for one exact GTIN (UPC/EAN) — any category. */
+export async function searchByGtin(gtin: string, limit = 50): Promise<{ total: number; items: { epid: string; legacyItemId: string; title: string }[] }> {
+  const p = new URLSearchParams({ gtin, limit: String(limit) });
+  const j = await ebayGet(`/item_summary/search?${p.toString()}`);
+  const items = ((j.itemSummaries || []) as any[]).map((it) => ({
+    epid: String(it.epid || ""), legacyItemId: String(it.legacyItemId || ""), title: String(it.title || ""),
+  }));
+  return { total: Number(j.total) || 0, items };
+}
+
 /** One listing with eBay's catalog product attached: product.title, product.gtins
  *  (eBay's own UPC/EAN list, not what the seller typed), product.aspectGroups. */
 export const getItemWithProduct = (legacyItemId: string) =>
