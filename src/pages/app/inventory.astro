@@ -287,7 +287,7 @@ const posData = {
   </div>
 
   {isManager && deletedItems.length > 0 && (
-    <div class="pos-panel rd-panel">
+    <div class="pos-panel rd-panel" id="rd-panel">
       <h2 class="rd-head">🗑 Recently deleted</h2>
       <p class="muted rd-note">Kept for 7 days, then removed for good. Restored items come back <strong>unpublished</strong> — review, then publish again.</p>
       <ul class="rd-list">
@@ -347,6 +347,10 @@ const posData = {
 </AppLayout>
 
 <style is:global>
+  /* "hidden" means hidden — panels/bars here set display:flex, which used to
+     override it (the inventory list showed under an open entry, and the bulk
+     bar sat at the bottom even with nothing selected). */
+  [hidden] { display:none !important; }
   .inv-shell { display:flex; flex-direction:column; }
   .inv-toolbar { display:flex; flex-wrap:wrap; gap:0.6rem; align-items:center; }
   .inv-toolbar .search { flex:1; min-width:200px; }
@@ -1528,7 +1532,9 @@ const posData = {
   function setEntryMode(on: boolean) {
     entryMode = on && !!entryId;
     ($("entry-screen") as HTMLElement).hidden = !entryMode;
+    // The entry screen stands alone: no inventory list, bulk bar or deleted items under it.
     ($("inv-shell") as HTMLElement).hidden = entryMode;
+    const rd = document.getElementById("rd-panel"); if (rd) rd.hidden = entryMode;
     if (entryMode) { selected.clear(); updateBulkBar(); }
     const t = $("recv-toggle");
     if (t) t.textContent = entryMode ? `📥 Entry #${entryHuman} (open)` : "▶ Start entry";
