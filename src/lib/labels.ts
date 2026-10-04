@@ -473,7 +473,8 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
     let pick = fit(1, base);
     if (pick && pick.size < base - 1e-6 && tpl.titleMaxLines === 2 && sizeCap(2) >= base) pick = fit(2, Math.min(base, sizeCap(2))) ?? pick;
     if (!pick && tpl.titleMaxLines === 2 && sizeCap(2) >= minSize) pick = fit(2, Math.min(base, sizeCap(2)));
-    if (!pick) pick = { size: minSize, lines: wrapTitle(cut, Math.max(4, Math.floor(colW / (minSize * chW))), 1) };
+    // Too long even then: fill both lines (when there's room) and cut the end.
+    if (!pick) pick = { size: minSize, lines: wrapTitle(cut, Math.max(4, Math.floor(colW / (minSize * chW))), tpl.titleMaxLines === 2 && sizeCap(2) >= minSize ? 2 : 1) };
     const size = pick.size;
     y += size * (FP.titleTop ?? 1); // per-font lift: tall display faces start higher
     for (const line of pick.lines) {
