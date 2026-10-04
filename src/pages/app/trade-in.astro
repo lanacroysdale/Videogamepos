@@ -290,15 +290,32 @@ const posData = {
       box.innerHTML = `<div class="ti-sug-head">UPC ${esc(q)}</div><div class="ti-sug"><span class="ti-sug-meta">🔎 Looking it up…</span></div>`;
       box.hidden = false;
       identifyUpc(q).then((id) => {
-        if (inp.value.trim() !== q) return; // the employee moved on
+        // Stale? Judge by the ROW (a re-render detaches the old input): gone,
+        // or its text is no longer this code → the employee moved on.
+        if (!rows.includes(r) || r.description.trim() !== q) return;
         if (!id.found || id.inCatalog) {
-          box.innerHTML = `<div class="ti-sug-head">UPC ${esc(q)}</div><div class="ti-sug"><span class="ti-sug-meta">${id.inCatalog ? `Already in inventory as ${esc(id.inCatalog.title)} — refresh this page to scan it` : `${esc(id.evidence || "Not found")} — type the name instead`}</span></div>`;
+          const msg = id.inCatalog
+            ? (id.pending ? `${esc(id.inCatalog.title)} is on an unfinished inventory entry` : `Already in inventory as ${esc(id.inCatalog.title)} — refresh this page to scan it`)
+            : id.error ? `Couldn't look it up: ${esc(id.evidence || "error")}` : `${esc(id.evidence || "Not found")} — type the name instead`;
+          const live = $("ti-body").querySelector<HTMLElement>(`tr[data-key="${r.key}"] [data-suggest]`) || box;
+          live.innerHTML = `<div class="ti-sug-head">UPC ${esc(q)}</div><div class="ti-sug"><span class="ti-sug-meta">${msg}</span></div>`;
+          live.hidden = false;
           return;
         }
         r.description = id.title + (id.platform ? ` (${id.platform})` : "");
         const cat = catForKind(id.kind || "");
         if (cat) r.categoryId = cat;
+        // Only take the cursor back if the employee isn't busy in another field.
+        const ae = document.activeElement as HTMLElement | null;
+        const wasHere = !ae || ae === document.body || !!ae.closest?.(`tr[data-key="${r.key}"]`);
         box.hidden = true;
+        if (!wasHere) {
+          // Patch just this row — a full render would wipe the field they're in.
+          const rowEl = $("ti-body").querySelector<HTMLElement>(`tr[data-key="${r.key}"]`);
+          const d = rowEl?.querySelector<HTMLInputElement>("[data-desc]"); if (d) d.value = r.description;
+          const c = rowEl?.querySelector<HTMLSelectElement>("[data-cat]"); if (c && r.categoryId) c.value = r.categoryId;
+          return;
+        }
         render();
         const freshRow = $("ti-body").querySelector<HTMLElement>(`tr[data-key="${r.key}"]`);
         const fresh = freshRow?.querySelector<HTMLInputElement>("[data-desc]");

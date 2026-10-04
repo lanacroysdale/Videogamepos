@@ -747,10 +747,14 @@ const posData = {
   }
   // The "not in inventory" row/bar for an identified UPC.
   const upcFoundHtml = (id: any) => id.inCatalog
-    ? `📦 Already in inventory as <strong>${esc(id.inCatalog.title)}</strong> — refresh this page to scan it`
+    ? (id.pending
+      ? `📦 <strong>${esc(id.inCatalog.title)}</strong> is on an unfinished inventory entry — finish that entry to scan it`
+      : `📦 Already in inventory as <strong>${esc(id.inCatalog.title)}</strong> — refresh this page to scan it`)
     : id.found
       ? `${id.cover ? `<img src="${esc(id.cover)}" alt="" style="width:30px;height:30px;object-fit:contain;vertical-align:middle;margin-right:0.4rem;">` : "📦 "}Not in inventory: <strong>${esc(id.title)}</strong>${id.platform ? ` (${esc(id.platform)})` : ""}`
-      : `🔎 UPC ${esc(id.upc)}: ${esc(id.evidence || "not found")} — type the name to add it`;
+      : id.error
+        ? `⚠ Couldn't look up UPC ${esc(id.upc || "")}: ${esc(id.evidence || "error")}`
+        : `🔎 UPC ${esc(id.upc || "")}: ${esc(id.evidence || "not found")} — type the name to add it`;
   // What a listing is still missing (drives the "needs attention" inbox + badge).
   function issues(p: any): string[] {
     const out: string[] = [];
