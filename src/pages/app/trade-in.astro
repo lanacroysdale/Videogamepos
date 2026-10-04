@@ -160,6 +160,7 @@ const posData = {
   import { buildPlatforms, parseQuery as parseQ, smartMatches } from "../../lib/smartSearch";
   import { initScanReceiver, openPairDialog } from "../../lib/scanReceive";
   import { barcodeEq } from "../../lib/gtin";
+  import { upcLike, identifyUpc } from "../../lib/upcClient";
   import { openImportDialog } from "../../lib/importDialog";
 
   type Row = { key: string; description: string; categoryId: string | null; resaleCents: number };
@@ -230,6 +231,10 @@ const posData = {
     for (const p of catalog) for (const v of p.variants) if ((v.barcodes || []).some((b: string) => barcodeEq(b, q))) return { p, v };
     return null;
   }
+  const catForKind = (kind: string) => {
+    const re = kind === "console" ? /console|system|hardware/i : kind === "accessory" ? /accessor/i : kind === "collectible" ? /collect/i : /game/i;
+    return categories.find((c: any) => re.test(c.name))?.id || "";
+  };
   // The distinct conditions a listing is stocked in (several inventory types can
   // repeat one), each at its highest price — best first.
   function conditionsOf(p: any): { completenessCode: string; gradeCode: string; priceCents: number }[] {
@@ -277,6 +282,30 @@ const posData = {
           render();
         }));
       }
+      return;
+    }
+    // A UPC we don't stock: look the game up and fill the line with it — the
+    // employee adds the condition (" cib") and a resale value.
+    if (upcLike(q)) {
+      box.innerHTML = `<div class="ti-sug-head">UPC ${esc(q)}</div><div class="ti-sug"><span class="ti-sug-meta">🔎 Looking it up…</span></div>`;
+      box.hidden = false;
+      identifyUpc(q).then((id) => {
+        if (inp.value.trim() !== q) return; // the employee moved on
+        if (!id.found || id.inCatalog) {
+          box.innerHTML = `<div class="ti-sug-head">UPC ${esc(q)}</div><div class="ti-sug"><span class="ti-sug-meta">${id.inCatalog ? `Already in inventory as ${esc(id.inCatalog.title)} — refresh this page to scan it` : `${esc(id.evidence || "Not found")} — type the name instead`}</span></div>`;
+          return;
+        }
+        r.description = id.title + (id.platform ? ` (${id.platform})` : "");
+        const cat = catForKind(id.kind || "");
+        if (cat) r.categoryId = cat;
+        box.hidden = true;
+        render();
+        const freshRow = $("ti-body").querySelector<HTMLElement>(`tr[data-key="${r.key}"]`);
+        const fresh = freshRow?.querySelector<HTMLInputElement>("[data-desc]");
+        if (fresh) { fresh.focus(); fresh.setSelectionRange(fresh.value.length, fresh.value.length); }
+        const fbox = freshRow?.querySelector<HTMLElement>("[data-suggest]");
+        if (fbox) { fbox.innerHTML = `<div class="ti-sug-head">Not in inventory — add the condition (e.g. " cib") and a resale value</div>`; fbox.hidden = false; }
+      });
       return;
     }
     const parsed = parseQuery(q);

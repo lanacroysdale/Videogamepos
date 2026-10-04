@@ -74,8 +74,14 @@ const VIDEO_GAME = /\bvideo ?game\b/i;
  *  "- Nintendo Switch", "Standard Edition" and the platform up front go;
  *  other parentheses ("(Nintendo Selects)") stay as words. */
 export function catalogName(title: string, platform: string): string {
+  return bothEnds(catalogTitleClean(title, platform), platform);
+}
+/** An eBay catalog title without its "(Platform, Year)" / US / "Standard
+ *  Edition" noise — the platform words in the NAME stay ("Nintendo 3DS XL
+ *  Console - Blue/Black"). For display; catalogName() is for comparing. */
+export function catalogTitleClean(title: string, platform: string): string {
   const canon = resolveStaticPlatform(platform);
-  const s = String(title ?? "").replace(/\(([^)]*)\)|\[([^\]]*)\]/g, (_m, a, b) => {
+  return String(title ?? "").replace(/\(([^)]*)\)|\[([^\]]*)\]/g, (_m, a, b) => {
     const inner = String(a ?? b ?? "");
     const US_TAG = /^(ntsc(-u(\/c)?)?|us|usa|north america|us version|region free|video ?game)$/i;
     if (US_TAG.test(inner.trim())) return " ";
@@ -88,8 +94,7 @@ export function catalogName(title: string, platform: string): string {
       return !t || /^(19|20)\d\d$/.test(t) || platformOnly(t) || US_TAG.test(t);
     });
     return platformOrYear ? " " : ` ${inner} `;
-  }).replace(/\bstandard edition\b|\bvideo ?game\b/gi, " ").replace(/\s+/g, " ").trim();
-  return bothEnds(s, platform);
+  }).replace(/\bstandard edition\b|\bvideo ?game\b/gi, " ").replace(/\s+/g, " ").replace(/[\s:–—-]+$/, "").trim();
 }
 const bothEnds = (s: string, platform: string) => withoutLeadingPlatform(withoutTrailingPlatform(s, platform), platform);
 
