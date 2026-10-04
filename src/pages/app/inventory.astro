@@ -195,6 +195,7 @@ const posData = {
         <span><strong id="ent-bulk-n">0</strong> selected</span>
         <label>Condition <select id="ent-bulk-comp"></select></label>
         <label>Grade <select id="ent-bulk-grade"></select></label>
+        {(invTypesSrv ?? []).length > 0 && <label>Type <select id="ent-bulk-type"></select></label>}
         <button id="ent-bulk-apply" class="btn btn-primary btn-sm" type="button">Apply to selected</button>
         <button id="ent-bulk-rm" class="btn btn-ghost btn-sm ent-del" type="button">🗑 Remove selected</button>
         <button id="ent-bulk-clear" class="link-btn" type="button">Clear selection</button>
@@ -202,7 +203,7 @@ const posData = {
       <table class="tbl" id="ent-table">
         <thead><tr>
           <th class="ent-ck"><input type="checkbox" id="ent-selall" title="Select all lines" aria-label="Select all lines" /></th>
-          <th style="width:26%">Item</th><th>Condition</th><th>Grade</th><th class="num">Qty</th>
+          <th style="width:26%">Item</th><th>Condition</th><th>Grade</th>{(invTypesSrv ?? []).length > 0 && <th title="Inventory type — e.g. Personal Collection">Type</th>}<th class="num">Qty</th>
           <th class="num">Paid $ <small class="muted">each</small></th><th class="num">Price $</th>
           <th>Compare</th><th></th>
         </tr></thead>
@@ -286,7 +287,7 @@ const posData = {
   </div>
 
   {isManager && deletedItems.length > 0 && (
-    <div class="pos-panel rd-panel">
+    <div class="pos-panel rd-panel" id="rd-panel">
       <h2 class="rd-head">🗑 Recently deleted</h2>
       <p class="muted rd-note">Kept for 7 days, then removed for good. Restored items come back <strong>unpublished</strong> — review, then publish again.</p>
       <ul class="rd-list">
@@ -346,6 +347,10 @@ const posData = {
 </AppLayout>
 
 <style is:global>
+  /* "hidden" means hidden — panels/bars here set display:flex, which used to
+     override it (the inventory list showed under an open entry, and the bulk
+     bar sat at the bottom even with nothing selected). */
+  [hidden] { display:none !important; }
   .inv-shell { display:flex; flex-direction:column; }
   .inv-toolbar { display:flex; flex-wrap:wrap; gap:0.6rem; align-items:center; }
   .inv-toolbar .search { flex:1; min-width:200px; }
@@ -1478,23 +1483,30 @@ const posData = {
   }
   // Move a staged line to another completeness / grade (server picks or makes
   // the matching stock row on the same listing), then mirror it locally.
-  async function setLineCondition(r: any, comp: string, grade: string) {
+  async function setLineCondition(r: any, comp: string, grade: string, typeId?: string) {
     if (r.kind === "non_inventory") return;
-    if ((r.completenessCode || "") === comp && (r.gradeCode || "") === grade) return;
+    // The copy's CURRENT type: its stock row as loaded here (authoritative),
+    // else the line's. A type change is only skipped when it truly matches.
+    const before = items.flatMap(everyVariant).find((v: any) => v.id === r.variantId);
+    const curType = before?.inventoryTypeId || r.inventoryTypeId || "";
+    const typeChange = !!typeId && typeId !== curType;
+    if ((r.completenessCode || "") === comp && (r.gradeCode || "") === grade && !typeChange) return;
     const condition = [completeness.find((c) => c.code === comp)?.label, grades.find((g) => g.code === grade)?.label].filter(Boolean).join(" ") || "Used";
-    const j = await api({ action: "setEntryLineCondition", itemId: r.itemId, completenessCode: comp, gradeCode: grade, condition });
+    const j = await api({ action: "setEntryLineCondition", itemId: r.itemId, completenessCode: comp, gradeCode: grade, condition, ...(typeChange ? { inventoryTypeId: typeId } : {}) });
     const p: any = items.find((x) => x.id === j.productId) || items.find((x) => everyVariant(x).some((v: any) => v.id === r.variantId));
     if (!p) return;
     p.pendingVariants ||= [];
     const src = everyVariant(p).find((v: any) => v.id === r.variantId);
-    if (j.mode === "renamed" && src) Object.assign(src, { completenessCode: comp, gradeCode: grade, condition });
+    // Mirror the type the SERVER used (it keeps the row's own type unless one was sent).
+    const serverType: string = j.inventoryTypeId || src?.inventoryTypeId || curType || retailTypeId;
+    if (j.mode === "renamed" && src) Object.assign(src, { completenessCode: comp, gradeCode: grade, condition, inventoryTypeId: serverType });
     // Mirror exactly what the server did (no SKU / web flag / cost copied from the old row).
     let dest = everyVariant(p).find((v: any) => v.id === j.variantId);
     if (!dest && (j.mode === "created" || j.mode === "moved")) {
       dest = {
         id: j.variantId, condition, completeness: null, completenessCode: comp, gradeCode: grade, sku: null,
         internalCode: j.internalCode || "", labelCode: "", priceCents: j.priceCents ?? 0, onlinePriceCents: null, costCents: null,
-        quantity: 0, onlineVisible: false, inventoryTypeId: src?.inventoryTypeId || retailTypeId, locationId: src?.locationId || "", barcodes: [],
+        quantity: 0, onlineVisible: false, inventoryTypeId: serverType, locationId: src?.locationId || "", barcodes: [],
         pendingEntryId: j.mode === "created" ? entryId : "", // a row made for a draft stays hidden until Finish
       };
       (j.mode === "created" ? p.pendingVariants : p.variants).push(dest);
@@ -1520,7 +1532,9 @@ const posData = {
   function setEntryMode(on: boolean) {
     entryMode = on && !!entryId;
     ($("entry-screen") as HTMLElement).hidden = !entryMode;
+    // The entry screen stands alone: no inventory list, bulk bar or deleted items under it.
     ($("inv-shell") as HTMLElement).hidden = entryMode;
+    const rd = document.getElementById("rd-panel"); if (rd) rd.hidden = entryMode;
     if (entryMode) { selected.clear(); updateBulkBar(); }
     const t = $("recv-toggle");
     if (t) t.textContent = entryMode ? `📥 Entry #${entryHuman} (open)` : "▶ Start entry";
@@ -1569,7 +1583,7 @@ const posData = {
       <tr data-item="${r.itemId}" class="ent-noninv">
         <td class="ent-ck"><input type="checkbox" data-esel aria-label="Select line"${entSel.has(r.itemId) ? " checked" : ""} /></td>
         <td><strong>${esc(r.title)}</strong> <span class="pill" style="font-size:0.66rem;" title="Recorded for the books (what you paid) — no stock, no label">🧾 non-inventory</span></td>
-        <td colspan="2" class="muted" style="font-size:0.8rem;">no stock · no label</td>
+        <td colspan="${invTypes.length ? 3 : 2}" class="muted" style="font-size:0.8rem;">no stock · no label</td>
         <td class="num"><input data-ef="qty" type="number" min="1" value="${r.qty}"></td>
         <td class="num"><input data-ef="cost" type="number" min="0" step="0.01" value="${r.costCents == null ? "" : (r.costCents / 100).toFixed(2)}" placeholder="—"></td>
         <td class="num muted">—</td>
@@ -1581,12 +1595,13 @@ const posData = {
         <td><strong>${esc(r.title)}</strong>${r.platform ? ` <span class="ti-sug-meta">${esc(r.platform)}</span>` : ""}${r.wasNew ? ` <span class="pill cyan" style="font-size:0.66rem;">new</span>` : ""}</td>
         <td><select data-ef="comp" title="Completeness — moves the copy to that condition's stock row">${entCompOpts(r.completenessCode)}</select></td>
         <td><select data-ef="grade" title="Grade (stars)">${gradeOpts(r.gradeCode)}</select></td>
+        ${invTypes.length ? `<td><select data-ef="type" title="Inventory type — moves the copy to that type's stock row on the same listing">${typeOpts(r.inventoryTypeId || retailTypeId)}</select></td>` : ""}
         <td class="num"><input data-ef="qty" type="number" min="1" value="${r.qty}"></td>
         <td class="num"><input data-ef="cost" type="number" min="0" step="0.01" value="${r.costCents == null ? "" : (r.costCents / 100).toFixed(2)}" placeholder="—"></td>
         <td class="num"><input data-ef="price" type="number" min="0" step="0.01" value="${(r.priceCents / 100).toFixed(2)}"></td>
         <td>${cmpLinks([r.title, r.platform].filter(Boolean).join(" "))}</td>
         <td><button class="link-btn" data-erm title="Remove line">✕</button></td>
-      </tr>`).join("") : `<tr><td colspan="9" class="empty" style="padding:1rem 0.4rem;">Nothing staged yet — scan or search above to add the first item.</td></tr>`;
+      </tr>`).join("") : `<tr><td colspan="${invTypes.length ? 10 : 9}" class="empty" style="padding:1rem 0.4rem;">Nothing staged yet — scan or search above to add the first item.</td></tr>`;
     // Drop selections of lines that are gone; sync the header box + bulk bar.
     for (const id of [...entSel]) if (!entRows.some((x) => x.itemId === id)) entSel.delete(id);
     entSyncSelection();
@@ -1628,6 +1643,14 @@ const posData = {
       };
       tr.querySelector<HTMLSelectElement>('[data-ef="comp"]')?.addEventListener("change", onCond);
       tr.querySelector<HTMLSelectElement>('[data-ef="grade"]')?.addEventListener("change", onCond);
+      tr.querySelector<HTMLSelectElement>('[data-ef="type"]')?.addEventListener("change", async (e) => {
+        const typeId = (e.target as HTMLSelectElement).value;
+        tr.querySelectorAll<HTMLSelectElement>("select").forEach((x) => (x.disabled = true));
+        entBusyStep(1);
+        try { await setLineCondition(r, r.completenessCode || "", r.gradeCode || "", typeId); } catch (err: any) { alert(err.message); }
+        finally { entBusyStep(-1); }
+        await loadEntry(entryId); renderEnt();
+      });
       tr.querySelector("[data-erm]")!.addEventListener("click", async () => {
         try {
           forgetDiscarded(await api({ action: "removeEntryItem", itemId: r.itemId }));
@@ -1668,7 +1691,7 @@ const posData = {
           priceCents: v.price_cents ?? 0, wasNew: it.was_new_variant, supplier: it.supplier ?? null,
           title: pr.title ?? "?", platform: pr.platform || pr.category?.name || "",
           cond: condLabel({ completenessCode: v.completeness_code, gradeCode: v.grade_code, condition: v.condition }),
-          completenessCode: v.completeness_code || "", gradeCode: v.grade_code || "",
+          completenessCode: v.completeness_code || "", gradeCode: v.grade_code || "", inventoryTypeId: v.inventory_type_id || "",
         };
       });
       try { sessionStorage.setItem("tl-entry", JSON.stringify({ id: entryId, h: entryHuman })); } catch {}
@@ -1753,6 +1776,8 @@ const posData = {
     const bc = $("ent-bulk-comp") as HTMLSelectElement | null, bg = $("ent-bulk-grade") as HTMLSelectElement | null;
     if (bc) bc.innerHTML = keep + completeness.map((c) => `<option value="${c.code}">${esc(c.label)}</option>`).join("");
     if (bg) bg.innerHTML = keep + grades.map((g) => `<option value="${g.code}">${esc((g.icon ? g.icon + " " : "") + g.label)}</option>`).join("");
+    const bt = document.getElementById("ent-bulk-type") as HTMLSelectElement | null;
+    if (bt) bt.innerHTML = keep + invTypes.map((t: any) => `<option value="${t.id}">${esc((t.icon ? t.icon + " " : "") + t.name)}</option>`).join("");
   }
   ($("ent-selall") as HTMLInputElement | null)?.addEventListener("change", (e) => {
     entSel.clear();
@@ -1762,7 +1787,8 @@ const posData = {
   $("ent-bulk-clear")?.addEventListener("click", () => { entSel.clear(); renderEnt(); });
   $("ent-bulk-apply")?.addEventListener("click", async () => {
     const comp = ($("ent-bulk-comp") as HTMLSelectElement).value, grade = ($("ent-bulk-grade") as HTMLSelectElement).value;
-    if (comp === "__keep" && grade === "__keep") { alert("Pick a condition and/or grade to apply."); return; }
+    const type = (document.getElementById("ent-bulk-type") as HTMLSelectElement | null)?.value || "__keep";
+    if (comp === "__keep" && grade === "__keep" && type === "__keep") { alert("Pick a condition, grade and/or type to apply."); return; }
     const btn = $("ent-bulk-apply") as HTMLButtonElement;
     const todo = entRows.filter((r) => entSel.has(r.itemId) && r.kind !== "non_inventory");
     if (!todo.length) { alert("None of the selected lines have a condition (non-inventory lines don't)."); return; }
@@ -1773,7 +1799,7 @@ const posData = {
       for (let i = 0; i < todo.length; i++) {
         btn.textContent = `Applying ${i + 1}/${todo.length}…`;
         const r = todo[i];
-        try { await setLineCondition(r, comp === "__keep" ? r.completenessCode || "" : comp, grade === "__keep" ? r.gradeCode || "" : grade); }
+        try { await setLineCondition(r, comp === "__keep" ? r.completenessCode || "" : comp, grade === "__keep" ? r.gradeCode || "" : grade, type === "__keep" ? undefined : type); }
         catch (err: any) { errors.push(`${r.title}: ${err.message}`); }
       }
     } finally { entBusyStep(-1); }
@@ -1826,7 +1852,7 @@ const posData = {
         return;
       }
       const j = await api({ action: "stageItem", entryId, variantId: v.id, qty: 1 });
-      entRows.push({ itemId: j.itemId, variantId: v.id, qty: 1, costCents: null, priceCents: v.priceCents, wasNew: false, supplier: null, title: p.title, platform: p.platform || p.categoryName || "", cond: condLabel(v), completenessCode: v.completenessCode || "", gradeCode: v.gradeCode || "" });
+      entRows.push({ itemId: j.itemId, variantId: v.id, qty: 1, costCents: null, priceCents: v.priceCents, wasNew: false, supplier: null, title: p.title, platform: p.platform || p.categoryName || "", cond: condLabel(v), completenessCode: v.completenessCode || "", gradeCode: v.gradeCode || "", inventoryTypeId: v.inventoryTypeId || "" });
       renderEnt();
     } catch (e: any) { alert(e.message); }
   }
@@ -2382,6 +2408,7 @@ const posData = {
           priceCents: body.priceCents, wasNew: true, supplier: null, title: newItem.title,
           platform: newItem.platform || newItem.categoryName || "", cond: condLabel(newItem.variants[0]),
           completenessCode: comp || "", gradeCode: grade || "", kind: "stock",
+          inventoryTypeId: newItem.variants[0].inventoryTypeId || body.inventoryTypeId || retailTypeId,
         });
         // A listing made on the draft screen is hidden until the draft is finished.
         newItem.pendingEntryId = entryId;

@@ -435,10 +435,9 @@ export const POST: APIRoute = async ({ locals, request }) => {
       // "Finish" lands in between: the line either moves (then Finish applies it
       // to the new row) or the move is refused (then nothing else happens). No
       // line merging — two lines for one stock row are fine (each applies).
+      // Also the INVENTORY TYPE (Retail → Personal Collection…): same move, to
+      // the listing's stock row of that type. A field not sent keeps its value.
       if (!b.itemId) return json({ error: "itemId required" }, 400);
-      const comp = b.completenessCode ? String(b.completenessCode) : null;
-      const grade = b.gradeCode ? String(b.gradeCode) : null;
-      const label = String(b.condition || "Used").slice(0, 40);
       const { data: line } = await sb.from("inventory_entry_items")
         .select("id, entry_id, variant_id, was_new_variant, applied, entry:inventory_entries(status)")
         .eq("id", b.itemId).maybeSingle();
@@ -447,10 +446,16 @@ export const POST: APIRoute = async ({ locals, request }) => {
       const closed = "That draft was finished — the line wasn't changed.";
       if ((line as any).entry?.status !== "open" || line.applied) return json({ error: closed }, 409);
       const { data: old } = await sb.from("product_variants")
-        .select("id, product_id, completeness_code, grade_code, price_cents, quantity, inventory_type_id, location_id, barcode")
+        .select("id, product_id, condition, completeness_code, grade_code, price_cents, quantity, inventory_type_id, location_id, barcode")
         .eq("id", line.variant_id).maybeSingle();
       if (!old) return json({ error: "Stock row not found." }, 404);
-      if ((old.completeness_code ?? null) === comp && (old.grade_code ?? null) === grade) return json({ ok: true, mode: "unchanged", variantId: old.id });
+      const sent = (k: string) => Object.prototype.hasOwnProperty.call(b, k);
+      const comp: string | null = sent("completenessCode") ? (b.completenessCode ? String(b.completenessCode) : null) : (old.completeness_code ?? null);
+      const grade: string | null = sent("gradeCode") ? (b.gradeCode ? String(b.gradeCode) : null) : (old.grade_code ?? null);
+      const typeId: string | null = sent("inventoryTypeId") && b.inventoryTypeId ? String(b.inventoryTypeId) : (old.inventory_type_id ?? null);
+      const label = String(b.condition || old.condition || "Used").slice(0, 40);
+      if ((old.completeness_code ?? null) === comp && (old.grade_code ?? null) === grade && (old.inventory_type_id ?? null) === typeId)
+        return json({ ok: true, mode: "unchanged", variantId: old.id });
       // Disposable = created for this line and used by nothing else.
       const [{ count: otherLines }, { count: sales }] = await Promise.all([
         sb.from("inventory_entry_items").select("id", { count: "exact", head: true }).eq("variant_id", old.id).neq("id", line.id),
@@ -460,16 +465,16 @@ export const POST: APIRoute = async ({ locals, request }) => {
       let tq = sb.from("product_variants").select("id, price_cents, internal_code, barcode").eq("product_id", old.product_id).neq("id", old.id);
       tq = comp ? tq.eq("completeness_code", comp) : tq.is("completeness_code", null);
       tq = grade ? tq.eq("grade_code", grade) : tq.is("grade_code", null);
-      if (old.inventory_type_id) tq = tq.eq("inventory_type_id", old.inventory_type_id);
+      if (typeId) tq = tq.eq("inventory_type_id", typeId);
       const { data: tgs } = await tq.limit(1);
       const target = tgs?.[0];
       if (!target && disposable) {
         // Rename the row in place — one statement; the line keeps pointing at it.
-        const { data: rn, error } = await sb.from("product_variants").update({ completeness_code: comp, grade_code: grade, condition: label })
+        const { data: rn, error } = await sb.from("product_variants").update({ completeness_code: comp, grade_code: grade, condition: label, ...(typeId ? { inventory_type_id: typeId } : {}) })
           .eq("id", old.id).eq("quantity", 0).select("id").maybeSingle();
         if (error) return json({ error: error.message }, 500);
         if (!rn) return json({ error: closed }, 409);
-        return json({ ok: true, mode: "renamed", variantId: old.id, productId: old.product_id });
+        return json({ ok: true, mode: "renamed", variantId: old.id, productId: old.product_id, inventoryTypeId: typeId });
       }
       let dest = target;
       let created = false;
@@ -477,7 +482,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
         const { data: nv, error } = await sb.from("product_variants").insert({
           product_id: old.product_id, condition: label, completeness_code: comp, grade_code: grade,
           price_cents: old.price_cents ?? 0, quantity: 0,
-          ...(old.inventory_type_id ? { inventory_type_id: old.inventory_type_id } : {}),
+          ...(typeId ? { inventory_type_id: typeId } : {}),
           ...(old.location_id ? { location_id: old.location_id } : {}),
           ...(await pendingFor(line.entry_id)), // hidden until the draft is finished
         }).select("id, price_cents, internal_code, barcode").single();
@@ -505,7 +510,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
         const { data: gone } = await sb.from("product_variants").delete().eq("id", old.id).eq("quantity", 0).select("id");
         if (gone?.length) removedVariantId = old.id;
       }
-      return json({ ok: true, mode: created ? "created" : "moved", variantId: dest!.id, productId: old.product_id,
+      return json({ ok: true, mode: created ? "created" : "moved", variantId: dest!.id, productId: old.product_id, inventoryTypeId: typeId,
         internalCode: dest!.internal_code ?? "", priceCents: dest!.price_cents ?? 0, removedVariantId,
         primaryBarcode: disposable && old.barcode && !dest!.barcode ? old.barcode : dest!.barcode ?? null, movedBarcodes });
     }
