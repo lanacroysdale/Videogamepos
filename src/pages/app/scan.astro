@@ -279,9 +279,19 @@ import AppLayout from "../../layouts/AppLayout.astro";
   });
   window.addEventListener("pagehide", () => { stopCamera(); });
 
-  // Reload with a live token → resume straight into the scanner.
-  try {
-    const t = sessionStorage.getItem("tl-scan-phone");
-    if (t) session = resumeScanner(t, callbacks);
-  } catch { /* private mode */ }
+  // Opened from the station's pairing QR (…/scan?code=123456): join that
+  // station straight away — it wins over an older session on this phone.
+  const qrCode = (new URLSearchParams(location.search).get("code") || "").replace(/\D/g, "").slice(0, 6);
+  if (qrCode.length === 6) {
+    window.history.replaceState(null, "", location.pathname);
+    try { sessionStorage.removeItem("tl-scan-phone"); } catch { /* private mode */ }
+    ($("sc-code") as HTMLInputElement).value = qrCode;
+    $("sc-join").click();
+  } else {
+    // Reload with a live token → resume straight into the scanner.
+    try {
+      const t = sessionStorage.getItem("tl-scan-phone");
+      if (t) session = resumeScanner(t, callbacks);
+    } catch { /* private mode */ }
+  }
 </script>

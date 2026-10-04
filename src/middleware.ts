@@ -81,7 +81,12 @@ export const onRequest = defineMiddleware(async (context, next) => {
   const homePath = isMarketing ? "/app" : "/dashboard";
   const isLogin = pathname === "/app/login";
   if (!user) {
-    return isLogin ? go() : context.redirect(loginPath);
+    if (isLogin) return go();
+    // Come back to this page after signing in (e.g. the phone scanner's
+    // pairing QR → /scan?code=…). The login page only follows local paths.
+    const back = context.request.method === "GET" ? url.pathname + url.search : "";
+    const keep = back && !/^\/(app\/?)?(login|dashboard)?\/?$/.test(url.pathname);
+    return context.redirect(keep ? `${loginPath}?next=${encodeURIComponent(back)}` : loginPath);
   }
   if (isLogin) return context.redirect(homePath);
 
