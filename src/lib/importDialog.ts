@@ -109,6 +109,7 @@ export function openImportDialog(o: ImportDialogOpts) {
   let resolved: ResolvedRow[] = [];
   let busy = false;
   let folderSel: string | null = null; // folder filter (null = every folder)
+  let platformSel: string | null = null; // platform filter (null = every platform; "" = rows with none)
   // Official titles from the game database (LaunchBox copy) for rows that
   // would create a NEW listing — fixes sheet typos ("Links Aweakening").
   const titleFix = new Map<string, { name: string; sim: number } | null>(); // key: norm(title)|platform
@@ -210,7 +211,7 @@ export function openImportDialog(o: ImportDialogOpts) {
     header = hasHeader ? all[0] : all[0].map((_, i) => `Column ${i + 1}`);
     records = hasHeader ? all.slice(1) : all;
     map = mapFor(all[0]);
-    folderSel = null;
+    folderSel = null; platformSel = null;
     // A new file: row numbers mean different games now.
     resolved = []; picks.clear(); catPicks.clear(); keepSheet.clear();
     if (map.title == null) showErr("Couldn't find a Title column — pick it under Columns."); else showErr("");
@@ -249,6 +250,7 @@ export function openImportDialog(o: ImportDialogOpts) {
       try { localStorage.setItem("tl-import-map:" + headerSignature(header), JSON.stringify({ ...map, __cleared: [...cleared] })); } catch {}
       showErr(map.title == null ? "Couldn't find a Title column — pick it under Columns." : "");
       if (k === "folder") { folderSel = null; renderDefaults(); }
+      if (k === "platform") platformSel = null;
       rebuild();
     }));
     $<HTMLInputElement>("tli-hdr").addEventListener("change", (e) => {
@@ -259,7 +261,7 @@ export function openImportDialog(o: ImportDialogOpts) {
       header = on ? all[0] : all[0].map((_, i) => `Column ${i + 1}`);
       records = on ? all.slice(1) : all;
       map = mapFor(all[0]);
-      folderSel = null;
+      folderSel = null; platformSel = null;
       resolved = []; picks.clear(); catPicks.clear(); keepSheet.clear(); // row numbers shift by one
       renderMap(); renderDefaults(); rebuild();
     });
@@ -278,6 +280,8 @@ export function openImportDialog(o: ImportDialogOpts) {
       html += sel("tli-folder", "Folder", `<option value="*"${folderSel == null ? " selected" : ""}>All folders (${records.length})</option>`
         + names.map((f) => `<option value="${esc(f)}"${folderSel === f ? " selected" : ""}>${esc(f || "(no folder)")} (${counts.get(f)})</option>`).join(""));
     }
+    // Filled by rebuild(): the platforms in the rows shown (after the folder).
+    html += `<span id="tli-plat-slot" style="display:contents"></span>`;
     html += sel("tli-cat", "Category", o.categories.map((c) => `<option value="${c.id}"${c.id === choices.categoryId ? " selected" : ""}>${esc(c.name)}</option>`).join(""));
     if (o.mode === "entry" && o.invTypes?.length) {
       html += sel("tli-type", "Inventory type", o.invTypes.map((t) => `<option value="${t.id}"${t.id === choices.inventoryTypeId ? " selected" : ""}>${esc((t.icon ? t.icon + " " : "") + t.name)}</option>`).join(""));
@@ -296,6 +300,17 @@ export function openImportDialog(o: ImportDialogOpts) {
     overlay.querySelector<HTMLInputElement>("#tli-pct")?.addEventListener("change", (e) => { choices.pricePct = Math.max(1, Math.min(500, Math.round(+(e.target as HTMLInputElement).value) || 100)); renderTable(); });
   }
 
+  function renderPlatformFilter(counts: Map<string, number>, total: number) {
+    const slot = overlay.querySelector<HTMLElement>("#tli-plat-slot");
+    if (!slot) return;
+    if (map.platform == null || counts.size < 2) { slot.innerHTML = ""; return; }
+    const names = [...counts.keys()].sort((a, b) => (a === "" ? 1 : b === "" ? -1 : a.localeCompare(b)));
+    slot.innerHTML = `<label>Platform<select id="tli-plat"><option value="*"${platformSel == null ? " selected" : ""}>All platforms (${total})</option>`
+      + names.map((p) => `<option value="${esc(p)}"${platformSel === p ? " selected" : ""}>${esc(p || "(no platform)")} (${counts.get(p)})</option>`).join("")
+      + `</select></label>`;
+    slot.querySelector<HTMLSelectElement>("#tli-plat")!.addEventListener("change", (e) => { const v = (e.target as HTMLSelectElement).value; platformSel = v === "*" ? null : v; rebuild(); });
+  }
+
   // ---- rows + matching ----
   function rebuild() {
     if (map.title == null) { resolved = []; renderTable(); return; }
@@ -312,8 +327,14 @@ export function openImportDialog(o: ImportDialogOpts) {
       defaultCompleteness: choices.completenessCode, defaultGrade: choices.gradeCode,
       cents: centsColumns(header, map), folder: map.folder != null ? folderSel : null,
     });
+    // Platform filter — import one console at a time ("Nintendo DS only").
+    const platCounts = new Map<string, number>();
+    for (const r of rows) platCounts.set(r.platform || "", (platCounts.get(r.platform || "") || 0) + 1);
+    if (platformSel != null && !platCounts.has(platformSel)) platformSel = null;
+    renderPlatformFilter(platCounts, rows.length);
+    const shown = platformSel == null ? rows : rows.filter((r) => (r.platform || "") === platformSel);
     const wanted: ImportRow[] = [];
-    resolved = rows.map((row0) => {
+    resolved = shown.map((row0) => {
       let row = row0;
       let match = matchRow(row, prepared, o.platforms, typeFilter());
       // A row that would create a NEW listing takes the game's official title
