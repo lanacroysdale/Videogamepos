@@ -1481,23 +1481,28 @@ const posData = {
   // the matching stock row on the same listing), then mirror it locally.
   async function setLineCondition(r: any, comp: string, grade: string, typeId?: string) {
     if (r.kind === "non_inventory") return;
-    const curType = r.inventoryTypeId || retailTypeId || "";
-    const newType = typeId || curType;
-    if ((r.completenessCode || "") === comp && (r.gradeCode || "") === grade && newType === curType) return;
+    // The copy's CURRENT type: its stock row as loaded here (authoritative),
+    // else the line's. A type change is only skipped when it truly matches.
+    const before = items.flatMap(everyVariant).find((v: any) => v.id === r.variantId);
+    const curType = before?.inventoryTypeId || r.inventoryTypeId || "";
+    const typeChange = !!typeId && typeId !== curType;
+    if ((r.completenessCode || "") === comp && (r.gradeCode || "") === grade && !typeChange) return;
     const condition = [completeness.find((c) => c.code === comp)?.label, grades.find((g) => g.code === grade)?.label].filter(Boolean).join(" ") || "Used";
-    const j = await api({ action: "setEntryLineCondition", itemId: r.itemId, completenessCode: comp, gradeCode: grade, condition, ...(typeId ? { inventoryTypeId: typeId } : {}) });
+    const j = await api({ action: "setEntryLineCondition", itemId: r.itemId, completenessCode: comp, gradeCode: grade, condition, ...(typeChange ? { inventoryTypeId: typeId } : {}) });
     const p: any = items.find((x) => x.id === j.productId) || items.find((x) => everyVariant(x).some((v: any) => v.id === r.variantId));
     if (!p) return;
     p.pendingVariants ||= [];
     const src = everyVariant(p).find((v: any) => v.id === r.variantId);
-    if (j.mode === "renamed" && src) Object.assign(src, { completenessCode: comp, gradeCode: grade, condition, inventoryTypeId: newType });
+    // Mirror the type the SERVER used (it keeps the row's own type unless one was sent).
+    const serverType: string = j.inventoryTypeId || src?.inventoryTypeId || curType || retailTypeId;
+    if (j.mode === "renamed" && src) Object.assign(src, { completenessCode: comp, gradeCode: grade, condition, inventoryTypeId: serverType });
     // Mirror exactly what the server did (no SKU / web flag / cost copied from the old row).
     let dest = everyVariant(p).find((v: any) => v.id === j.variantId);
     if (!dest && (j.mode === "created" || j.mode === "moved")) {
       dest = {
         id: j.variantId, condition, completeness: null, completenessCode: comp, gradeCode: grade, sku: null,
         internalCode: j.internalCode || "", labelCode: "", priceCents: j.priceCents ?? 0, onlinePriceCents: null, costCents: null,
-        quantity: 0, onlineVisible: false, inventoryTypeId: newType || src?.inventoryTypeId || retailTypeId, locationId: src?.locationId || "", barcodes: [],
+        quantity: 0, onlineVisible: false, inventoryTypeId: serverType, locationId: src?.locationId || "", barcodes: [],
         pendingEntryId: j.mode === "created" ? entryId : "", // a row made for a draft stays hidden until Finish
       };
       (j.mode === "created" ? p.pendingVariants : p.variants).push(dest);
@@ -2397,6 +2402,7 @@ const posData = {
           priceCents: body.priceCents, wasNew: true, supplier: null, title: newItem.title,
           platform: newItem.platform || newItem.categoryName || "", cond: condLabel(newItem.variants[0]),
           completenessCode: comp || "", gradeCode: grade || "", kind: "stock",
+          inventoryTypeId: newItem.variants[0].inventoryTypeId || body.inventoryTypeId || retailTypeId,
         });
         // A listing made on the draft screen is hidden until the draft is finished.
         newItem.pendingEntryId = entryId;
