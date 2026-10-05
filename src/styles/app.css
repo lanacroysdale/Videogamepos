@@ -130,6 +130,8 @@ td > .comp-combo { width: 100%; min-width: 7rem; }
 .pill.cyan { color: var(--cyan); border-color: rgba(223, 94, 57, 0.4); background: rgba(223, 94, 57, 0.1); }
 .pill.magenta { color: var(--magenta); border-color: rgba(243, 156, 205, 0.4); background: rgba(243, 156, 205, 0.1); }
 .pill.muted { color: var(--muted); }
+/* Region tag (🇯🇵 JP) — a listing's market; the home region shows none. */
+.rg-badge { display: inline-flex; align-items: center; gap: 0.2em; padding: 0.05rem 0.4rem; font-size: 0.68rem; font-weight: 800; letter-spacing: 0.03em; line-height: 1.35; border: 1px solid var(--border-strong); background: rgba(127, 127, 127, 0.12); color: var(--text); white-space: nowrap; vertical-align: middle; border-radius: 0; }
 
 .empty { color: var(--muted-2); font-style: italic; padding: 1rem 0; }
 
