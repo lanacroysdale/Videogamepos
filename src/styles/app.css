@@ -105,6 +105,12 @@
 .stat .l { color: var(--muted); font-size: 0.78rem; }
 
 .btn-sm { padding: 0.5rem 0.85rem; font-size: 0.85rem; }
+/* A lighter, outlined take on .btn-primary — the second main action beside
+   it (e.g. "Start entry" next to "Add product"). The outline is a 2px inset
+   layer, so it follows the slanted button shape (a border would be clipped). */
+.btn-primary-soft { background: linear-gradient(135deg, var(--cyan), var(--violet)); color: var(--cyan); isolation: isolate; filter: drop-shadow(0 4px 10px rgba(223, 94, 57, 0.22)); }
+.btn-primary-soft::before { content: ""; position: absolute; inset: 2px; z-index: -1; clip-path: inherit; border-radius: inherit; background: color-mix(in srgb, var(--cyan) 14%, var(--bg)); }
+.btn-primary-soft:hover { filter: drop-shadow(0 6px 16px rgba(223, 94, 57, 0.42)); }
 
 /* Typeable completeness combobox (inventory add form + edit modal) */
 .comp-combo-wrap { position: relative; display: inline-flex; align-items: center; }

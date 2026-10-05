@@ -465,6 +465,30 @@ export const POST: APIRoute = async ({ locals, request }) => {
       if (error) return json({ error: /violates row-level security|finished on another station/i.test(error.message) ? "That draft was finished — start a new entry." : error.message }, 500);
       return json({ ok: true, itemId: st.id });
     }
+    case "quickNonInventory": {
+      // Quick add from the inventory screen (no entry open): a bulk lot /
+      // supplies recorded RIGHT AWAY as its own finished entry — the way a
+      // quick-added product goes straight into stock. One line at the total.
+      const description = String(b.description ?? "").trim().slice(0, 200);
+      if (!description) return json({ error: "Describe the item (e.g. “DS bulk loose games, grade B”)." }, 400);
+      if (!(await hasCol("inventory_entry_items", "kind"))) return json({ error: "Apply migration 20260930000001 to record non-inventory items." }, 400);
+      const total = b.totalCents == null || b.totalCents === "" ? null : Math.max(0, Math.round(Number(b.totalCents)) || 0);
+      const { error: roErr } = await sb.from("inventory_entries").select("received_on").limit(1);
+      const receivedOn = !roErr && isDate(b.receivedOn) ? { received_on: b.receivedOn } : {};
+      const { data: entry, error } = await sb.from("inventory_entries")
+        .insert({ employee_id: uid, source: "manual", note: "Quick add — non-inventory", ...receivedOn })
+        .select("id, human_id").single();
+      if (error) return json({ error: error.message }, 500);
+      const undo = () => sb.from("inventory_entries").delete().eq("id", entry.id).eq("status", "open");
+      const { error: lErr } = await sb.from("inventory_entry_items").insert({
+        entry_id: entry.id, variant_id: null, kind: "non_inventory", description,
+        qty_added: 1, unit_cost_cents: total, price_cents_at_entry: 0, was_new_variant: false, applied: false,
+      });
+      if (lErr) { await undo(); return json({ error: lErr.message }, 500); }
+      const { error: cErr } = await sb.rpc("commit_entry", { p_entry_id: entry.id });
+      if (cErr) { await undo(); return json({ error: cErr.message }, 500); }
+      return json({ ok: true, entryId: entry.id, humanId: entry.human_id });
+    }
     case "setEntryLineCondition": {
       // Change a STAGED line's completeness / grade. The line moves to the
       // matching stock row on the same listing (existing, or a new one) — it
