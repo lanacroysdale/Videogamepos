@@ -77,11 +77,12 @@ export const POST: APIRoute = async ({ locals, request }) => {
   switch (b.action) {
     // ---- Receiving entries (sessions) ----
     case "startEntry": {
-      // Reuse the caller's newest open entry so refreshes don't orphan sessions.
-      const { data: open } = await sb
-        .from("inventory_entries").select("id, human_id")
-        .eq("employee_id", uid).eq("status", "open")
-        .order("created_at", { ascending: false }).limit(1).maybeSingle();
+      // Reuse the caller's newest open entry so refreshes don't orphan sessions
+      // — never a finished entry a manager put back to draft (migration
+      // 20261004000001): that's a fix-up, not today's receiving.
+      let oq = sb.from("inventory_entries").select("id, human_id").eq("employee_id", uid).eq("status", "open");
+      if (await hasCol("inventory_entries", "reopened_at")) oq = oq.is("reopened_at", null);
+      const { data: open } = await oq.order("created_at", { ascending: false }).limit(1).maybeSingle();
       if (open) return json({ ok: true, entry: open, resumed: true });
       // received_on (migration 20260924000002): the client sends its local
       // date — the server runs UTC, which is "tomorrow" on a Portland evening.
@@ -698,6 +699,14 @@ export const POST: APIRoute = async ({ locals, request }) => {
       ]);
       if (!entry) return json({ error: "Entry not found." }, 404);
       if (error) return json({ error: error.message }, 500);
+      // Back to draft: what the stock rows a reopened entry filled hold NOW
+      // (copies may have sold since it was finished).
+      const stockedIds = [...new Set((items ?? []).filter((it: any) => it.stocked_qty > 0 && it.stocked_variant_id).map((it: any) => it.stocked_variant_id as string))];
+      if (stockedIds.length) {
+        const { data: rows } = await sb.from("product_variants").select("id, quantity").in("id", stockedIds);
+        const onHand = new Map((rows ?? []).map((r: any) => [r.id, r.quantity ?? 0]));
+        (items as any[]).forEach((it) => { if (it.stocked_qty > 0) it.stocked_on_hand = onHand.get(it.stocked_variant_id) ?? 0; });
+      }
       return json({ ok: true, entry, items: items ?? [] });
     }
     case "updateVariant": {

@@ -14,14 +14,19 @@
 -- Anything that would take copies OUT of a stock row is refused when that row
 -- no longer holds them (sold or moved since) — never a negative or phantom
 -- count. Unchanged lines add nothing, even if copies sold meanwhile.
+-- inventory_entries.reopened_at marks a reopened entry (so "Start entry"
+-- never resumes it as someone's new receiving session).
 --
 -- Apply in the Supabase SQL editor. Safe to re-run.
 -- ============================================================================
 
 -- ---- 1. what a line already put in stock -----------------------------------
 alter table public.inventory_entry_items add column if not exists stocked_qty int not null default 0;
-alter table public.inventory_entry_items add column if not exists stocked_variant_id uuid
-  references public.product_variants(id) on delete set null;
+-- Plain uuid, NOT a foreign key: a second link from lines to stock rows would
+-- make the app's line → stock-row lookups ambiguous. A row deleted since just
+-- isn't found (nothing to take out of it).
+alter table public.inventory_entry_items add column if not exists stocked_variant_id uuid;
+alter table public.inventory_entries add column if not exists reopened_at timestamptz;
 
 -- ---- 2. Back to draft -------------------------------------------------------
 create or replace function public.reopen_entry(p_entry_id uuid)
@@ -44,7 +49,7 @@ begin
   if v_entry.status <> 'committed' then
     raise exception 'This entry is already a draft.';
   end if;
-  update public.inventory_entries set status = 'open', committed_at = null where id = p_entry_id;
+  update public.inventory_entries set status = 'open', committed_at = null, reopened_at = now() where id = p_entry_id;
   -- Stock untouched: each line just remembers what it already put in stock.
   update public.inventory_entry_items
      set applied = false,
@@ -89,6 +94,7 @@ begin
     select * from public.inventory_entry_items
     where entry_id = p_entry_id and applied = false
     order by created_at
+    for update
   loop
     if r.kind = 'non_inventory' or r.variant_id is null then
       -- Recorded for the books only: no stock row, no ledger movement.
@@ -106,7 +112,7 @@ begin
       else
         -- Condition / type changed: the copies move to the new stock row.
         if r.stocked_variant_id is null or coalesce(v_on_hand, 0) < r.stocked_qty then
-          raise exception '% — % cop% of it sold or moved since this entry went back to draft, so its condition / type can''t move. Change it back, or fix that stock by hand.',
+          raise exception '% — % cop% of it sold or moved since this entry was finished, so its condition / type can''t move. Change it back, or fix that stock by hand.',
             coalesce(v_title, 'An item'), r.stocked_qty - least(coalesce(v_on_hand, 0), r.stocked_qty),
             case when r.stocked_qty - least(coalesce(v_on_hand, 0), r.stocked_qty) = 1 then 'y' else 'ies' end;
         end if;
@@ -120,7 +126,7 @@ begin
           from public.product_variants v left join public.products p on p.id = v.product_id
          where v.id = r.variant_id for update of v;
         if coalesce(v_on_hand, 0) < -v_delta then
-          raise exception '% — only % left in stock, so the line can''t go down by %. Some copies sold since this entry went back to draft.',
+          raise exception '% — only % left in stock, so the line can''t go down by % (copies sold since this entry was finished).',
             coalesce(v_title, 'An item'), coalesce(v_on_hand, 0), -v_delta;
         end if;
       end if;
@@ -154,7 +160,7 @@ begin
                       join public.product_variants v on v.id = i.variant_id
                      where i.entry_id = p_entry_id));
   update public.inventory_entries
-     set status = 'committed', committed_at = now()
+     set status = 'committed', committed_at = now(), reopened_at = null
    where id = p_entry_id;
   return v_applied;
 end;
@@ -175,13 +181,22 @@ declare
   v_on_hand int;
   v_title text;
 begin
+  -- A line removed directly by staff (not a cascade from deleting the draft or
+  -- a stock row): wait for a concurrent Finish, and refuse once it's finished
+  -- — else Finish and the removal could both apply this line's stock.
+  if pg_trigger_depth() = 1 and auth.uid() is not null then
+    perform 1 from public.inventory_entries where id = old.entry_id and status = 'open' for share;
+    if not found then
+      raise exception 'That draft was finished on another station — nothing was removed. Reload it.' using errcode = 'P0001';
+    end if;
+  end if;
   if coalesce(old.stocked_qty, 0) > 0 and old.stocked_variant_id is not null then
     select v.quantity, p.title into v_on_hand, v_title
       from public.product_variants v left join public.products p on p.id = v.product_id
      where v.id = old.stocked_variant_id for update of v;
     if found then
       if coalesce(v_on_hand, 0) < old.stocked_qty then
-        raise exception '% — some of its copies sold since this entry went back to draft, so it can''t be removed. Lower its quantity instead, or Finish.',
+        raise exception '% — some of its copies have sold (or moved) since this entry was finished, so it can''t be removed. Lower its quantity instead, or Finish.',
           coalesce(v_title, 'An item');
       end if;
       update public.product_variants set quantity = quantity - old.stocked_qty where id = old.stocked_variant_id;

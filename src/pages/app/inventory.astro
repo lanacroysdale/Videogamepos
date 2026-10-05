@@ -1119,7 +1119,7 @@ const posData = {
         const j = await api({ action: "receiveStock", variantId: v.id, qtyAdded: qty, unitCostCents });
         v.quantity = j.newQuantity;
         const qi = $("cond-body")?.querySelector<HTMLInputElement>(`[data-vrow="${v.id}"] [data-vf="qty"]`);
-        if (qi) qi.value = String(j.newQuantity);
+        if (qi) { qi.value = String(j.newQuantity); qi.dataset.orig = qi.value; }
         render();
         toast(`✓ Received ${qty} — now ${j.newQuantity} in stock`);
       } catch (e: any) { alert(e.message); }
@@ -1224,7 +1224,7 @@ const posData = {
         <td><input data-vf="sku" value="${esc(v.sku ?? "")}" placeholder="SKU" style="font-family:var(--font-mono);"></td>
         <td class="c-num"><div class="price-cell"><input data-vf="instore" type="number" min="0" step="0.01" value="${(v.priceCents / 100).toFixed(2)}">${repriceBtn}</div></td>
         <td class="c-num"><input data-vf="online" type="number" min="0" step="0.01" value="${v.onlinePriceCents != null ? (v.onlinePriceCents / 100).toFixed(2) : ""}" placeholder="${(v.priceCents / 100).toFixed(2)}"></td>
-        <td class="c-num"><input data-vf="qty" type="number" min="0" value="${v.quantity}"></td>
+        <td class="c-num"><input data-vf="qty" type="number" min="0" value="${v.quantity}" data-orig="${v.quantity}"></td>
         <td class="c-web"><input data-vf="web" type="checkbox"${v.onlineVisible ? " checked" : ""}></td>
         ${invTypes.length ? `<td><select data-vf="invtype">${typeOpts(v.inventoryTypeId)}</select></td><td><select data-vf="loc">${locOpts(v.locationId)}</select></td>` : ""}
       </tr>`;
@@ -1433,7 +1433,9 @@ const posData = {
           sku: f("sku").value.trim(),
           priceCents: toCents(f("instore").value),
           onlinePriceCents: onlineRaw === "" ? null : toCents(onlineRaw),
-          quantity: Math.max(0, Math.round(parseInt(f("qty").value)) || 0),
+          // Only a count the user changed: the page's numbers can be stale
+          // (sales on other stations) and must not overwrite live stock.
+          ...(f("qty").value !== f("qty").dataset.orig ? { quantity: Math.max(0, Math.round(parseInt(f("qty").value)) || 0) } : {}),
           onlineVisible: f("web").checked,
           ...(invTypes.length ? { inventoryTypeId: f("invtype").value, locationId: f("loc").value || null } : {}),
         };
@@ -1441,7 +1443,7 @@ const posData = {
         Object.assign(v, {
           condition: derived, completenessCode: comp, gradeCode: grade,
           sku: f("sku").value.trim() || null, priceCents: payload.priceCents,
-          onlinePriceCents: payload.onlinePriceCents, quantity: payload.quantity, onlineVisible: payload.onlineVisible,
+          onlinePriceCents: payload.onlinePriceCents, quantity: payload.quantity ?? v.quantity, onlineVisible: payload.onlineVisible,
         });
         if (invTypes.length) Object.assign(v, { inventoryTypeId: f("invtype").value, locationId: f("loc").value || "" });
       }
@@ -1599,8 +1601,18 @@ const posData = {
       : `over by <strong>${money(-left)}</strong>`;
   }
 
-  // A finished entry put back to draft: its copies are still in stock.
+  // A finished entry put back to draft: its copies are still in stock (minus
+  // any that sold since it was finished — those can't come back out).
   const entReopened = () => entRows.some((r) => r.stockedQty > 0);
+  const stockLeft = (r: any) => Math.min(r.stockedQty || 0, r.stockedOnHand || 0);
+  const soldSince = (r: any) => (r.stockedQty || 0) - stockLeft(r);
+  // Mirror what the server just did to a reopened line's stock row (removed
+  // line / deleted draft / Finish moved its copies) in the grid's numbers.
+  const unstockLocal = (r: any) => {
+    if (!r?.stockedQty || !r.stockedVariantId) return;
+    const v = items.flatMap(everyVariant).find((x: any) => x.id === r.stockedVariantId);
+    if (v) v.quantity = Math.max(0, (v.quantity || 0) - r.stockedQty);
+  };
   const ENT_NOTE = $("ent-note")?.innerHTML ?? "";
   function renderEnt() {
     const note = $("ent-note");
@@ -1621,7 +1633,7 @@ const posData = {
       </tr>` : `
       <tr data-item="${r.itemId}">
         <td class="ent-ck"><input type="checkbox" data-esel aria-label="Select line"${entSel.has(r.itemId) ? " checked" : ""} /></td>
-        <td><strong>${esc(r.title)}</strong>${r.platform ? ` <span class="ti-sug-meta">${esc(r.platform)}</span>` : ""}${r.wasNew && !r.stockedQty ? ` <span class="pill cyan" style="font-size:0.66rem;">new</span>` : ""}${r.stockedQty ? ` <span class="pill" style="font-size:0.66rem;" title="Already in stock from when this entry was finished — Finish applies only changes to this line">✓ ${r.stockedQty} in stock</span>` : ""}</td>
+        <td><strong>${esc(r.title)}</strong>${r.platform ? ` <span class="ti-sug-meta">${esc(r.platform)}</span>` : ""}${r.wasNew && !r.stockedQty ? ` <span class="pill cyan" style="font-size:0.66rem;">new</span>` : ""}${r.stockedQty ? ` <span class="pill" style="font-size:0.66rem;" title="Already in stock from when this entry was finished — Finish applies only changes to this line">✓ ${stockLeft(r)} in stock${soldSince(r) ? ` · ${soldSince(r)} sold` : ""}</span>` : ""}</td>
         <td><select data-ef="comp" title="Completeness — moves the copy to that condition's stock row">${entCompOpts(r.completenessCode)}</select></td>
         <td><select data-ef="grade" title="Grade (stars)">${gradeOpts(r.gradeCode)}</select></td>
         ${invTypes.length ? `<td><select data-ef="type" title="Inventory type — moves the copy to that type's stock row on the same listing">${typeOpts(r.inventoryTypeId || retailTypeId)}</select></td>` : ""}
@@ -1681,12 +1693,16 @@ const posData = {
         await loadEntry(entryId); renderEnt();
       });
       tr.querySelector("[data-erm]")!.addEventListener("click", async () => {
+        if (soldSince(r)) { alert(`${r.title}: ${soldSince(r)} of its copies sold since this entry was finished, so the line can't be removed. Lower its quantity instead.`); return; }
         if (r.stockedQty && !confirm(`Remove ${r.title}?\n\nIts ${r.stockedQty} cop${r.stockedQty === 1 ? "y is" : "ies are"} already in stock from when this entry was finished — they come back OUT of stock.`)) return;
+        entBusyStep(1); // Finish waits for the removal
         try {
           forgetDiscarded(await api({ action: "removeEntryItem", itemId: r.itemId }));
+          unstockLocal(r);
           entRows = entRows.filter((x) => x.itemId !== r.itemId);
           renderEnt();
         } catch (err: any) { alert(err.message); }
+        finally { entBusyStep(-1); }
       });
     });
     entTotals();
@@ -1724,7 +1740,7 @@ const posData = {
           completenessCode: v.completeness_code || "", gradeCode: v.grade_code || "", inventoryTypeId: v.inventory_type_id || "",
           // Back to draft (migration 20261004000001): copies this line already
           // put in stock, and on which stock row — Finish applies only changes.
-          stockedQty: it.stocked_qty || 0, stockedVariantId: it.stocked_variant_id || "",
+          stockedQty: it.stocked_qty || 0, stockedVariantId: it.stocked_variant_id || "", stockedOnHand: it.stocked_on_hand ?? 0,
         };
       });
       try { sessionStorage.setItem("tl-entry", JSON.stringify({ id: entryId, h: entryHuman })); } catch {}
@@ -1786,13 +1802,16 @@ const posData = {
   $("ent-delete")?.addEventListener("click", async () => {
     if (!entryId) return;
     const n = entRows.length;
+    const sold = entRows.filter((r) => soldSince(r));
+    if (sold.length) { alert(`This entry can't be deleted — copies of ${sold.length} line${sold.length === 1 ? "" : "s"} sold since it was finished:\n\n${sold.slice(0, 8).map((r) => `• ${r.title} (${soldSince(r)} sold)`).join("\n")}\n\nFix the other lines and Finish instead.`); return; }
     const inStock = entRows.reduce((s, r) => s + (r.stockedQty || 0), 0);
     if (!confirm(inStock
-      ? `Delete Entry #${entryHuman}?\n\nIt was finished before: its ${inStock} cop${inStock === 1 ? "y" : "ies"} still in stock come back OUT of stock, and the entry is removed. (Refused if some of them have sold.)`
+      ? `Delete Entry #${entryHuman}?\n\nIt was finished before: its ${inStock} cop${inStock === 1 ? "y" : "ies"} still in stock come back OUT of stock, and the entry is removed.`
       : `Delete draft Entry #${entryHuman}?\n\n${n} staged line${n === 1 ? "" : "s"} will be discarded. Nothing was added to stock, so nothing else changes.`)) return;
     try {
       const gone = entryId;
       await api({ action: "deleteEntry", entryId });
+      entRows.forEach(unstockLocal); // its stocked copies came back out
       // The server discarded the draft's unused hidden listings / stock rows.
       items = items.filter((p: any) => p.pendingEntryId !== gone);
       items.forEach((p: any) => { if (p.pendingVariants) p.pendingVariants = p.pendingVariants.filter((v: any) => v.pendingEntryId !== gone); });
@@ -1848,7 +1867,8 @@ const posData = {
   $("ent-bulk-rm")?.addEventListener("click", async () => {
     const todo = entRows.filter((r) => entSel.has(r.itemId));
     const inStock = todo.reduce((s, r) => s + (r.stockedQty || 0), 0);
-    if (!todo.length || !confirm(`Remove ${todo.length} line${todo.length === 1 ? "" : "s"} from this draft? ${inStock ? `(${inStock} cop${inStock === 1 ? "y is" : "ies are"} already in stock from before — they come back OUT of stock.)` : "(Nothing is in stock yet, so nothing else changes.)"}`)) return;
+    const sold = todo.filter((r) => soldSince(r)).length;
+    if (!todo.length || !confirm(`Remove ${todo.length} line${todo.length === 1 ? "" : "s"} from this draft? ${inStock ? `(${inStock} cop${inStock === 1 ? "y is" : "ies are"} already in stock from before — they come back OUT of stock.${sold ? ` ${sold} line${sold === 1 ? "" : "s"} with copies sold since it was finished will stay.` : ""})` : "(Nothing is in stock yet, so nothing else changes.)"}`)) return;
     const btn = $("ent-bulk-rm") as HTMLButtonElement; btn.disabled = true;
     const label = btn.textContent;
     entBusyStep(1); // Finish waits — else it would add the lines still being removed
@@ -1857,7 +1877,7 @@ const posData = {
       for (let i = 0; i < todo.length; i++) {
         const r = todo[i];
         btn.textContent = `Removing ${i + 1}/${todo.length}…`;
-        try { forgetDiscarded(await api({ action: "removeEntryItem", itemId: r.itemId })); entRows = entRows.filter((x) => x.itemId !== r.itemId); }
+        try { forgetDiscarded(await api({ action: "removeEntryItem", itemId: r.itemId })); unstockLocal(r); entRows = entRows.filter((x) => x.itemId !== r.itemId); }
         catch (err: any) { errors.push(`${r.title}: ${err.message}`); }
       }
     } finally { entBusyStep(-1); btn.textContent = label; }
@@ -2264,6 +2284,9 @@ const posData = {
     if (entBusy > 0) { alert("Condition changes are still saving — wait a moment, then Finish."); return; }
     if (!entRows.length) { alert("Nothing staged — add at least one line (or delete the draft)."); return; }
     const btn = $("ent-finish") as HTMLButtonElement; btn.disabled = true; const o = btn.textContent;
+    // Reopened lines whose condition / type changed: Finish moves their copies
+    // off the old stock row (the new row is refreshed from the entry below).
+    const moved = entRows.filter((r) => r.stockedQty && r.stockedVariantId && r.stockedVariantId !== r.variantId);
     try {
       try {
         await api({ action: "commitEntry", entryId });
@@ -2305,6 +2328,7 @@ const posData = {
         };
       });
       // Reflect the now-applied quantities in the grid data.
+      moved.forEach(unstockLocal);
       (j.items || []).forEach((it: any) => {
         const lv = items.flatMap(everyVariant).find((x: any) => x.id === it.variant?.id);
         if (lv && it.variant) lv.quantity = it.variant.quantity;

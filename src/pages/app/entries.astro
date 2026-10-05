@@ -165,18 +165,21 @@ const pageData = {
       const isDraft = e.status === "open";
       // Finished entries: managers may put them back to a draft to fix them.
       const canReopen = !isDraft && data.isManager;
-      // A draft that was finished before: its copies are still in stock.
-      const inStock = (j.items || []).reduce((s: number, x: any) => s + (x.stocked_qty || 0), 0);
+      // A draft that was finished before: its copies are still in stock (minus
+      // any that sold since it was finished).
+      const inStock = (j.items || []).reduce((s: number, x: any) => s + Math.min(x.stocked_qty || 0, x.stocked_on_hand ?? 0), 0);
+      const soldSince = (j.items || []).reduce((s: number, x: any) => s + Math.max(0, (x.stocked_qty || 0) - (x.stocked_on_hand ?? 0)), 0);
+      const reopened = (j.items || []).some((x: any) => (x.stocked_qty || 0) > 0);
       detail.innerHTML = `
         <p class="muted" style="margin:0 0 0.6rem;font-size:0.84rem;">${when(e.created_at)} · ${esc(e.employee?.full_name ?? "—")} · ${esc(e.source)}${e.supplier ? ` · from <strong>${esc(e.supplier)}</strong>` : ""}${e.received_on ? ` · received <strong>${esc(new Date(e.received_on + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }))}</strong>` : ""} · <span class="pill ${isDraft ? "cyan" : "muted"}">${isDraft ? "draft" : e.status}</span></p>
-        ${isDraft ? `<p class="muted" style="margin:0 0 0.6rem;font-size:0.8rem;">${inStock
-          ? `↩ Back in draft — this entry was finished before, so its ${inStock} cop${inStock === 1 ? "y is" : "ies are"} still in stock. Finish applies only what changed; deleting the draft takes them back out.`
+        ${isDraft ? `<p class="muted" style="margin:0 0 0.6rem;font-size:0.8rem;">${reopened
+          ? `↩ Back in draft — this entry was finished before, so its ${inStock} cop${inStock === 1 ? "y is" : "ies are"} still in stock${soldSince ? ` (${soldSince} sold since)` : ""}. Finish applies only what changed; deleting the draft takes them back out.`
           : "Staged only — nothing is in stock or on the website until this draft is finished."}</p>` : ""}
         <div>${lines || `<p class="empty">No lines on this entry.</p>`}</div>
         <div style="display:flex;gap:0.5rem;margin-top:0.9rem;flex-wrap:wrap;">
           ${isDraft
             ? `<a class="btn btn-primary btn-sm" href="/inventory?entry=${e.id}">▶ Resume draft</a>
-               ${!inStock || data.isManager ? `<button id="ed-del" class="btn btn-ghost btn-sm" type="button" style="color:var(--magenta);border-color:rgba(255,73,208,.4);">🗑 Delete draft</button>` : ""}`
+               ${!reopened || data.isManager ? `<button id="ed-del" class="btn btn-ghost btn-sm" type="button" style="color:var(--magenta);border-color:rgba(255,73,208,.4);">🗑 Delete draft</button>` : ""}`
             : `<button id="ed-print" class="btn btn-primary btn-sm" type="button">🏷 Reprint labels</button>
                ${canReopen ? `<button id="ed-reopen" class="btn btn-ghost btn-sm" type="button" title="Managers only — the entry becomes a draft again so you can fix it. Its copies stay in stock; Finish applies only what changed.">↩ Back to draft</button>` : ""}`}
         </div>`;
@@ -243,8 +246,9 @@ const pageData = {
       });
       document.getElementById("ed-del")?.addEventListener("click", async () => {
         const n = (j.items || []).length;
-        if (!confirm(inStock
-          ? `Delete Entry #${e.human_id}?\n\nIt was finished before: its ${inStock} cop${inStock === 1 ? "y" : "ies"} still in stock come back OUT of stock, and the entry is removed. (Refused if some of them have sold.)`
+        if (soldSince) { alert(`Entry #${e.human_id} can't be deleted — ${soldSince} of its copies sold since it was finished. Resume it, fix the other lines and Finish instead.`); return; }
+        if (!confirm(reopened
+          ? `Delete Entry #${e.human_id}?\n\nIt was finished before: its ${inStock} cop${inStock === 1 ? "y" : "ies"} still in stock come back OUT of stock, and the entry is removed.`
           : `Delete draft Entry #${e.human_id}?\n\n${n} staged line${n === 1 ? "" : "s"} will be discarded. Nothing was added to stock, so nothing else changes.`)) return;
         try {
           await api({ action: "deleteEntry", entryId: e.id });
