@@ -588,6 +588,18 @@ export const POST: APIRoute = async ({ locals, request }) => {
       }
       return json({ ok: true, reversed: Number(reversed ?? 0) });
     }
+    case "reopenEntry": {
+      // A FINISHED entry back to a draft (managers, ≤24h): its stock comes back
+      // out, its lines are staged again, what it created is hidden again.
+      if (!b.entryId) return json({ error: "entryId required" }, 400);
+      if (!locals.can("inventory.manage")) return json({ error: "You don't have permission for this inventory action." }, 403);
+      const { data: lines, error } = await sb.rpc("reopen_entry", { p_entry_id: b.entryId });
+      if (error) {
+        const missing = (error as any).code === "PGRST202" || /could not find the function/i.test(error.message);
+        return json({ error: missing ? "Run migration 20261004000001_entry_reopen.sql in the Supabase SQL editor first." : error.message }, 400);
+      }
+      return json({ ok: true, lines: Number(lines ?? 0) });
+    }
     case "addSupplierLink": {
       if (!locals.can("inventory.manage")) return json({ error: "You don't have permission for this inventory action." }, 403);
       if (!b.productId || !String(b.label ?? "").trim()) return json({ error: "Product and label required" }, 400);

@@ -176,7 +176,7 @@ const pageData = {
             ? `<a class="btn btn-primary btn-sm" href="/inventory?entry=${e.id}">▶ Resume draft</a>
                <button id="ed-del" class="btn btn-ghost btn-sm" type="button" style="color:var(--magenta);border-color:rgba(255,73,208,.4);">🗑 Delete draft</button>`
             : `<button id="ed-print" class="btn btn-primary btn-sm" type="button">🏷 Reprint labels</button>
-               ${canRevert ? `<button id="ed-revert" class="btn btn-ghost btn-sm" type="button" style="color:var(--magenta);border-color:rgba(255,73,208,.4);" title="Managers only, within 24h of finishing">🗑 Delete entry (24h)</button>` : ""}`}
+               ${canRevert ? `<button id="ed-reopen" class="btn btn-ghost btn-sm" type="button" style="color:var(--magenta);border-color:rgba(255,73,208,.4);" title="Managers only, within 24h of finishing — the stock comes back out and the entry becomes a draft again (fix and Finish, or delete the draft)">↩ Back to draft (24h)</button>` : ""}`}
         </div>`;
 
       // Per-line fix-ups on committed entries: condition / completeness /
@@ -208,7 +208,20 @@ const pageData = {
         });
       }));
 
-      // Triple-gated committed-entry delete: confirm → type DELETE → confirm.
+      // Finished → draft again: stock back out, lines staged again, what it
+      // created hidden again. From the draft: fix + Finish, or Delete draft.
+      document.getElementById("ed-reopen")?.addEventListener("click", async () => {
+        const units = (j.items || []).filter((x: any) => x.kind !== "non_inventory").reduce((s: number, x: any) => s + (x.qty_added || 0), 0);
+        if (!confirm(`Put Entry #${e.human_id} back to a draft?\n\nIts ${units} unit${units === 1 ? "" : "s"} come back OUT of stock and the listings it created are hidden again. You can then fix lines and Finish again — or delete the draft.`)) return;
+        try {
+          await api({ action: "reopenEntry", entryId: e.id });
+          const row = entries.find((x) => x.id === e.id);
+          if (row) { row.status = "open"; row.committed_at = null; }
+          renderList();
+          openEntry(e.id);
+        } catch (err: any) { alert(err.message); }
+      });
+      // (Legacy) triple-gated committed-entry delete — no longer offered in the UI.
       document.getElementById("ed-revert")?.addEventListener("click", async () => {
         // Only stock lines move back out; non-inventory lines were never in stock.
         const units = (j.items || []).filter((x: any) => x.kind !== "non_inventory").reduce((s: number, x: any) => s + (x.qty_added || 0), 0);
