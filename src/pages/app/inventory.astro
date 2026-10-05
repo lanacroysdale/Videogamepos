@@ -156,11 +156,18 @@ const posData = {
 
 <AppLayout title="Inventory" active="inventory">
   <div slot="actions" style="display:flex;gap:0.5rem;">
-    {isManager && <button id="ebay-bulk" class="btn btn-ghost btn-sm" title="Import your eBay store listings as draft products (skips ones already imported)">🛒 Import eBay store</button>}
-    {isManager && <button id="ebay-sync" class="btn btn-ghost btn-sm" title="Check eBay for ended / out-of-stock listings and zero them on the website (never raises local stock)">🔁 Sync eBay stock</button>}
-    {isManager && <button id="resync-img" class="btn btn-ghost btn-sm" title="Fetch covers for items with no image (only fills empties)">🔄 Resync images</button>}
-    {isManager && <button id="fix-titles" class="btn btn-ghost btn-sm" title="Suggest official game titles (from the game database) for listings with typos — you approve each one">✎ Fix titles</button>}
-    {isManager && !upcProbeErr && <button id="fill-upcs" class="btn btn-ghost btn-sm" title="Look up UPCs on eBay's product catalog for games that don't have one (attaches only sure matches)">🏷 Fill missing UPCs</button>}
+    {isManager && (
+      <div class="inv-menu" id="inv-menu">
+        <button id="inv-menu-btn" class="btn btn-ghost btn-sm" type="button" aria-haspopup="true" aria-expanded="false" title="Bulk tools: eBay import/sync, covers, titles, UPCs">🛠 Inventory updates ▾</button>
+        <div class="inv-menu-pop" id="inv-menu-pop" role="menu" hidden>
+          <button id="ebay-bulk" class="btn btn-ghost btn-sm" role="menuitem" title="Import your eBay store listings as draft products (skips ones already imported)">🛒 Import eBay store</button>
+          <button id="ebay-sync" class="btn btn-ghost btn-sm" role="menuitem" title="Check eBay for ended / out-of-stock listings and zero them on the website (never raises local stock)">🔁 Sync eBay stock</button>
+          <button id="resync-img" class="btn btn-ghost btn-sm" role="menuitem" title="Fetch covers for items with no image (only fills empties)">🔄 Resync images</button>
+          <button id="fix-titles" class="btn btn-ghost btn-sm" role="menuitem" title="Suggest official game titles (from the game database) for listings with typos — you approve each one">✎ Fix titles</button>
+          {!upcProbeErr && <button id="fill-upcs" class="btn btn-ghost btn-sm" role="menuitem" title="Look up UPCs on eBay's product catalog for games that don't have one (attaches only sure matches)">🏷 Fill missing UPCs</button>}
+        </div>
+      </div>
+    )}
     <button id="phone-scan-btn" class="btn btn-ghost btn-sm" title="Pair your phone as a wireless scanner">📱 Phone</button>
     <a href="/entries" class="btn btn-ghost btn-sm" title="Past receiving entries + label reprints">📥 Entries</a>
     <button id="inv-import" class="btn btn-ghost btn-sm" title="Import a collection .csv (PriceCharting export or any Title / Platform / Condition sheet) as staged lines on an entry">📄 Import CSV</button>
@@ -351,6 +358,10 @@ const posData = {
      override it (the inventory list showed under an open entry, and the bulk
      bar sat at the bottom even with nothing selected). */
   [hidden] { display:none !important; }
+  /* 🛠 Inventory updates — the bulk tools tucked into one menu. */
+  .inv-menu { position:relative; }
+  .inv-menu-pop { position:absolute; right:0; top:calc(100% + 4px); z-index:60; display:flex; flex-direction:column; gap:0.3rem; min-width:15rem; padding:0.5rem; background:var(--panel); border:1px solid var(--border-strong); box-shadow:0 8px 28px rgba(0,0,0,.45); }
+  .inv-menu-pop .btn { justify-content:flex-start; text-align:left; width:100%; }
   .inv-shell { display:flex; flex-direction:column; }
   .inv-toolbar { display:flex; flex-wrap:wrap; gap:0.6rem; align-items:center; }
   .inv-toolbar .search { flex:1; min-width:200px; }
@@ -572,7 +583,7 @@ const posData = {
   import { openPrintDialog } from "../../lib/labelPrint";
   import { initScanReceiver, openPairDialog } from "../../lib/scanReceive";
   import { barcodeEq } from "../../lib/gtin";
-  import { openImportDialog } from "../../lib/importDialog";
+  import { openImportDialog, importPrice } from "../../lib/importDialog";
   import { newListingKey, officialTitleFor, itemKind, norm as normImport } from "../../lib/collectionImport";
   import { upcEligible } from "../../lib/upcMatch";
   import { upcLike, identifyUpc } from "../../lib/upcClient";
@@ -2116,7 +2127,7 @@ const posData = {
       mode: "entry", catalog: importCatalog(), completeness, grades, platforms: PLATFORMS, categories, invTypes,
       onImport: async (rows, ch, progress) => {
         const condText = (r: any) => [completeness.find((c) => c.code === r.row.completenessCode)?.label, grades.find((g) => g.code === r.row.gradeCode)?.label].filter(Boolean).join(" ") || "Used";
-        const priceOf = (r: any) => (r.row.priceCents == null ? 0 : Math.round(r.row.priceCents * ch.pricePct / 100));
+        const priceOf = (r: any) => (r.row.priceCents == null ? 0 : importPrice(r.row.priceCents, ch));
         const newProducts: any[] = [];
         // A brand-new game with several conditions in the sheet (Loose + CIB)
         // is ONE listing: the first row creates it (ref), the rest become new
@@ -2313,6 +2324,15 @@ const posData = {
   })();
 
   /* ---------- Add product ---------- */
+  // 🛠 Inventory updates menu: opens on click, closes on outside click / Esc.
+  // It stays open while a tool runs so its progress stays visible.
+  {
+    const btn = document.getElementById("inv-menu-btn"), pop = document.getElementById("inv-menu-pop"), menu = document.getElementById("inv-menu");
+    const setOpen = (on: boolean) => { if (!pop || !btn) return; pop.hidden = !on; btn.setAttribute("aria-expanded", String(on)); };
+    btn?.addEventListener("click", (e) => { e.stopPropagation(); setOpen(!!pop?.hidden); });
+    document.addEventListener("click", (e) => { if (menu && pop && !pop.hidden && !menu.contains(e.target as Node)) setOpen(false); });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") setOpen(false); });
+  }
   $("toggle-add").addEventListener("click", () => {
     const panel = $("add-panel") as HTMLElement;
     if (panel.hidden) clearProductFields(); // opening for a new product

@@ -20,6 +20,8 @@ export interface ImportChoices {
   gradeCode: string;
   completenessCode: string;
   pricePct: number;
+  /** New prices round UP to whole dollars ($19.37 → $20). */
+  roundUp: boolean;
   /** The imported file's name. */
   fileName?: string;
   /** name|size|lastModified — with each row's contents, forms its import key. */
@@ -89,6 +91,13 @@ const CSS = `
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m] as string));
 const money = (c: number) => (c / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
 
+/** A NEW listing/condition's price from the sheet: × the percentage, then
+ *  (when on) rounded UP to whole dollars — $19.37 → $20, $20.00 stays. */
+export function importPrice(sheetCents: number, ch: { pricePct: number; roundUp?: boolean }): number {
+  const c = Math.round(sheetCents * ch.pricePct / 100);
+  return ch.roundUp && c > 0 ? Math.ceil(c / 100) * 100 : c;
+}
+
 export function openImportDialog(o: ImportDialogOpts) {
   if (!document.getElementById("tli-css")) {
     const st = document.createElement("style"); st.id = "tli-css"; st.textContent = CSS; document.head.appendChild(st);
@@ -135,6 +144,7 @@ export function openImportDialog(o: ImportDialogOpts) {
     gradeCode: o.grades.find((g) => g.code === "3")?.code || o.grades[0]?.code || "",
     completenessCode: "",
     pricePct: 100,
+    roundUp: (() => { try { return localStorage.getItem("tl-import-roundup") !== "0"; } catch { return true; } })(),
   };
   // Existing stock rows only count when they're the chosen inventory type
   // (entry mode) — a Personal Collection copy gets its own row, same listing.
@@ -288,7 +298,8 @@ export function openImportDialog(o: ImportDialogOpts) {
     }
     html += sel("tli-comp", "Condition when blank", o.completeness.map((c) => `<option value="${c.code}"${c.code === choices.completenessCode ? " selected" : ""}>${esc(c.label)}</option>`).join(""));
     html += sel("tli-grade", "Grade when blank", o.grades.map((g) => `<option value="${g.code}"${g.code === choices.gradeCode ? " selected" : ""}>${esc(gradeLabel(g.code))}</option>`).join(""));
-    if (o.mode === "entry") html += `<label>Price = sheet value ×<input id="tli-pct" type="number" min="1" max="500" step="1" value="${choices.pricePct}" style="width:5.5rem;" /></label>`;
+    if (o.mode === "entry") html += `<label>Price = sheet value ×<input id="tli-pct" type="number" min="1" max="500" step="1" value="${choices.pricePct}" style="width:5.5rem;" /></label>`
+      + `<label class="chk" style="text-transform:none;letter-spacing:0;font-weight:600;" title="$19.37 → $20 — whole dollars, no change"><input type="checkbox" id="tli-round" ${choices.roundUp ? "checked" : ""}/> Round prices up to whole dollars</label>`;
     html += `<label class="chk" style="text-transform:none;letter-spacing:0;font-weight:600;" title="New listings take the game's official name from the game database — fixes typos in the sheet. The sheet's own title stays searchable."><input type="checkbox" id="tli-official" ${useOfficial ? "checked" : ""}/> Use official game titles</label>`;
     $("tli-def").innerHTML = html + `<span class="tli-note">Existing listings keep their own price; these only shape <em>new</em> ones.${o.mode === "entry" && o.invTypes?.length ? " A copy of a different inventory type gets its own stock row on the same listing." : ""}</span>`;
     overlay.querySelector<HTMLSelectElement>("#tli-folder")?.addEventListener("change", (e) => { const v = (e.target as HTMLSelectElement).value; folderSel = v === "*" ? null : v; rebuild(); });
@@ -298,6 +309,11 @@ export function openImportDialog(o: ImportDialogOpts) {
     $<HTMLSelectElement>("tli-comp").addEventListener("change", (e) => { choices.completenessCode = (e.target as HTMLSelectElement).value; rebuild(); });
     $<HTMLSelectElement>("tli-grade").addEventListener("change", (e) => { choices.gradeCode = (e.target as HTMLSelectElement).value; rebuild(); });
     overlay.querySelector<HTMLInputElement>("#tli-pct")?.addEventListener("change", (e) => { choices.pricePct = Math.max(1, Math.min(500, Math.round(+(e.target as HTMLInputElement).value) || 100)); renderTable(); });
+    overlay.querySelector<HTMLInputElement>("#tli-round")?.addEventListener("change", (e) => {
+      choices.roundUp = (e.target as HTMLInputElement).checked;
+      try { localStorage.setItem("tl-import-roundup", choices.roundUp ? "1" : "0"); } catch { /* private mode */ }
+      renderTable();
+    });
   }
 
   function renderPlatformFilter(counts: Map<string, number>, total: number) {
@@ -385,7 +401,8 @@ export function openImportDialog(o: ImportDialogOpts) {
 
   // Entry imports: a lot ("Bulk …") defaults to non-inventory — money recorded, no stock.
   const defaultNonInv = (row: ImportRow) => o.mode === "entry" && row.lot;
-  const newPrice = (r: ResolvedRow) => r.row.priceCents == null ? null : Math.round(r.row.priceCents * choices.pricePct / 100);
+  // Rounding is an entry option (the checkbox only shows there); trade-in values stay exact.
+  const newPrice = (r: ResolvedRow) => r.row.priceCents == null ? null : importPrice(r.row.priceCents, o.mode === "entry" ? choices : { ...choices, roundUp: false });
 
   // A brand-new game's 2nd+ condition (Loose after CIB) lands on the SAME new
   // listing as its first row — the caller groups them the same way.
