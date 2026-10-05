@@ -43,7 +43,17 @@ export const POST: APIRoute = async ({ locals, request }) => {
     return json({ error: `Past the ${RETURN_WINDOW_DAYS}-day return window — a manager must approve this return.` }, 403);
   }
 
-  const rgReady = await regionColReady(admin);
+  // Each refunded line takes the ORIGINAL sale line's region (read here, not
+  // trusted from the screen); a line that had none (bar / service / custom)
+  // gets none.
+  const lineRegion = new Map<string, string>();
+  if (await regionColReady(admin)) {
+    const ids = (b.items ?? []).map((it: any) => String(it.lineId ?? "")).filter(Boolean);
+    if (ids.length) {
+      const { data: lines } = await admin.from("transaction_items").select("id, region").eq("transaction_id", orig.id).in("id", ids);
+      for (const l of lines ?? []) if (l.region) lineRegion.set(l.id, l.region);
+    }
+  }
   const items = (b.items ?? []).map((it: any) => ({
     description: String(it.description ?? "Returned item").slice(0, 200),
     category_id: it.categoryId || null,
@@ -51,7 +61,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
     qty: 1,
     unit_price_cents: Math.max(0, Math.round(Number(it.amountCents)) || 0),
     discount_cents: 0,
-    ...(rgReady && /^[A-Z0-9]{1,8}$/.test(String(it.region ?? "")) ? { region: String(it.region) } : {}),
+    ...(lineRegion.has(String(it.lineId ?? "")) ? { region: lineRegion.get(String(it.lineId)) } : {}),
   }));
   if (!items.length) return json({ error: "Select at least one item to return" }, 400);
   const refund = items.reduce((s: number, it: any) => s + it.unit_price_cents, 0);

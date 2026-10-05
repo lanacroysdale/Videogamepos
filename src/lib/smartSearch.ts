@@ -322,7 +322,9 @@ export function matchScore(p: MatchableProduct, parsed: ParsedQuery): number {
   if (parsed.regionCode && own && own !== parsed.regionCode) {
     // …unless the "region" words are part of this listing's NAME ("Medal of
     // Honor: European Assault", "Japanese Rail Sim") — then they're title.
-    return nameHas(p, parsed.regionText) ? scoreTitle(p, { ...parsed, title: parsed.fullTitle, regionCode: "" }) : 0;
+    // The rest of the query must match too — "okami japanese" must not pull
+    // in "My Japanese Coach" on the region word alone.
+    return nameHas(p, parsed.regionText) && scoreTitle(p, parsed) > 0 ? scoreTitle(p, { ...parsed, title: parsed.fullTitle, regionCode: "" }) : 0;
   }
   const s = scoreTitle(p, parsed);
   return !parsed.regionCode && own && own !== parsed.defaultRegion ? s * 0.98 : s;

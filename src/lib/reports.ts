@@ -247,9 +247,9 @@ export function lineRegionOf(it: Item, regions: Region[]): string | null {
   if (it.menu_item_id) return null;
   const tagged = splitTitleRegion(it.description ?? "", regions).code;
   if (tagged) return tagged;
-  // An untagged stocked sale, refund or trade-in is the home region's — so a
-  // region's scope nets its own refunds and buys, and the regions add up to
-  // the unscoped totals. (Refunds now carry the sale line's region; this is
-  // for older lines.)
-  return it.variant_id || it.kind === "return" || it.kind === "trade_in" ? defaultRegionCode(regions) : null;
+  // An untagged stocked sale or trade-in (always a game / item bought in) is
+  // the home region's. Refunds carry the refunded sale line's region (stamped
+  // at return time); an untagged refund — a bar / service line, or one made
+  // before regions — has none, like the sale it reversed.
+  return it.variant_id || it.kind === "trade_in" ? defaultRegionCode(regions) : null;
 }
