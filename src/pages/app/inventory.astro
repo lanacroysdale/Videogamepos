@@ -662,9 +662,19 @@ const posData = {
     document.getElementById("sb-create")?.addEventListener("click", createFromSmart);
   }
 
+  // A new product starts clean: no price / UPC / eBay data left from the last
+  // one. Platform, category, condition and type stay (handy for a stack of
+  // games for one console).
+  function clearProductFields() {
+    for (const id of ["np-title", "np-price", "np-barcode", "np-ebay"]) { const el = document.getElementById(id) as HTMLInputElement | null; if (el) el.value = ""; }
+    const q = document.getElementById("np-qty") as HTMLInputElement | null; if (q) q.value = "1";
+    const note = document.getElementById("np-ebay-note") as HTMLElement | null; if (note) { note.hidden = true; note.innerHTML = ""; }
+    pendingEbay = null;
+  }
   function createFromSmart() {
     const parsed = state.parsed;
     if (!parsed) return;
+    clearProductFields();
     const panel = $("add-panel") as HTMLElement;
     panel.hidden = false;
     ($("np-title") as HTMLInputElement).value = parsed.titleForNew.replace(/\b\w/g, (c: string) => c.toUpperCase());
@@ -737,6 +747,7 @@ const posData = {
   function addFromUpc(id: any) {
     if (entryMode) entNewProduct("", { title: id.title, platform: id.platform });
     else {
+      clearProductFields();
       const panel = $("add-panel") as HTMLElement;
       panel.hidden = false;
       ($("np-title") as HTMLInputElement).value = id.title;
@@ -2001,6 +2012,7 @@ const posData = {
   $("ent-new")?.addEventListener("click", () => entNewProduct(entSearch.value.trim()));
   function entNewProduct(q: string, official?: { title: string; platform: string; parsed?: any }) {
     const parsed = q ? parseQuery(q) : official?.parsed ?? null;
+    clearProductFields();
     const panel = $("add-panel") as HTMLElement;
     panel.hidden = false;
     if (official) {
@@ -2301,7 +2313,11 @@ const posData = {
   })();
 
   /* ---------- Add product ---------- */
-  $("toggle-add").addEventListener("click", () => { ($("add-panel") as HTMLElement).hidden = !($("add-panel") as HTMLElement).hidden; });
+  $("toggle-add").addEventListener("click", () => {
+    const panel = $("add-panel") as HTMLElement;
+    if (panel.hidden) clearProductFields(); // opening for a new product
+    panel.hidden = !panel.hidden;
+  });
 
   // Manager-only: fetch covers for items that have no image. Additive only —
   // never overwrites or deletes (the enrich endpoint fills empty fields only).
@@ -2418,7 +2434,9 @@ const posData = {
         ($("ent-search") as HTMLInputElement).value = "";
       }
       ($("add-panel") as HTMLElement).hidden = true;
-      ($("np-title") as HTMLInputElement).value = "";
+      const ebayAfter = pendingEbay; // the eBay attach below still needs it
+      clearProductFields();
+      pendingEbay = ebayAfter;
       ($("inv-search") as HTMLInputElement).value = ""; state.q = ""; state.parsed = null; renderSmart();
       render();
       if (pendingEbay) {
