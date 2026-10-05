@@ -438,9 +438,10 @@ export const POST: APIRoute = async ({ locals, request }) => {
       // Also the INVENTORY TYPE (Retail → Personal Collection…): same move, to
       // the listing's stock row of that type. A field not sent keeps its value.
       if (!b.itemId) return json({ error: "itemId required" }, 400);
+      const stockedCol = (await hasCol("inventory_entry_items", "stocked_variant_id")) ? ", stocked_variant_id" : "";
       const { data: line } = await sb.from("inventory_entry_items")
-        .select("id, entry_id, variant_id, was_new_variant, applied, entry:inventory_entries(status)")
-        .eq("id", b.itemId).maybeSingle();
+        .select(`id, entry_id, variant_id, was_new_variant, applied${stockedCol}, entry:inventory_entries(status)`)
+        .eq("id", b.itemId).maybeSingle() as { data: any };
       if (!line) return json({ error: "Line not found." }, 404);
       if (!line.variant_id) return json({ error: "Non-inventory lines have no condition." }, 400);
       const closed = "That draft was finished — the line wasn't changed.";
@@ -461,7 +462,9 @@ export const POST: APIRoute = async ({ locals, request }) => {
         sb.from("inventory_entry_items").select("id", { count: "exact", head: true }).eq("variant_id", old.id).neq("id", line.id),
         sb.from("transaction_items").select("id", { count: "exact", head: true }).eq("variant_id", old.id),
       ]);
-      const disposable = !!line.was_new_variant && (old.quantity ?? 0) === 0 && !otherLines && !sales;
+      // Never the row a reopened entry's copies are already in (migration
+      // 20261004000001): Finish moves them out of it.
+      const disposable = !!line.was_new_variant && (old.quantity ?? 0) === 0 && !otherLines && !sales && line.stocked_variant_id !== old.id;
       let tq = sb.from("product_variants").select("id, price_cents, internal_code, barcode").eq("product_id", old.product_id).neq("id", old.id);
       tq = comp ? tq.eq("completeness_code", comp) : tq.is("completeness_code", null);
       tq = grade ? tq.eq("grade_code", grade) : tq.is("grade_code", null);
@@ -589,8 +592,8 @@ export const POST: APIRoute = async ({ locals, request }) => {
       return json({ ok: true, reversed: Number(reversed ?? 0) });
     }
     case "reopenEntry": {
-      // A FINISHED entry back to a draft (managers, ≤24h): its stock comes back
-      // out, its lines are staged again, what it created is hidden again.
+      // A FINISHED entry back to a draft (managers). Its copies stay in stock;
+      // Finish applies only what changed, Delete draft takes them back out.
       if (!b.entryId) return json({ error: "entryId required" }, 400);
       if (!locals.can("inventory.manage")) return json({ error: "You don't have permission for this inventory action." }, 403);
       const { data: lines, error } = await sb.rpc("reopen_entry", { p_entry_id: b.entryId });
@@ -620,6 +623,13 @@ export const POST: APIRoute = async ({ locals, request }) => {
     }
     case "deleteEntry": {
       if (!b.entryId) return json({ error: "entryId required" }, 400);
+      // A draft that was finished before (Back to draft) still has its copies
+      // in stock — deleting it takes them back out, like deleting a finished
+      // entry: managers only.
+      if (!locals.can("inventory.manage") && (await hasCol("inventory_entry_items", "stocked_qty"))) {
+        const { count } = await sb.from("inventory_entry_items").select("id", { count: "exact", head: true }).eq("entry_id", b.entryId).gt("stocked_qty", 0);
+        if (count) return json({ error: "This draft's copies are already in stock — only a manager can delete it (that takes them back out)." }, 403);
+      }
       // Open drafts only (RLS enforces too); lines cascade with the entry.
       const { data, error } = await sb.from("inventory_entries").delete().eq("id", b.entryId).eq("status", "open").select("id").maybeSingle();
       if (error) return json({ error: error.message }, 500);
@@ -679,10 +689,11 @@ export const POST: APIRoute = async ({ locals, request }) => {
       const supCol = supErr ? "" : ", supplier";
       const roCol = roErr ? "" : ", received_on";
       const kindCol = (await hasCol("inventory_entry_items", "kind")) ? ", kind, description" : "";
+      const stockedCols = (await hasCol("inventory_entry_items", "stocked_qty")) ? ", stocked_qty, stocked_variant_id" : "";
       const [{ data: entry }, { data: items, error }] = await Promise.all([
         sb.from("inventory_entries").select(`id, human_id, source, status, note, created_at, committed_at${otCol}${supCol}${roCol}, employee:profiles(full_name)`).eq("id", b.entryId).maybeSingle(),
         sb.from("inventory_entry_items")
-          .select(`id, qty_added, unit_cost_cents, price_cents_at_entry, was_new_variant, created_at${supCol}${kindCol}, variant:product_variants(id, sku, internal_code${lcCol}, price_cents, quantity, completeness_code, grade_code, condition, inventory_type_id, location_id, product:products(title, platform, category:categories(name)))`)
+          .select(`id, qty_added, unit_cost_cents, price_cents_at_entry, was_new_variant, created_at${supCol}${kindCol}${stockedCols}, variant:product_variants(id, sku, internal_code${lcCol}, price_cents, quantity, completeness_code, grade_code, condition, inventory_type_id, location_id, product:products(title, platform, category:categories(name)))`)
           .eq("entry_id", b.entryId).order("created_at"),
       ]);
       if (!entry) return json({ error: "Entry not found." }, 404);

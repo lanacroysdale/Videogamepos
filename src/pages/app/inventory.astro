@@ -188,7 +188,7 @@ const posData = {
           <button id="ent-finish" class="btn btn-primary btn-sm" type="button">✓ Finish — add to stock &amp; print</button>
         </div>
       </div>
-      <p class="muted" style="margin:0.4rem 0 0.9rem;font-size:0.84rem;">Nothing is added to stock or the website until you press <strong>Finish</strong>. Scan or type below to add lines; put what you <em>paid</em> in “Paid $” and the order total to see what's left to assign.</p>
+      <p id="ent-note" class="muted" style="margin:0.4rem 0 0.9rem;font-size:0.84rem;">Nothing is added to stock or the website until you press <strong>Finish</strong>. Scan or type below to add lines; put what you <em>paid</em> in “Paid $” and the order total to see what's left to assign.</p>
       <div class="ent-add">
         <div class="ti-desc-cell" style="flex:1;">
           <input id="ent-search" placeholder="Scan a barcode or type to add — e.g. mario kart 64 cib" autocomplete="off" />
@@ -1599,7 +1599,14 @@ const posData = {
       : `over by <strong>${money(-left)}</strong>`;
   }
 
+  // A finished entry put back to draft: its copies are still in stock.
+  const entReopened = () => entRows.some((r) => r.stockedQty > 0);
+  const ENT_NOTE = $("ent-note")?.innerHTML ?? "";
   function renderEnt() {
+    const note = $("ent-note");
+    if (note) note.innerHTML = entReopened()
+      ? `↩ <strong>Back in draft</strong> — this entry was finished before, so the copies marked <em>in stock</em> are still in stock (and can still be sold). Fix lines or add new ones; <strong>Finish</strong> applies only what changed. Removing a line takes its copies back out of stock.`
+      : ENT_NOTE;
     const body = $("ent-body");
     body.innerHTML = entRows.length ? entRows.map((r) => r.kind === "non_inventory" ? `
       <tr data-item="${r.itemId}" class="ent-noninv">
@@ -1614,7 +1621,7 @@ const posData = {
       </tr>` : `
       <tr data-item="${r.itemId}">
         <td class="ent-ck"><input type="checkbox" data-esel aria-label="Select line"${entSel.has(r.itemId) ? " checked" : ""} /></td>
-        <td><strong>${esc(r.title)}</strong>${r.platform ? ` <span class="ti-sug-meta">${esc(r.platform)}</span>` : ""}${r.wasNew ? ` <span class="pill cyan" style="font-size:0.66rem;">new</span>` : ""}</td>
+        <td><strong>${esc(r.title)}</strong>${r.platform ? ` <span class="ti-sug-meta">${esc(r.platform)}</span>` : ""}${r.wasNew && !r.stockedQty ? ` <span class="pill cyan" style="font-size:0.66rem;">new</span>` : ""}${r.stockedQty ? ` <span class="pill" style="font-size:0.66rem;" title="Already in stock from when this entry was finished — Finish applies only changes to this line">✓ ${r.stockedQty} in stock</span>` : ""}</td>
         <td><select data-ef="comp" title="Completeness — moves the copy to that condition's stock row">${entCompOpts(r.completenessCode)}</select></td>
         <td><select data-ef="grade" title="Grade (stars)">${gradeOpts(r.gradeCode)}</select></td>
         ${invTypes.length ? `<td><select data-ef="type" title="Inventory type — moves the copy to that type's stock row on the same listing">${typeOpts(r.inventoryTypeId || retailTypeId)}</select></td>` : ""}
@@ -1674,6 +1681,7 @@ const posData = {
         await loadEntry(entryId); renderEnt();
       });
       tr.querySelector("[data-erm]")!.addEventListener("click", async () => {
+        if (r.stockedQty && !confirm(`Remove ${r.title}?\n\nIts ${r.stockedQty} cop${r.stockedQty === 1 ? "y is" : "ies are"} already in stock from when this entry was finished — they come back OUT of stock.`)) return;
         try {
           forgetDiscarded(await api({ action: "removeEntryItem", itemId: r.itemId }));
           entRows = entRows.filter((x) => x.itemId !== r.itemId);
@@ -1714,6 +1722,9 @@ const posData = {
           title: pr.title ?? "?", platform: pr.platform || pr.category?.name || "",
           cond: condLabel({ completenessCode: v.completeness_code, gradeCode: v.grade_code, condition: v.condition }),
           completenessCode: v.completeness_code || "", gradeCode: v.grade_code || "", inventoryTypeId: v.inventory_type_id || "",
+          // Back to draft (migration 20261004000001): copies this line already
+          // put in stock, and on which stock row — Finish applies only changes.
+          stockedQty: it.stocked_qty || 0, stockedVariantId: it.stocked_variant_id || "",
         };
       });
       try { sessionStorage.setItem("tl-entry", JSON.stringify({ id: entryId, h: entryHuman })); } catch {}
@@ -1775,7 +1786,10 @@ const posData = {
   $("ent-delete")?.addEventListener("click", async () => {
     if (!entryId) return;
     const n = entRows.length;
-    if (!confirm(`Delete draft Entry #${entryHuman}?\n\n${n} staged line${n === 1 ? "" : "s"} will be discarded. Nothing was added to stock, so nothing else changes.`)) return;
+    const inStock = entRows.reduce((s, r) => s + (r.stockedQty || 0), 0);
+    if (!confirm(inStock
+      ? `Delete Entry #${entryHuman}?\n\nIt was finished before: its ${inStock} cop${inStock === 1 ? "y" : "ies"} still in stock come back OUT of stock, and the entry is removed. (Refused if some of them have sold.)`
+      : `Delete draft Entry #${entryHuman}?\n\n${n} staged line${n === 1 ? "" : "s"} will be discarded. Nothing was added to stock, so nothing else changes.`)) return;
     try {
       const gone = entryId;
       await api({ action: "deleteEntry", entryId });
@@ -1833,7 +1847,8 @@ const posData = {
   });
   $("ent-bulk-rm")?.addEventListener("click", async () => {
     const todo = entRows.filter((r) => entSel.has(r.itemId));
-    if (!todo.length || !confirm(`Remove ${todo.length} line${todo.length === 1 ? "" : "s"} from this draft? (Nothing is in stock yet, so nothing else changes.)`)) return;
+    const inStock = todo.reduce((s, r) => s + (r.stockedQty || 0), 0);
+    if (!todo.length || !confirm(`Remove ${todo.length} line${todo.length === 1 ? "" : "s"} from this draft? ${inStock ? `(${inStock} cop${inStock === 1 ? "y is" : "ies are"} already in stock from before — they come back OUT of stock.)` : "(Nothing is in stock yet, so nothing else changes.)"}`)) return;
     const btn = $("ent-bulk-rm") as HTMLButtonElement; btn.disabled = true;
     const label = btn.textContent;
     entBusyStep(1); // Finish waits — else it would add the lines still being removed
@@ -2262,7 +2277,9 @@ const posData = {
       }
       const j = await api({ action: "getEntry", entryId });
       // Print run: copies default to what ARRIVED (skip-duplicates by design),
-      // with the "all copies" escape hatch per line.
+      // with the "all copies" escape hatch per line. A reopened entry's copies
+      // still on the same stock row already have labels — only the extra ones.
+      const before = new Map(entRows.map((r) => [r.itemId, r]));
       const lines = (j.items || []).filter((it: any) => it.variant?.internal_code).map((it: any) => {
         const v = it.variant, pr = v.product || {};
         const loc = locations.find((l: any) => l.id === v.location_id) || locations.find((l: any) => l.is_default);
@@ -2279,7 +2296,10 @@ const posData = {
             sku: v.sku || "",
             storeName,
           },
-          defaultCopies: it.qty_added,
+          defaultCopies: (() => {
+            const was = before.get(it.id);
+            return was?.stockedQty && was.stockedVariantId === v.id ? Math.max(0, it.qty_added - was.stockedQty) : it.qty_added;
+          })(),
           allCopies: v.quantity,
           hint: v.price_cents !== it.price_cents_at_entry ? "price changed since this batch" : undefined,
         };
