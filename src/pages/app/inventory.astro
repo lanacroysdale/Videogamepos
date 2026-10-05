@@ -164,7 +164,8 @@ const posData = {
 ---
 
 <AppLayout title="Inventory" active="inventory">
-  <div slot="actions" style="display:flex;gap:0.5rem;">
+  <div slot="actions" class="inv-head-acts">
+    <div class="inv-head-l">
     {isManager && (
       <div class="inv-menu" id="inv-menu">
         <button id="inv-menu-btn" class="btn btn-ghost btn-sm" type="button" aria-haspopup="true" aria-expanded="false" title="Bulk tools: eBay import/sync, covers, titles, UPCs">🛠 Inventory updates ▾</button>
@@ -180,8 +181,12 @@ const posData = {
     <button id="phone-scan-btn" class="btn btn-ghost btn-sm" title="Pair your phone as a wireless scanner">📱 Phone</button>
     <a href="/entries" class="btn btn-ghost btn-sm" title="Past receiving entries + label reprints">📥 Entries</a>
     <button id="inv-import" class="btn btn-ghost btn-sm" title="Import a collection .csv (PriceCharting export or any Title / Platform / Condition sheet) as staged lines on an entry">📄 Import CSV</button>
-    <button id="recv-toggle" class="btn btn-ghost btn-sm" title="Start a receiving session — new products and received stock get grouped for label printing">▶ Start receiving</button>
-    <button id="toggle-add" class="btn btn-primary btn-sm">＋ Add product</button>
+    </div>
+    <!-- The two main actions, on the right: Start entry (outlined) + Add product. -->
+    <div class="inv-head-r">
+      <button id="recv-toggle" class="btn btn-primary-soft btn-sm" title="Start an inventory entry — new products and received stock get grouped for label printing">▶ Start entry</button>
+      <button id="toggle-add" class="btn btn-primary btn-sm">＋ Add product</button>
+    </div>
   </div>
 
   <div id="entry-screen" hidden>
@@ -236,7 +241,22 @@ const posData = {
   </div>
 
   <div id="add-panel" class="pos-panel" hidden style="margin-bottom:1rem;">
-    <h2>Add a product</h2>
+    <div class="np-head">
+      <h2 id="np-heading">Add a product</h2>
+      <div class="np-kind" role="group" aria-label="What are you adding?">
+        <button type="button" class="np-kind-btn on" data-kind="stock" aria-pressed="true">📦 Product</button>
+        <button type="button" class="np-kind-btn" data-kind="noninv" aria-pressed="false" title="Something you paid for that isn't sold as stock — a bulk lot, parts, supplies. Recorded on an entry for the books; no stock, no label.">🧾 Non-inventory</button>
+      </div>
+    </div>
+    <div id="np-noninv" hidden>
+      <div class="add-grid">
+        <label class="np-wide">Description<input id="ni-desc" placeholder="e.g. DS loose games, bulk grade B" maxlength="200" /></label>
+        <label>Paid $ (total)<input id="ni-total" type="number" min="0" step="0.01" placeholder="unknown" /></label>
+      </div>
+      <p class="muted" id="ni-note" style="margin:0.6rem 0 0;font-size:0.82rem;"></p>
+      <button id="ni-save" class="btn btn-primary btn-sm" style="margin-top:0.7rem;">Record non-inventory item</button>
+    </div>
+    <div id="np-stock">
     <div class="ebay-import">
       <div class="ebay-row">
         <span class="ebay-tag">🛒 eBay</span>
@@ -262,6 +282,7 @@ const posData = {
       )}
     </div>
     <button id="np-save" class="btn btn-primary btn-sm" style="margin-top:0.7rem;">Save product</button>
+    </div>
   </div>
 
   <datalist id="comp-list">{completeness?.map((c) => <option value={c.label}>{c.code}</option>)}</datalist>
@@ -274,6 +295,7 @@ const posData = {
         <input id="inv-search" type="search" placeholder="Search or add — e.g. zelda botw switch cib good" autocomplete="off" />
       </div>
       <select id="inv-cat"><option value="">All categories</option>{categories?.map((c) => <option value={c.id}>{c.name}</option>)}</select>
+      <select id="inv-plat" title="Only one platform (Nintendo Switch, 3DS…)"><option value="">All platforms</option></select>
       {rgOn && (
         <select id="inv-region" title="Only listings from one region (market)"><option value="">All regions</option>{regions.filter((r) => r.isActive).map((r) => <option value={r.code} title={r.name}>{r.flag} {r.short}</option>)}</select>
       )}
@@ -382,6 +404,22 @@ const posData = {
   .inv-menu { position:relative; }
   .inv-menu-pop { position:absolute; right:0; top:calc(100% + 4px); z-index:60; display:flex; flex-direction:column; gap:0.3rem; min-width:15rem; padding:0.5rem; background:var(--panel); border:1px solid var(--border-strong); box-shadow:0 8px 28px rgba(0,0,0,.45); }
   .inv-menu-pop .btn { justify-content:flex-start; text-align:left; width:100%; }
+  /* Header: tools on the left, the two main actions (Start entry + Add
+     product) on the right. */
+  .top-actions:has(.inv-head-acts) { flex:1; display:flex; justify-content:flex-end; }
+  .inv-head-acts { display:flex; flex:1; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:0.5rem 1rem; }
+  .inv-head-l, .inv-head-r { display:flex; flex-wrap:wrap; align-items:center; gap:0.5rem; }
+  .inv-head-r { margin-left:auto; }
+  .inv-head-l .inv-menu-pop { left:0; right:auto; }
+  /* Add panel: Product / Non-inventory switch. */
+  .np-head { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:0.6rem; margin-bottom:0.85rem; }
+  .np-head h2 { margin:0; }
+  .np-kind { display:inline-flex; border:1px solid var(--border-strong); }
+  .np-kind-btn { background:transparent; border:0; color:var(--muted); font:inherit; font-size:0.82rem; font-weight:700; padding:0.4rem 0.8rem; cursor:pointer; }
+  .np-kind-btn + .np-kind-btn { border-left:1px solid var(--border-strong); }
+  .np-kind-btn.on { background:color-mix(in srgb, var(--cyan) 16%, transparent); color:var(--cyan); }
+  .add-grid .np-wide { grid-column:span 2; }
+  @media (max-width: 600px) { .add-grid .np-wide { grid-column:auto; } }
   .inv-shell { display:flex; flex-direction:column; }
   .inv-toolbar { display:flex; flex-wrap:wrap; gap:0.6rem; align-items:center; }
   .inv-toolbar .search { flex:1; min-width:200px; }
@@ -621,7 +659,7 @@ const posData = {
   const esc = (s: any) => String(s ?? "").replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m] as string));
   const money = (c: number) => (c / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
   const toCents = (v: string) => Math.max(0, Math.round(parseFloat(v) * 100) || 0);
-  const state = { q: "", cat: "", region: "", sort: "title", instock: false, web: false, ebay: false, attention: false, needsupc: false, parsed: null as any };
+  const state = { q: "", cat: "", plat: "", region: "", sort: "title", instock: false, web: false, ebay: false, attention: false, needsupc: false, parsed: null as any };
   const selected = new Set<string>(); // product ids selected for bulk edit
 
   // Regions (migration 20261005000001): a listing's market is a tag shown as a
@@ -661,7 +699,32 @@ const posData = {
 
   // Typeable completeness field: resolve free text ("cib", "complete", "open
   // box") to a canonical code held in dataset.code, and show its short badge.
+  // A typeable box with a suggestion list (<datalist>) only suggests what
+  // matches its current text — with "Complete In Box" in it, nothing else
+  // shows. Clicking / tabbing in clears it (the old value stays as the grey
+  // placeholder) so the WHOLE list shows; leaving without touching it puts
+  // the old value back. Deleting it on purpose keeps it empty.
+  function fullListOnOpen(input: HTMLInputElement) {
+    const ph = input.placeholder;
+    let held: string | null = null, touched = false;
+    const open = () => {
+      if (!input.value) return;
+      held = input.value; touched = false;
+      input.placeholder = held;
+      input.value = "";
+    };
+    input.addEventListener("pointerdown", open);
+    input.addEventListener("focus", open);
+    input.addEventListener("input", (e) => { if (e.isTrusted) touched = true; });
+    input.addEventListener("blur", () => {
+      if (held === null) return;
+      if (!touched && !input.value) { input.value = held; input.dispatchEvent(new Event("input")); }
+      input.placeholder = ph;
+      held = null;
+    });
+  }
   function wireComp(input: HTMLInputElement, badge?: HTMLElement | null) {
+    fullListOnOpen(input); // first, so its blur restores before the label tidy below
     const sync = () => {
       const code = resolveComp(input.value, completeness);
       input.dataset.code = code;
@@ -720,17 +783,56 @@ const posData = {
   // one. Platform, region, category, condition and type stay (handy for a
   // stack of games for one console).
   function clearProductFields() {
-    for (const id of ["np-title", "np-price", "np-barcode", "np-ebay"]) { const el = document.getElementById(id) as HTMLInputElement | null; if (el) el.value = ""; }
+    for (const id of ["np-title", "np-price", "np-barcode", "np-ebay", "ni-desc", "ni-total"]) { const el = document.getElementById(id) as HTMLInputElement | null; if (el) el.value = ""; }
     const q = document.getElementById("np-qty") as HTMLInputElement | null; if (q) q.value = "1";
     const note = document.getElementById("np-ebay-note") as HTMLElement | null; if (note) { note.hidden = true; note.innerHTML = ""; }
     pendingEbay = null;
   }
+  // The Add panel: open = the "＋ Add product" button turns into "✕ Cancel".
+  // Closing with something typed asks first (also when Start entry closes it).
+  function setAddOpen(open: boolean) {
+    ($("add-panel") as HTMLElement).hidden = !open;
+    const b = $("toggle-add");
+    b.textContent = open ? "✕ Cancel" : "＋ Add product";
+    b.classList.toggle("btn-primary", !open);
+    b.classList.toggle("btn-ghost", open);
+    b.title = open ? "Close without saving" : "";
+  }
+  const addDirty = () => ["np-title", "np-barcode", "np-ebay", "ni-desc", "ni-total"].some((id) => ((document.getElementById(id) as HTMLInputElement | null)?.value ?? "").trim() !== "")
+    || (parseFloat((document.getElementById("np-price") as HTMLInputElement | null)?.value || "0") || 0) > 0;
+  function closeAddPanel(): boolean {
+    if (($("add-panel") as HTMLElement).hidden) return true;
+    const kind = npKind === "noninv" ? "non-inventory item" : "product";
+    if (addDirty() && !confirm(`Discard this ${kind}? What you've typed will be cleared.`)) return false;
+    clearProductFields();
+    setNpKind("stock");
+    setAddOpen(false);
+    return true;
+  }
+  // Product (stock) or Non-inventory (a bulk lot / supplies: what was paid,
+  // no stock, no label).
+  let npKind: "stock" | "noninv" = "stock";
+  function setNpKind(k: "stock" | "noninv") {
+    npKind = k;
+    ($("np-stock") as HTMLElement).hidden = k !== "stock";
+    ($("np-noninv") as HTMLElement).hidden = k !== "noninv";
+    document.querySelectorAll<HTMLElement>(".np-kind-btn").forEach((b) => { const on = b.dataset.kind === k; b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); });
+    $("np-heading").textContent = k === "stock" ? "Add a product" : "Add a non-inventory item";
+    $("ni-note").textContent = entryMode && entryId
+      ? `Goes on this entry (#${entryHuman}) — counted in what you paid, no stock or label.`
+      : "Recorded right away as its own finished entry (see 📥 Entries) — counted in what you paid, no stock or label.";
+  }
+  document.querySelectorAll<HTMLElement>(".np-kind-btn").forEach((b) => b.addEventListener("click", () => {
+    setNpKind(b.dataset.kind === "noninv" ? "noninv" : "stock");
+    (document.getElementById(npKind === "noninv" ? "ni-desc" : "np-title") as HTMLInputElement | null)?.focus();
+  }));
   function createFromSmart() {
     const parsed = state.parsed;
     if (!parsed) return;
     clearProductFields();
+    setNpKind("stock");
     const panel = $("add-panel") as HTMLElement;
-    panel.hidden = false;
+    setAddOpen(true);
     ($("np-title") as HTMLInputElement).value = parsed.titleForNew.replace(/\b\w/g, (c: string) => c.toUpperCase());
     ($("np-platform") as HTMLInputElement).value = parsed.platform || "";
     setNpRegion(parsed.regionCode);
@@ -804,8 +906,9 @@ const posData = {
     if (entryMode) entNewProduct("", { title: id.title, platform: id.platform, region: id.region || "" });
     else {
       clearProductFields();
+      setNpKind("stock");
       const panel = $("add-panel") as HTMLElement;
-      panel.hidden = false;
+      setAddOpen(true);
       ($("np-title") as HTMLInputElement).value = id.title;
       ($("np-platform") as HTMLInputElement).value = id.platform || "";
       setNpRegion(id.region); // eBay's catalog is the US one: "" = home
@@ -920,6 +1023,7 @@ const posData = {
     }
     let list = liveItems().filter((p) => {
       if (state.cat && p.categoryId !== state.cat) return false;
+      if (state.plat && platKey(p) !== (state.plat === NO_PLAT ? "" : state.plat)) return false;
       if (state.region && regionOf(p.regionCode, regions) !== state.region) return false;
       if (state.instock && totalQty(p) <= 0) return false;
       if (state.web && !anyWeb(p)) return false;
@@ -942,7 +1046,29 @@ const posData = {
     return list;
   }
 
+  // Platform filter: one entry per platform, spellings merged ("Game Boy
+  // Advance" / "Nintendo Game Boy Advance"), with counts. Rebuilt only when
+  // the set changes (a new product, an import), keeping the pick.
+  const NO_PLAT = "__none__";
+  const platKey = (p: any) => { const raw = String(p.platform || "").trim(); return resolveStaticPlatform(raw) ?? raw; };
+  let platSig = "";
+  function renderPlatformFilter() {
+    const sel = document.getElementById("inv-plat") as HTMLSelectElement | null;
+    if (!sel) return;
+    const counts = new Map<string, number>();
+    for (const p of liveItems()) { const k = platKey(p); counts.set(k, (counts.get(k) || 0) + 1); }
+    const keys = [...counts.keys()].sort((a, b) => (a === "" ? 1 : b === "" ? -1 : a.localeCompare(b)));
+    const sig = keys.map((k) => `${k}:${counts.get(k)}`).join("|");
+    if (sig === platSig) return;
+    platSig = sig;
+    if (state.plat && !counts.has(state.plat === NO_PLAT ? "" : state.plat)) state.plat = "";
+    sel.innerHTML = `<option value="">All platforms</option>` + keys.map((k) => {
+      const v = k || NO_PLAT;
+      return `<option value="${esc(v)}"${v === state.plat ? " selected" : ""}>${esc(k || "(no platform)")} (${counts.get(k)})</option>`;
+    }).join("");
+  }
   function render() {
+    renderPlatformFilter();
     const list = visible();
     $("inv-count").textContent = `${list.length} product${list.length === 1 ? "" : "s"}`;
     $("inv-list").innerHTML = list.length ? list.map(cardHtml).join("") : `<p class="empty">No products match.</p>`;
@@ -1563,6 +1689,7 @@ const posData = {
     render();
   });
   $("inv-cat").addEventListener("change", (e) => { state.cat = (e.target as HTMLSelectElement).value; render(); });
+  document.getElementById("inv-plat")?.addEventListener("change", (e) => { state.plat = (e.target as HTMLSelectElement).value; render(); });
   document.getElementById("inv-region")?.addEventListener("change", (e) => { state.region = (e.target as HTMLSelectElement).value; render(); });
   $("inv-sort").addEventListener("change", (e) => { state.sort = (e.target as HTMLSelectElement).value; render(); });
   document.querySelectorAll<HTMLElement>(".chip.filt").forEach((chip) => chip.addEventListener("click", () => {
@@ -1666,6 +1793,9 @@ const posData = {
     const t = $("recv-toggle");
     if (t) t.textContent = entryMode ? `📥 Entry #${entryHuman} (open)` : "▶ Start entry";
     if (entryMode) { $("ent-num").textContent = `#${entryHuman}`; renderEnt(); }
+    // Any other way in / out of an entry: the Add form's note must say where
+    // a non-inventory item will go NOW.
+    if (!($("add-panel") as HTMLElement).hidden && npKind === "noninv") setNpKind("noninv");
   }
   function clearEntry() {
     entryId = ""; entryHuman = 0; entRows = []; entOrderTotal = null; entSel.clear();
@@ -1862,6 +1992,7 @@ const posData = {
   }
 
   $("recv-toggle")?.addEventListener("click", async () => {
+    if (!closeAddPanel()) return; // an open Add form goes away first (asks if something's typed)
     if (!draftsReady) { alert("Run supabase/migrations/20260801000002_entry_drafts.sql in the Supabase SQL editor first, then refresh."); return; }
     try { await ensureEntry(); setEntryMode(true); } catch (e: any) { alert(e.message); }
   });
@@ -1896,6 +2027,7 @@ const posData = {
   initScanReceiver(scanTarget);
   document.getElementById("phone-scan-btn")?.addEventListener("click", () => openPairDialog(scanTarget));
   $("ent-exit")?.addEventListener("click", () => {
+    if (!closeAddPanel()) return; // an open Add form belongs to this entry
     const h = entryHuman;
     entryId = ""; entryHuman = 0; entRows = []; entSel.clear();
     try { sessionStorage.removeItem("tl-entry"); } catch {}
@@ -1904,6 +2036,7 @@ const posData = {
   });
   $("ent-delete")?.addEventListener("click", async () => {
     if (!entryId) return;
+    if (!closeAddPanel()) return;
     const n = entRows.length;
     const sold = entRows.filter((r) => soldSince(r));
     if (sold.length) { alert(`This entry can't be deleted — copies of ${sold.length} line${sold.length === 1 ? "" : "s"} sold since it was finished:\n\n${sold.slice(0, 8).map((r) => `• ${rgTitle(r)} (${soldSince(r)} sold)`).join("\n")}\n\nFix the other lines and Finish instead.`); return; }
@@ -1993,6 +2126,8 @@ const posData = {
     if (!entryId || !inp.value) return;
     try { await api({ action: "setEntryReceivedOn", entryId, receivedOn: inp.value }); } catch (err: any) { alert(err.message); }
   });
+  const entSupplierInp = document.getElementById("ent-supplier") as HTMLInputElement | null;
+  if (entSupplierInp) fullListOnOpen(entSupplierInp);
   ($("ent-supplier") as HTMLInputElement)?.addEventListener("change", async (e) => {
     entSupplier = (e.target as HTMLInputElement).value.trim();
     renderEnt(); // refresh per-line placeholders
@@ -2154,15 +2289,37 @@ const posData = {
     const rawTotal = prompt(`What did you pay in TOTAL for “${desc}” ($)? Leave empty if unknown.`, "");
     if (rawTotal === null) return;
     const total = rawTotal.trim() === "" ? null : toCents(rawTotal.replace(/[^0-9.]/g, ""));
-    // One line at the exact total (a lot's count stays in its description) —
-    // splitting $100 over 3 would record $99.99.
-    try {
-      const j = await api({ action: "addNonInventoryLine", entryId, description: desc, qty: 1, unitCostCents: total });
-      entRows.push({ itemId: j.itemId, variantId: null, kind: "non_inventory", qty: 1, costCents: total, priceCents: 0, wasNew: false, supplier: null, title: desc, platform: "", cond: "", completenessCode: "", gradeCode: "" });
-      renderEnt();
-      toast(`🧾 Added “${desc}” (non-inventory)`);
-    } catch (e: any) { alert(e.message); }
+    try { await stageNonInventory(desc, total); } catch (e: any) { alert(e.message); }
   }
+  // One line at the exact total (a lot's count stays in its description) —
+  // splitting $100 over 3 would record $99.99.
+  async function stageNonInventory(desc: string, total: number | null) {
+    const j = await api({ action: "addNonInventoryLine", entryId, description: desc, qty: 1, unitCostCents: total });
+    entRows.push({ itemId: j.itemId, variantId: null, kind: "non_inventory", qty: 1, costCents: total, priceCents: 0, wasNew: false, supplier: null, title: desc, platform: "", cond: "", completenessCode: "", gradeCode: "" });
+    renderEnt();
+    toast(`🧾 Added “${desc}” (non-inventory)`);
+  }
+  // The Add panel's Non-inventory side: on the open entry, or — from the
+  // inventory screen — recorded right away as its own finished entry (the way
+  // a quick-added product goes straight into stock).
+  $("ni-save")?.addEventListener("click", async () => {
+    const desc = ($("ni-desc") as HTMLInputElement).value.trim();
+    if (!desc) { alert("Describe the item (e.g. “DS bulk loose games, grade B”)."); ($("ni-desc") as HTMLInputElement).focus(); return; }
+    const raw = ($("ni-total") as HTMLInputElement).value.trim();
+    const total = raw === "" ? null : toCents(raw.replace(/[^0-9.]/g, ""));
+    const btn = $("ni-save") as HTMLButtonElement; btn.disabled = true;
+    try {
+      if (entryMode && entryId) await stageNonInventory(desc, total);
+      else {
+        const j = await api({ action: "quickNonInventory", description: desc, totalCents: total, receivedOn: localDate() });
+        toast(`🧾 Recorded “${desc}” on Entry #${j.humanId}`);
+      }
+      clearProductFields();
+      setNpKind("stock");
+      setAddOpen(false);
+    } catch (e: any) { alert(e.message); }
+    finally { btn.disabled = false; }
+  });
   $("ent-noninv")?.addEventListener("click", () => entAddNonInventory(entSearch.value.trim()));
   entSearch?.addEventListener("input", entSuggest);
   entSearch?.addEventListener("blur", () => setTimeout(() => { ($("ent-suggest") as HTMLElement).hidden = true; }, 150));
@@ -2170,8 +2327,9 @@ const posData = {
   function entNewProduct(q: string, official?: { title: string; platform: string; parsed?: any; region?: string }) {
     const parsed = q ? parseQuery(q) : official?.parsed ?? null;
     clearProductFields();
+    setNpKind("stock");
     const panel = $("add-panel") as HTMLElement;
-    panel.hidden = false;
+    setAddOpen(true);
     if (official) {
       // Picked from the game database (or a scanned UPC): its official name +
       // our platform name, in the region the query named (else the home one).
@@ -2273,6 +2431,7 @@ const posData = {
     toast(`🎮 Covers added for ${added} of ${list.length} new listing${list.length === 1 ? "" : "s"}`);
   }
   async function openCollectionImport() {
+    if (!closeAddPanel()) return; // the import opens a draft — the Add form can't straddle it
     if (!draftsReady) { alert("Run supabase/migrations/20260801000002_entry_drafts.sql in the Supabase SQL editor first, then refresh."); return; }
     try { await ensureEntry(); setEntryMode(true); } catch (e: any) { alert(e.message); return; }
     openImportDialog({
@@ -2402,6 +2561,7 @@ const posData = {
 
   $("ent-finish")?.addEventListener("click", async () => {
     if (!entryId) return;
+    if (!closeAddPanel()) return;
     if (entBusy > 0) { alert("Condition changes are still saving — wait a moment, then Finish."); return; }
     if (!entRows.length) { alert("Nothing staged — add at least one line (or delete the draft)."); return; }
     const btn = $("ent-finish") as HTMLButtonElement; btn.disabled = true; const o = btn.textContent;
@@ -2500,9 +2660,11 @@ const posData = {
     document.addEventListener("keydown", (e) => { if (e.key === "Escape") setOpen(false); });
   }
   $("toggle-add").addEventListener("click", () => {
-    const panel = $("add-panel") as HTMLElement;
-    if (panel.hidden) clearProductFields(); // opening for a new product
-    panel.hidden = !panel.hidden;
+    if (!($("add-panel") as HTMLElement).hidden) { closeAddPanel(); return; }
+    clearProductFields(); // opening for a new product
+    setNpKind("stock");
+    setAddOpen(true);
+    ($("np-title") as HTMLInputElement).focus();
   });
 
   // Manager-only: fetch covers for items that have no image. Additive only —
@@ -2625,7 +2787,7 @@ const posData = {
         renderEnt();
         ($("ent-search") as HTMLInputElement).value = "";
       }
-      ($("add-panel") as HTMLElement).hidden = true;
+      setAddOpen(false);
       const ebayAfter = pendingEbay; // the eBay attach below still needs it
       clearProductFields();
       pendingEbay = ebayAfter;
