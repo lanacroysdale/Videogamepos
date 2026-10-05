@@ -699,7 +699,32 @@ const posData = {
 
   // Typeable completeness field: resolve free text ("cib", "complete", "open
   // box") to a canonical code held in dataset.code, and show its short badge.
+  // A typeable box with a suggestion list (<datalist>) only suggests what
+  // matches its current text — with "Complete In Box" in it, nothing else
+  // shows. Clicking / tabbing in clears it (the old value stays as the grey
+  // placeholder) so the WHOLE list shows; leaving without touching it puts
+  // the old value back. Deleting it on purpose keeps it empty.
+  function fullListOnOpen(input: HTMLInputElement) {
+    const ph = input.placeholder;
+    let held: string | null = null, touched = false;
+    const open = () => {
+      if (!input.value) return;
+      held = input.value; touched = false;
+      input.placeholder = held;
+      input.value = "";
+    };
+    input.addEventListener("pointerdown", open);
+    input.addEventListener("focus", open);
+    input.addEventListener("input", (e) => { if (e.isTrusted) touched = true; });
+    input.addEventListener("blur", () => {
+      if (held === null) return;
+      if (!touched && !input.value) { input.value = held; input.dispatchEvent(new Event("input")); }
+      input.placeholder = ph;
+      held = null;
+    });
+  }
   function wireComp(input: HTMLInputElement, badge?: HTMLElement | null) {
+    fullListOnOpen(input); // first, so its blur restores before the label tidy below
     const sync = () => {
       const code = resolveComp(input.value, completeness);
       input.dataset.code = code;
@@ -2096,6 +2121,8 @@ const posData = {
     if (!entryId || !inp.value) return;
     try { await api({ action: "setEntryReceivedOn", entryId, receivedOn: inp.value }); } catch (err: any) { alert(err.message); }
   });
+  const entSupplierInp = document.getElementById("ent-supplier") as HTMLInputElement | null;
+  if (entSupplierInp) fullListOnOpen(entSupplierInp);
   ($("ent-supplier") as HTMLInputElement)?.addEventListener("change", async (e) => {
     entSupplier = (e.target as HTMLInputElement).value.trim();
     renderEnt(); // refresh per-line placeholders
