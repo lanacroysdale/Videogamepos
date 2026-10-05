@@ -1793,6 +1793,9 @@ const posData = {
     const t = $("recv-toggle");
     if (t) t.textContent = entryMode ? `📥 Entry #${entryHuman} (open)` : "▶ Start entry";
     if (entryMode) { $("ent-num").textContent = `#${entryHuman}`; renderEnt(); }
+    // Any other way in / out of an entry: the Add form's note must say where
+    // a non-inventory item will go NOW.
+    if (!($("add-panel") as HTMLElement).hidden && npKind === "noninv") setNpKind("noninv");
   }
   function clearEntry() {
     entryId = ""; entryHuman = 0; entRows = []; entOrderTotal = null; entSel.clear();
@@ -2024,6 +2027,7 @@ const posData = {
   initScanReceiver(scanTarget);
   document.getElementById("phone-scan-btn")?.addEventListener("click", () => openPairDialog(scanTarget));
   $("ent-exit")?.addEventListener("click", () => {
+    if (!closeAddPanel()) return; // an open Add form belongs to this entry
     const h = entryHuman;
     entryId = ""; entryHuman = 0; entRows = []; entSel.clear();
     try { sessionStorage.removeItem("tl-entry"); } catch {}
@@ -2032,6 +2036,7 @@ const posData = {
   });
   $("ent-delete")?.addEventListener("click", async () => {
     if (!entryId) return;
+    if (!closeAddPanel()) return;
     const n = entRows.length;
     const sold = entRows.filter((r) => soldSince(r));
     if (sold.length) { alert(`This entry can't be deleted — copies of ${sold.length} line${sold.length === 1 ? "" : "s"} sold since it was finished:\n\n${sold.slice(0, 8).map((r) => `• ${rgTitle(r)} (${soldSince(r)} sold)`).join("\n")}\n\nFix the other lines and Finish instead.`); return; }
@@ -2426,6 +2431,7 @@ const posData = {
     toast(`🎮 Covers added for ${added} of ${list.length} new listing${list.length === 1 ? "" : "s"}`);
   }
   async function openCollectionImport() {
+    if (!closeAddPanel()) return; // the import opens a draft — the Add form can't straddle it
     if (!draftsReady) { alert("Run supabase/migrations/20260801000002_entry_drafts.sql in the Supabase SQL editor first, then refresh."); return; }
     try { await ensureEntry(); setEntryMode(true); } catch (e: any) { alert(e.message); return; }
     openImportDialog({
@@ -2555,6 +2561,7 @@ const posData = {
 
   $("ent-finish")?.addEventListener("click", async () => {
     if (!entryId) return;
+    if (!closeAddPanel()) return;
     if (entBusy > 0) { alert("Condition changes are still saving — wait a moment, then Finish."); return; }
     if (!entRows.length) { alert("Nothing staged — add at least one line (or delete the draft)."); return; }
     const btn = $("ent-finish") as HTMLButtonElement; btn.disabled = true; const o = btn.textContent;
