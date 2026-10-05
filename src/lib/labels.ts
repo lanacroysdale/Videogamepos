@@ -495,7 +495,14 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
     y += 3.2 * fs;
   }
   if (metaBits.length) {
-    parts.push(`<text x="${colCx.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="middle" font-family="${fam}"${ls(metaSize)} font-size="${metaSize.toFixed(2)}" fill="#000">${esc(metaBits.join("  ·  "))}</text>`);
+    // The meta line shrinks to fit its column (a long platform + region +
+    // grade ran off the label); past 75% it squeezes instead of clipping.
+    // Its slot height stays metaSize, so nothing else moves.
+    const metaText = metaBits.join("  ·  ");
+    const estW = (sz: number) => [...metaText].length * sz * chW;
+    const mSize = estW(metaSize) > colW ? Math.max(metaSize * 0.75, colW / ([...metaText].length * chW)) : metaSize;
+    const squeeze = estW(mSize) > colW ? ` textLength="${(colW * 0.98).toFixed(2)}" lengthAdjust="spacingAndGlyphs"` : "";
+    parts.push(`<text x="${colCx.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="middle" font-family="${fam}"${ls(mSize)} font-size="${mSize.toFixed(2)}"${squeeze} fill="#000">${esc(metaText)}</text>`);
     y += metaSize * 1.08;
   }
   // Draw the side column stack, vertically centered on the title+meta block.
