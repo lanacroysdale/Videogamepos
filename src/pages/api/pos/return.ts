@@ -4,6 +4,10 @@ import { createSupabaseAdminClient } from "../../../lib/supabase";
 export const prerender = false;
 const json = (d: unknown, s = 200) => new Response(JSON.stringify(d), { status: s, headers: { "content-type": "application/json" } });
 const RETURN_WINDOW_DAYS = 30;
+// The sale line's region (migration 20261005000001) rides along, so a refund
+// counts against the same region in reports. Probed: before the migration the
+// column doesn't exist and PostgREST would reject it.
+const regionColReady = async (admin: any) => !(await admin.from("transaction_items").select("region").limit(1)).error;
 
 // Look up an original sale by its transaction number (admin read so any staff
 // member can process a return regardless of which cashier rang it up).
@@ -13,9 +17,10 @@ export const GET: APIRoute = async ({ locals, url }) => {
   if (!ticket) return json({ error: "Transaction number required" }, 400);
 
   const admin = createSupabaseAdminClient();
+  const rgCol = (await regionColReady(admin)) ? ", region" : "";
   const { data: tx } = await admin
     .from("transactions")
-    .select("id, human_id, completed_at, customer_id, total_cents, type, status, customer:customers(first_name,last_name), transaction_items(id, description, qty, unit_price_cents, discount_cents, category_id, kind)")
+    .select(`id, human_id, completed_at, customer_id, total_cents, type, status, customer:customers(first_name,last_name), transaction_items(id, description, qty, unit_price_cents, discount_cents, category_id, kind${rgCol})`)
     .eq("human_id", ticket)
     .maybeSingle();
   if (!tx) return json({ error: "No transaction with that number" }, 404);
@@ -38,6 +43,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
     return json({ error: `Past the ${RETURN_WINDOW_DAYS}-day return window — a manager must approve this return.` }, 403);
   }
 
+  const rgReady = await regionColReady(admin);
   const items = (b.items ?? []).map((it: any) => ({
     description: String(it.description ?? "Returned item").slice(0, 200),
     category_id: it.categoryId || null,
@@ -45,6 +51,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
     qty: 1,
     unit_price_cents: Math.max(0, Math.round(Number(it.amountCents)) || 0),
     discount_cents: 0,
+    ...(rgReady && /^[A-Z0-9]{1,8}$/.test(String(it.region ?? "")) ? { region: String(it.region) } : {}),
   }));
   if (!items.length) return json({ error: "Select at least one item to return" }, 400);
   const refund = items.reduce((s: number, it: any) => s + it.unit_price_cents, 0);

@@ -186,7 +186,9 @@ export const POST: APIRoute = async ({ locals, request }) => {
     // listings get.
     const { data: target } = await admin.from("store_regions").select("id").eq("id", b.id).maybeSingle();
     if (!target) return json({ error: "That region no longer exists — refresh the page." }, 404);
-    await admin.from("store_regions").update({ is_default: false }).eq("is_default", true);
+    // The old home region becomes an import market like the others: it shows
+    // its badge now (its "no badge" only meant "home").
+    await admin.from("store_regions").update({ is_default: false, show_badge: true }).eq("is_default", true);
     const { data: set, error } = await admin.from("store_regions").update({ is_default: true, is_active: true }).eq("id", b.id).select("id");
     if (error) return fail(error);
     if (!set || set.length === 0) return json({ error: "That region no longer exists — refresh the page." }, 404);

@@ -600,7 +600,7 @@ const posData = {
 </style>
 
 <script>
-  import { buildPlatforms, parseQuery as _parseQuery, smartMatches as _smartMatches, matchScore, resolveStaticPlatform } from "../../lib/smartSearch";
+  import { buildPlatforms, parseQuery as _parseQuery, smartMatches as _smartMatches, matchScore, resolveStaticPlatform, nameHas } from "../../lib/smartSearch";
   import { resolveComp, compAbbrev } from "../../lib/conditionDisplay";
   import { openPrintDialog } from "../../lib/labelPrint";
   import { initScanReceiver, openPairDialog } from "../../lib/scanReceive";
@@ -819,11 +819,13 @@ const posData = {
     toast(`📦 ${displayTitle(id.title, id.region, regions)} — set the condition + price, then Save`);
   }
   // The "not in inventory" row/bar for an identified UPC.
-  const catalogBadge = (pid: string) => badge(items.find((x: any) => x.id === pid)?.regionCode);
+  // The owning listing's region as the server reports it (it may be a listing
+  // this page hasn't loaded — "refresh this page").
+  const catalogBadge = (id: any) => badge(id.region || items.find((x: any) => x.id === id.inCatalog.productId)?.regionCode);
   const upcFoundHtml = (id: any) => id.inCatalog
     ? (id.pending
-      ? `📦 <strong>${esc(id.inCatalog.title)}</strong>${catalogBadge(id.inCatalog.productId)} is on an unfinished inventory entry — finish that entry to scan it`
-      : `📦 Already in inventory as <strong>${esc(id.inCatalog.title)}</strong>${catalogBadge(id.inCatalog.productId)} — refresh this page to scan it`)
+      ? `📦 <strong>${esc(id.inCatalog.title)}</strong>${catalogBadge(id)} is on an unfinished inventory entry — finish that entry to scan it`
+      : `📦 Already in inventory as <strong>${esc(id.inCatalog.title)}</strong>${catalogBadge(id)} — refresh this page to scan it`)
     : id.found
       ? `${id.cover ? `<img src="${esc(id.cover)}" alt="" style="width:30px;height:30px;object-fit:contain;vertical-align:middle;margin-right:0.4rem;">` : "📦 "}Not in inventory: <strong>${esc(id.title)}</strong>${badge(id.region)}${id.platform ? ` (${esc(id.platform)})` : ""}`
       : id.error
@@ -2032,9 +2034,9 @@ const posData = {
     }
     const parsed = parseQuery(q);
     // A typed region ("okami jp") is a filter — the US and JP copies are
-    // otherwise identical rows.
-    const pool = parsed.regionCode ? draftItems().filter((p: any) => regionOf(p.regionCode, regions) === parsed.regionCode) : draftItems();
-    const matches = smartMatches(parsed, pool).slice(0, 5);
+    // otherwise identical rows (matchScore applies it, and steps aside when
+    // the words are part of a listing's name: "European Assault").
+    const matches = smartMatches(parsed, draftItems()).slice(0, 5);
     let opts = matches.flatMap((m: any) => {
       const vs = draftVariants(m.p).sort((a: any, b: any) =>
         (b.completenessCode === parsed.completenessCode ? 1 : 0) - (a.completenessCode === parsed.completenessCode ? 1 : 0));
@@ -2087,21 +2089,23 @@ const posData = {
       // (they're above). A pick becomes a listing in the region the query
       // named, else the home one — a JP-only "Okami" must not hide the US one.
       const dbRegion = regionOf(parsed?.regionCode, regions);
+      // "Medal of Honor: European Assault": the region word is the game's NAME.
+      const rgFor = (g: any) => (parsed?.regionText && nameHas({ title: g.name }, parsed.regionText) ? regionOf("", regions) : dbRegion);
       const key = (t: string, pl: string, rg: string) => `${normTitle(t)}|${(resolveStaticPlatform(pl) ?? pl ?? "").toLowerCase()}|${rg}`;
       const have = new Set(draftItems().flatMap((p: any) => [p.title, ...(p.altNames || [])].map((t: string) => key(t, p.platform || "", regionOf(p.regionCode, regions)))));
-      games = games.filter((g) => !have.has(key(g.name, g.platform || "", dbRegion))).slice(0, 6);
+      games = games.filter((g) => !have.has(key(g.name, g.platform || "", rgFor(g)))).slice(0, 6);
       if (!games.length) return;
       box.insertAdjacentHTML("beforeend", `<div class="ti-sug-head">From the game database</div>` + games.map((g, i) => `
         <div class="ti-sug" data-db="${i}" title="Add as a new listing with its official title">
           ${g.cover ? `<img class="ti-db-cover" src="${esc(g.cover)}" alt="" loading="lazy" />` : ""}
-          <span class="ti-sug-title">${esc(g.name)}${badge(dbRegion)}</span>
+          <span class="ti-sug-title">${esc(g.name)}${badge(rgFor(g))}</span>
           <span class="ti-sug-meta">${esc(g.platform || "")} · new listing</span>
         </div>`).join(""));
       box.querySelectorAll<HTMLElement>("[data-db]").forEach((el) => el.addEventListener("mousedown", (e) => {
         e.preventDefault();
         const g = games[+el.dataset.db!];
         box.hidden = true; entSearch.value = "";
-        entNewProduct("", { title: g.name, platform: g.platform, parsed });
+        entNewProduct("", { title: g.name, platform: g.platform, parsed, region: rgFor(g) });
       }));
     }, 250);
   }

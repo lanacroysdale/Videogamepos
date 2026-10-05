@@ -29,7 +29,10 @@
 --    "by region" survive later edits), like inventory_type.
 --
 -- Apply in the Supabase SQL editor AFTER the app update is live (the app works
--- before and after). Safe to re-run.
+-- before and after). Safe to re-run: a re-run applies the table / field /
+-- guard only — the region GUESSES in step 3 (b)–(d) run once, so they never
+-- undo a region you corrected by hand. To review regions again, run just the
+-- last SELECT.
 -- ============================================================================
 
 -- ---- 1. the list ------------------------------------------------------------
@@ -173,14 +176,20 @@ update public.products p
      where m is not null
   ) x
  where p.id = x.id and x.code is not null and x.rest <> ''
-   and p.region_code = (select code from public.store_regions where is_default);
+   and p.region_code = (select code from public.store_regions where is_default)
+   and exists (select 1 from information_schema.columns   -- first run only
+                where table_schema = 'public' and table_name = 'products'
+                  and column_name = 'region_code' and is_nullable = 'YES');
 
 -- (c) Systems sold only in Japan, or under their Japanese names.
 update public.products
    set region_code = (select code from public.store_regions where code = 'JP')
  where region_code = (select code from public.store_regions where is_default)
    and exists (select 1 from public.store_regions where code = 'JP')
-   and public.region_norm(platform) ~ '(^| )(super famicom|famicom|famicom disk system|sfc|pc engine|pc engine cd|pc engine duo|pc fx|satellaview|wonderswan|wonderswan color|wonderswan crystal)( |$)';
+   and public.region_norm(platform) ~ '(^| )(super famicom|famicom|famicom disk system|sfc|pc engine|pc engine cd|pc engine duo|pc fx|satellaview|wonderswan|wonderswan color|wonderswan crystal)( |$)'
+   and exists (select 1 from information_schema.columns   -- first run only
+                where table_schema = 'public' and table_name = 'products'
+                  and column_name = 'region_code' and is_nullable = 'YES');
 
 -- (d) A Japanese JAN (13 digits, 45/49 prefix) on the listing or any copy.
 update public.products p
@@ -192,13 +201,24 @@ update public.products p
      or exists (select 1 from public.product_variants v where v.product_id = p.id and v.barcode ~ '^4[59][0-9]{11}$')
      or exists (select 1 from public.product_barcodes b join public.product_variants v on v.id = b.variant_id
                  where v.product_id = p.id and b.barcode ~ '^4[59][0-9]{11}$')
-   );
+   )
+   and exists (select 1 from information_schema.columns   -- first run only
+                where table_schema = 'public' and table_name = 'products'
+                  and column_name = 'region_code' and is_nullable = 'YES');
 
 -- (e) The field is required from here on (the guard fills the default).
 alter table public.products alter column region_code set not null;
 
 -- ---- 4. sale snapshot ---------------------------------------------------------
 alter table public.transaction_items add column if not exists region text;
+-- Past sales: their listing's region (as set above), so "by region" reports
+-- include them. Only lines still unstamped.
+update public.transaction_items ti
+   set region = p.region_code
+  from public.product_variants v
+  join public.products p on p.id = v.product_id
+ where ti.variant_id = v.id
+   and ti.region is null;
 
 -- ---- check: every listing that is NOT the default region now ---------------
 select p.title, p.platform, p.region_code, p.slug

@@ -159,8 +159,9 @@ export function regionFromPlatform(platform: string | null | undefined, regions?
 }
 
 // Alias words that are also ordinary title words ("Among Us", "American
-// Truck Simulator", "Chinese Checkers") — never peeled out of a search.
-const NOT_PEELED = new Set(["us", "usa", "u s", "american", "north american", "canada", "china", "chinese", "korea", "korean", "australia", "australian", "asian", "hk"]);
+// Truck Simulator", "Chinese Checkers", "European Assault") — never peeled
+// out of a search.
+const NOT_PEELED = new Set(["us", "usa", "u s", "american", "north american", "canada", "china", "chinese", "korea", "korean", "australia", "australian", "asian", "hk", "european"]);
 /** Peel a region the user TYPED out of a search ("mario kart pal" →
  *  { rest: "mario kart", code: "PAL" }). Whole words only, longest alias
  *  first; never empties the query; the home region and everyday words
@@ -186,18 +187,20 @@ export function peelRegion(query: string, regions?: Region[] | null): { rest: st
 /** eBay's "Region Code" aspect ("NTSC-J (Japan)", "PAL", "NTSC-U/C (US/Canada)",
  *  "Region Free") → a code, else "". Region Free is not a market. */
 export function regionFromEbayAspect(values: string[] | string | null | undefined, regions?: Region[] | null): string {
-  const list = Array.isArray(values) ? values : values ? [values] : [];
-  for (const v of list) {
+  const list = (Array.isArray(values) ? values : values ? [values] : []).flatMap((v) => String(v).split(/[,;|]+/));
+  // Several markets at once ("NTSC-U/C (US/Canada), PAL") = a region-free
+  // release, not an import: unknown.
+  const found = new Set(list.map((v) => one(v)).filter(Boolean));
+  return found.size === 1 ? [...found][0] : "";
+  function one(v: string): string {
     const n = regionNorm(v);
-    if (!n || /region free/.test(n)) continue;
+    if (!n || /region free/.test(n)) return "";
     if (/ntsc j|japan/.test(n)) return regionFromText("japan", regions);
     if (/\bpal\b|europe|\buk\b|australia/.test(n)) return regionFromText("pal", regions);
     if (/ntsc c|china|hong kong|korea|asia/.test(n)) return regionFromText("asia", regions);
     if (/ntsc u|\bus\b|usa|canada|north america/.test(n)) return regionFromText("us", regions);
-    const whole = regionFromText(v, regions);
-    if (whole) return whole;
+    return regionFromText(v, regions);
   }
-  return "";
 }
 
 /** Sort key: the region's place in the list (default first). */

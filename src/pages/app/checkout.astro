@@ -336,9 +336,13 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
     if (!activeCat && !q && !rg) return []; // keep the full catalog hidden until needed
     return catalog.filter((v) => {
       if (activeCat && v.categoryId !== activeCat) return false;
+      const hay = `${v.title} ${v.platform} ${v.condition} ${v.sku ?? ""}`;
+      // …unless those words are part of this item's NAME ("Medal of Honor:
+      // European Assault") — then the whole phrase is a plain title search.
+      if (peel?.code && (" " + regionNorm(v.title) + " ").includes(" " + peel.text + " ") && regionNorm(hay).includes(regionNorm(search)))
+        return !activeRegion || regionOf(v.regionCode, regions) === activeRegion;
       if (rg && regionOf(v.regionCode, regions) !== rg) return false;
       if (!q) return true;
-      const hay = `${v.title} ${v.platform} ${v.condition} ${v.sku ?? ""}`;
       // The peeled rest is normalized (lowercase words) — compare like with like.
       return peel?.code ? regionNorm(hay).includes(q) : hay.toLowerCase().includes(q);
     });

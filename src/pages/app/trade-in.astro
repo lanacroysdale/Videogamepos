@@ -305,7 +305,7 @@ const posData = {
         if (!rows.includes(r) || r.description.trim() !== q) return;
         if (!id.found || id.inCatalog) {
           const msg = id.inCatalog
-            ? (id.pending ? `${esc(id.inCatalog.title)} is on an unfinished inventory entry` : `Already in inventory as ${esc(id.inCatalog.title)} — refresh this page to scan it`)
+            ? (id.pending ? `${esc(displayTitle(id.inCatalog.title, id.region, regions))} is on an unfinished inventory entry` : `Already in inventory as ${esc(displayTitle(id.inCatalog.title, id.region, regions))} — refresh this page to scan it`)
             : id.error ? `Couldn't look it up: ${esc(id.evidence || "error")}` : `${esc(id.evidence || "Not found")} — type the name instead`;
           const live = $("ti-body").querySelector<HTMLElement>(`tr[data-key="${r.key}"] [data-suggest]`) || box;
           live.innerHTML = `<div class="ti-sug-head">UPC ${esc(q)}</div><div class="ti-sug"><span class="ti-sug-meta">${msg}</span></div>`;

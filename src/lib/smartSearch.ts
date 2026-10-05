@@ -6,7 +6,7 @@
 // products by title + alternative names. Reliable because the vocabulary is
 // structured config.
 
-import { peelRegion, regionFromPlatform, regionsOn, defaultRegionCode, type Region } from "./regions";
+import { peelRegion, regionFromPlatform, regionsOn, defaultRegionCode, regionNorm, type Region } from "./regions";
 
 export interface TaxoEntry {
   code: string;
@@ -34,6 +34,9 @@ export interface ParsedQuery {
   /** The store's home region ("" when regions are off) — a listing with no
    *  region code counts as this one. */
   defaultRegion: string;
+  /** The title WITH the peeled region words, for a listing whose name
+   *  contains them ("Medal of Honor: European Assault"). */
+  fullTitle: string;
 }
 export interface MatchableProduct {
   title: string;
@@ -265,7 +268,7 @@ export function parseQuery(
   let s = " " + raw.toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ") + " ";
   const rOn = regionsOn(opts.regions);
   const out: ParsedQuery = { platform: null, completenessCode: "", gradeCode: "", title: "", platformText: "", titleForNew: "",
-    regionCode: "", regionText: "", defaultRegion: rOn ? defaultRegionCode(opts.regions) : "" };
+    regionCode: "", regionText: "", defaultRegion: rOn ? defaultRegionCode(opts.regions) : "", fullTitle: "" };
   // A typed region ("pal", "japan import") comes off FIRST — whole words, never
   // the home region or everyday words — so it can't be read as part of a
   // catalog platform name or the title. It becomes a filter, not search text.
@@ -296,6 +299,7 @@ export function parseQuery(
   const titleWords = new Set(out.title.split(" "));
   const leads = !!pm && !pm.before.split(/\s+/).some((w) => w && titleWords.has(w));
   out.titleForNew = pm && leads && out.title && NAME_WITH_PLATFORM_RE.test(`${pm.alias} ${out.title}`) ? `${pm.alias} ${out.title}` : out.title;
+  out.fullTitle = out.regionText ? parseQuery(raw, { ...opts, regions: undefined }).title : out.title;
   return out;
 }
 
@@ -315,9 +319,18 @@ export function matchScore(p: MatchableProduct, parsed: ParsedQuery): number {
   // Region: a typed one filters (another region never matches); with none
   // typed, an import ranks just under the home copy of the same title.
   const own = parsed.defaultRegion ? String(p.regionCode || parsed.defaultRegion).toUpperCase() : "";
-  if (parsed.regionCode && own && own !== parsed.regionCode) return 0;
+  if (parsed.regionCode && own && own !== parsed.regionCode) {
+    // …unless the "region" words are part of this listing's NAME ("Medal of
+    // Honor: European Assault", "Japanese Rail Sim") — then they're title.
+    return nameHas(p, parsed.regionText) ? scoreTitle(p, { ...parsed, title: parsed.fullTitle, regionCode: "" }) : 0;
+  }
   const s = scoreTitle(p, parsed);
   return !parsed.regionCode && own && own !== parsed.defaultRegion ? s * 0.98 : s;
+}
+/** The listing's title / other names contain these whole words. */
+export function nameHas(p: { title: string; altNames?: string[] | null }, words: string): boolean {
+  const w = regionNorm(words);
+  return !!w && (" " + regionNorm(`${p.title} ${(p.altNames || []).join(" ")}`) + " ").includes(" " + w + " ");
 }
 function scoreTitle(p: MatchableProduct, parsed: ParsedQuery): number {
   const hay = `${p.title} ${p.platform || ""} ${p.franchise || ""} ${(p.altNames || []).join(" ")}`.toLowerCase();

@@ -1399,7 +1399,8 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     invPanel.querySelectorAll<HTMLInputElement>(".rg-default").forEach((r) => r.addEventListener("change", async () => {
       const tr = r.closest("tr") as HTMLElement;
       const prev = invPanel.querySelector<HTMLInputElement>('tr[data-default="1"] .rg-default');
-      if (!confirm(`Make ${tr.dataset.name} the default region?\n\nIt stops showing a badge and new listings get it. Existing listings keep the region they have.`)) {
+      const prevName = (prev?.closest("tr") as HTMLElement | null)?.dataset.name;
+      if (!confirm(`Make ${tr.dataset.name} the default region?\n\nIt stops showing a badge and new listings get it${prevName ? `; ${prevName} starts showing its badge` : ""}. Existing listings keep the region they have.`)) {
         r.checked = false;
         if (prev) prev.checked = true;
         return;

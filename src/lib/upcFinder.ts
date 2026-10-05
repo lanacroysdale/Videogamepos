@@ -277,7 +277,12 @@ export async function identifyUpc(admin: any, raw: string, ebay = EBAY_ID): Prom
     const tagSplit = splitTitleRegion(clean0);
     const clean = regionField ? tagSplit.title : clean0, tagRegion = tagSplit.code;
     // eBay's Region Code aspect, else a Japanese JAN (13 digits, 45/49), else the tag.
-    const region = usOrBlank(regionFromEbayAspect(aspects.get("region code") ?? []) || (/^4[59]\d{11}$/.test(upc) ? "JP" : "") || tagRegion);
+    // The region from eBay's CATALOG record (not a seller's listing), else a
+    // Japanese JAN (45/49…), else the title tag. A 12-digit UPC-A is a US /
+    // Canada code — never a Japanese release.
+    const isJan = /^4[59]\d{11}$/.test(upc);
+    let region = usOrBlank(regionFromEbayAspect(aspectMap(prod.aspectGroups).get("region code") ?? []) || (isJan ? "JP" : "") || tagRegion);
+    if (region === "JP" && !isJan && upc.length === 12) region = "";
     // Judged on eBay's own title, where "(Controller Bundle)" stays in brackets
     // — that's a game with a controller, not an accessory.
     const kind = itemKind(String(prod.title), platform);

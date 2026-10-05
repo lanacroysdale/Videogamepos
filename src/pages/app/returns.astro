@@ -89,7 +89,7 @@ const isManager = Astro.locals.can("returns.override");
     const sellItems = (current.transaction_items || []).filter((it: any) => it.kind === "sale" || it.kind === "service");
     $("ret-items").innerHTML = sellItems.map((it: any, i: number) => {
       const net = it.unit_price_cents * it.qty - it.discount_cents;
-      return `<tr data-cat="${it.category_id || ""}" data-desc="${esc(it.description)}">
+      return `<tr data-cat="${it.category_id || ""}" data-desc="${esc(it.description)}" data-region="${esc(it.region || "")}">
         <td><input type="checkbox" data-pick id="pick${i}"></td>
         <td><label for="pick${i}">${esc(it.description)}${it.qty > 1 ? ` ×${it.qty}` : ""}</label></td>
         <td class="num">${money(net)}</td>
@@ -106,7 +106,7 @@ const isManager = Astro.locals.can("returns.override");
     const items: any[] = [];
     document.querySelectorAll<HTMLElement>("#ret-items tr").forEach((tr) => {
       const cb = tr.querySelector<HTMLInputElement>("[data-pick]");
-      if (cb?.checked) items.push({ description: tr.dataset.desc, categoryId: tr.dataset.cat || null, amountCents: Math.round(parseFloat(tr.querySelector<HTMLInputElement>("[data-amt]")!.value) * 100) || 0 });
+      if (cb?.checked) items.push({ description: tr.dataset.desc, categoryId: tr.dataset.cat || null, region: tr.dataset.region || null, amountCents: Math.round(parseFloat(tr.querySelector<HTMLInputElement>("[data-amt]")!.value) * 100) || 0 });
     });
     if (!items.length) { alert("Pick at least one item to return."); return; }
     const method = (document.querySelector('input[name="rmethod"]:checked') as HTMLInputElement).value;
