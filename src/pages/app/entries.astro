@@ -2,18 +2,20 @@
 export const prerender = false;
 import AppLayout from "../../layouts/AppLayout.astro";
 import { labelTemplates } from "../../lib/labels";
+import { loadRegions } from "../../lib/regions";
 
 // Inventory ENTRIES — receiving-session history. Every receive lands on an
 // entry ("Entry #142"); this page lists them, shows what arrived (with
 // then-vs-now price flags), and REPRINTS labels for any past entry.
 const supabase = Astro.locals.supabase;
 
-const [{ data: settingsRow }, { data: invTypes }, { data: locations }, { data: completeness }, { data: grades }] = await Promise.all([
+const [{ data: settingsRow }, { data: invTypes }, { data: locations }, { data: completeness }, { data: grades }, regions] = await Promise.all([
   supabase.from("store_settings").select("store_name, settings").eq("id", 1).maybeSingle(),
   supabase.from("store_inventory_types").select("id, key, name, icon"),
   supabase.from("store_locations").select("id, key, is_default"),
   supabase.from("completeness_levels").select("code, label").eq("is_active", true),
   supabase.from("condition_grades").select("code, label, icon").eq("is_active", true),
+  loadRegions(supabase), // [] before the regions migration → no badges / label tags
 ]);
 
 let needsMigration = false;
@@ -41,6 +43,7 @@ const pageData = {
   locations: locations ?? [],
   completeness: completeness ?? [],
   grades: grades ?? [],
+  regions,
   lblTemplates: labelTemplates((settingsRow as any)?.settings),
   storeName: (settingsRow as any)?.store_name || "TimeLag",
   isManager: Astro.locals.can("inventory.manage"),
@@ -94,6 +97,7 @@ const pageData = {
 <script>
   import { openPrintDialog } from "../../lib/labelPrint";
   import { compAbbrev } from "../../lib/conditionDisplay";
+  import { regionBadgeHtml, regionTag, type Region } from "../../lib/regions";
 
   const $ = (id: string) => document.getElementById(id) as any;
   let data: any = {};
@@ -103,6 +107,9 @@ const pageData = {
   const locById = new Map((data.locations || []).map((l: any) => [l.id, l]));
   const defaultLocKey = (data.locations || []).find((l: any) => l.is_default)?.key ?? "";
   const grades: any[] = data.grades || [];
+  const regions: Region[] = data.regions || [];
+  // The listing's region badge (🇯🇵 JP) after its title; "" for the home region.
+  const rgBadge = (p: any) => { const b = regionBadgeHtml(p?.region_code ?? "", regions); return b ? " " + b : ""; };
   const esc = (s: any) => String(s ?? "").replace(/[&<>"']/g, (m: string) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m] as string));
   const money = (c: number) => "$" + ((c || 0) / 100).toFixed(2);
   const when = (iso: string) => new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
@@ -155,7 +162,7 @@ const pageData = {
         return `
           <div class="ed-line">
             <span class="ed-qty">${it.qty_added}×</span>
-            <span>${esc(p.title ?? "?")} <span class="muted-2" style="font-size:0.78rem;">${esc(condShort(v))}${it.was_new_variant ? " · new" : ""}</span>
+            <span>${esc(p.title ?? "?")}${rgBadge(p)} <span class="muted-2" style="font-size:0.78rem;">${esc(condShort(v))}${it.was_new_variant ? " · new" : ""}</span>
               ${it.supplier ? `<span class="ed-src">from ${esc(it.supplier)}</span>` : ""}
               ${changed ? `<span class="ed-changed">price ${money(it.price_cents_at_entry)} → ${money(v.price_cents)}</span>` : ""}</span>
             <span class="ed-price">${money(v.price_cents ?? 0)}</span>
@@ -245,7 +252,7 @@ const pageData = {
           const loc = locById.get(v.location_id);
           return {
             item: {
-              title: p.title ?? "?", categoryName: p.platform || p.category?.name || "", condShort: condShort(v),
+              title: p.title ?? "?", categoryName: p.platform || p.category?.name || "", region: regionTag(p.region_code ?? "", regions), condShort: condShort(v),
               priceCents: v.price_cents ?? 0,
               invTypeName: (typeById.get(v.inventory_type_id) as any)?.name ?? "",
               locationKey: (loc as any)?.key ?? defaultLocKey,

@@ -4,6 +4,7 @@ import AppLayout from "../../layouts/AppLayout.astro";
 import { fmt } from "../../lib/money";
 import { labelTemplates } from "../../lib/labels";
 import { compAbbrev } from "../../lib/conditionDisplay";
+import { loadRegions, regionsOn, regionOf, regionTag, regionBadgeHtml, regionSortKey } from "../../lib/regions";
 
 const supabase = Astro.locals.supabase;
 const [{ data: settingsRow }, { data: invTypes }, { data: locations }, { data: completeness }, { data: grades }] = await Promise.all([
@@ -18,7 +19,13 @@ const [{ data: settingsRow }, { data: invTypes }, { data: locations }, { data: c
 // early would 400 both queries and mask real pending changes behind an empty state.
 const typesReady = !!invTypes;
 const { error: lcProbeErr } = await supabase.from("product_variants").select("label_code").limit(1);
-const VARIANT_COLS = `id, condition, sku, internal_code${lcProbeErr ? "" : ", label_code"}, price_cents, quantity, completeness_code, grade_code${typesReady ? ", inventory_type_id, location_id" : ""}, product:products(title, platform, category:categories(name))`;
+// Same for products.region_code (regions migration 20261005000001): [] regions
+// before it → no badges, no Region filter, no label tag — today's page.
+const [regions, { error: rgProbeErr }] = await Promise.all([
+  loadRegions(supabase),
+  supabase.from("products").select("region_code").limit(1),
+]);
+const VARIANT_COLS = `id, condition, sku, internal_code${lcProbeErr ? "" : ", label_code"}, price_cents, quantity, completeness_code, grade_code${typesReady ? ", inventory_type_id, location_id" : ""}, product:products(title, platform${rgProbeErr ? "" : ", region_code"}, category:categories(name))`;
 const { data: pending } = await supabase
   .from("price_changes")
   .select(`id, old_cents, suggested_cents, source, created_at, variant:product_variants(${VARIANT_COLS})`)
@@ -43,9 +50,13 @@ const condShort = (v: any) => {
   const parts = [v?.completeness_code ? compAbbrev(v.completeness_code, (completeness ?? []) as any) : null, g ? (g.icon || g.label) : null].filter(Boolean);
   return parts.length ? parts.join(" · ") : (v?.condition || "—");
 };
+// A row's region: its code (default when unknown) and the badge after its title.
+const rgCode = (p: any) => regionOf(p.variant?.product?.region_code, regions);
+const rgBadge = (p: any) => { const b = regionBadgeHtml(p.variant?.product?.region_code, regions); return b ? " " + b : ""; };
 const rowInfo = (p: any) => ({
   title: p.variant?.product?.title ?? "—",
   categoryName: p.variant?.product?.platform || p.variant?.product?.category?.name || "",
+  region: regionTag(p.variant?.product?.region_code, regions),
   condShort: condShort(p.variant),
   priceCents: p.variant?.price_cents ?? 0,
   suggestedCents: p.suggested_cents,
@@ -59,6 +70,11 @@ const rowInfo = (p: any) => ({
 const lblRows: Record<string, any> = {};
 for (const p of [...(pending ?? []), ...(recent ?? [])]) lblRows[(p as any).id] = rowInfo(p);
 const platforms = [...new Set((pending ?? []).map((p: any) => p.variant?.product?.platform).filter(Boolean))].sort();
+// Region filter: the active regions the pending rows actually use (home first).
+const regionOpts = regionsOn(regions)
+  ? regions.filter((r) => r.isActive && (pending ?? []).some((p: any) => rgCode(p) === r.code))
+      .sort((a, b) => regionSortKey(a.code, regions) - regionSortKey(b.code, regions))
+  : [];
 const clientBlob = { rows: lblRows, templates: labelTemplates((settingsRow as any)?.settings), storeName: (settingsRow as any)?.store_name || "TimeLag" };
 ---
 
@@ -76,6 +92,9 @@ const clientBlob = { rows: lblRows, templates: labelTemplates((settingsRow as an
     <h2>Pending changes <span class="sub">({pending?.length ?? 0})</span></h2>
     <div style="display:flex;gap:0.6rem;align-items:center;flex-wrap:wrap;margin:0.6rem 0 0.8rem;">
       <select id="pc-platform"><option value="">All platforms</option>{platforms.map((pl: string) => <option value={pl}>{pl}</option>)}</select>
+      {regionOpts.length > 1 && (
+        <select id="pc-region" title="Filter by region"><option value="">All regions</option>{regionOpts.map((r) => <option value={r.code} title={r.name}>{`${r.flag ? r.flag + " " : ""}${r.short}`}</option>)}</select>
+      )}
       <button id="pc-print" class="btn btn-ghost btn-sm" title="Print fresh price labels for the checked rows — copies default to every shelf copy">🏷 Print labels for selected</button>
       <span class="muted" style="font-size:0.8rem;">Approve first, then print — labels use the item's new price.</span>
     </div>
@@ -87,9 +106,9 @@ const clientBlob = { rows: lblRows, templates: labelTemplates((settingsRow as an
           {pending.map((p: any) => {
             const change = pct(p.old_cents, p.suggested_cents);
             return (
-              <tr data-pc={p.id} data-platform={p.variant?.product?.platform ?? ""}>
+              <tr data-pc={p.id} data-platform={p.variant?.product?.platform ?? ""} data-region={rgCode(p)}>
                 <td><input type="checkbox" class="pc-sel" data-id={p.id} /></td>
-                <td><strong>{p.variant?.product?.title ?? "—"}</strong><span class="plat" style="display:block;color:var(--muted-2);font-size:0.8rem;">{p.variant?.product?.platform} · {p.variant?.condition}</span></td>
+                <td><strong>{p.variant?.product?.title ?? "—"}</strong><Fragment set:html={rgBadge(p)} /><span class="plat" style="display:block;color:var(--muted-2);font-size:0.8rem;">{p.variant?.product?.platform} · {p.variant?.condition}</span></td>
                 <td><span class="pill muted" style="font-size:0.7rem;">{p.source}</span></td>
                 <td class="num">{fmt(p.old_cents)}</td>
                 <td class="num"><strong>{fmt(p.suggested_cents)}</strong></td>
@@ -114,7 +133,7 @@ const clientBlob = { rows: lblRows, templates: labelTemplates((settingsRow as an
         <tbody>
           {recent.map((p: any) => (
             <tr>
-              <td>{p.variant?.product?.title ?? "—"} · {p.variant?.condition}</td>
+              <td>{p.variant?.product?.title ?? "—"}<Fragment set:html={rgBadge(p)} /> · {p.variant?.condition}</td>
               <td class="num">{fmt(p.old_cents)} → {fmt(p.suggested_cents)}</td>
               <td><span class={`pill ${p.status === "approved" ? "green" : "magenta"}`}>{p.status}</span></td>
               <td class="muted">{p.reviewed_at ? new Date(p.reviewed_at).toLocaleString() : ""}</td>
@@ -164,7 +183,7 @@ const clientBlob = { rows: lblRows, templates: labelTemplates((settingsRow as an
     const r = rows[id];
     if (!r || !(r.labelCode || r.internalCode)) return null;
     return {
-      item: { title: r.title, categoryName: r.categoryName, condShort: r.condShort, priceCents: r.priceCents, invTypeName: r.invTypeName, locationKey: r.locationKey, internalCode: r.internalCode, labelCode: r.labelCode || "", sku: r.sku, storeName: blob.storeName },
+      item: { title: r.title, categoryName: r.categoryName, region: r.region || "", condShort: r.condShort, priceCents: r.priceCents, invTypeName: r.invTypeName, locationKey: r.locationKey, internalCode: r.internalCode, labelCode: r.labelCode || "", sku: r.sku, storeName: blob.storeName },
       defaultCopies: Math.max(1, r.quantity), // a price change re-tags every shelf copy
     };
   }
@@ -193,17 +212,20 @@ const clientBlob = { rows: lblRows, templates: labelTemplates((settingsRow as an
   }
   bind();
 
-  // Select-all + platform filter + bulk print.
+  // Select-all + platform / region filters + bulk print.
   ($("pc-all") as HTMLInputElement | null)?.addEventListener("change", (e) => {
     const on = (e.target as HTMLInputElement).checked;
     document.querySelectorAll<HTMLInputElement>("#pc-body tr:not([hidden]) .pc-sel").forEach((cb) => (cb.checked = on));
   });
-  ($("pc-platform") as HTMLSelectElement | null)?.addEventListener("change", (e) => {
-    const v = (e.target as HTMLSelectElement).value;
+  const applyFilters = () => {
+    const pl = (document.getElementById("pc-platform") as HTMLSelectElement | null)?.value ?? "";
+    const rg = (document.getElementById("pc-region") as HTMLSelectElement | null)?.value ?? "";
     document.querySelectorAll<HTMLTableRowElement>("#pc-body tr").forEach((tr) => {
-      tr.hidden = !!v && tr.dataset.platform !== v;
+      tr.hidden = (!!pl && tr.dataset.platform !== pl) || (!!rg && tr.dataset.region !== rg);
     });
-  });
+  };
+  document.getElementById("pc-platform")?.addEventListener("change", applyFilters);
+  document.getElementById("pc-region")?.addEventListener("change", applyFilters);
   $("pc-print")?.addEventListener("click", () => {
     const lines = [...document.querySelectorAll<HTMLInputElement>("#pc-body tr:not([hidden]) .pc-sel:checked")]
       .map((cb) => lineFor(cb.dataset.id!))

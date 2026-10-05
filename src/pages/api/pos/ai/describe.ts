@@ -1,5 +1,6 @@
 import type { APIRoute } from "astro";
 import { aiConfigured, aiSettings, callAI } from "../../../../lib/ai";
+import { loadRegions, regionsOn, regionTag, regionByCode } from "../../../../lib/regions";
 
 export const prerender = false;
 const json = (d: unknown, s = 200) => new Response(JSON.stringify(d), { status: s, headers: { "content-type": "application/json" } });
@@ -16,12 +17,17 @@ export const POST: APIRoute = async ({ locals, request }) => {
     Title: String(b.title ?? "").trim(),
     Platform: String(b.platform ?? "").trim(),
   };
+  // The region (an import's) — the title no longer says it. What the form
+  // sent (the edit window may hold an unsaved change), else the listing's.
+  const regions = await loadRegions(sb);
+  const rgCol = regionsOn(regions) && !(await sb.from("products").select("region_code").limit(1)).error ? ", region_code" : "";
+  let regionCode = regionsOn(regions) ? String(b.regionCode ?? "") : "";
 
   // Ground on the product's real data when we have an id.
   if (b.productId) {
-    const { data: p } = await sb
+    const { data: p }: { data: any } = await sb
       .from("products")
-      .select("title, platform, franchise, genre, brand, release_year, alternative_names, category:categories(name), product_variants(condition, completeness)")
+      .select(`title, platform, franchise, genre, brand, release_year, alternative_names${rgCol}, category:categories(name), product_variants(condition, completeness)`)
       .eq("id", b.productId)
       .maybeSingle();
     if (p) {
@@ -37,8 +43,11 @@ export const POST: APIRoute = async ({ locals, request }) => {
         Condition: [v.completeness, v.condition].filter(Boolean).join(" / "),
         "Also known as": ((p as any).alternative_names ?? []).join(", "),
       });
+      if (rgCol && !b.regionCode) regionCode = (p as any).region_code ?? "";
     }
   }
+  // Only a badged region (not the home market): "Region: Japan (NTSC-J) — an import".
+  if (regionTag(regionCode, regions)) ctx.Region = `${regionByCode(regionCode, regions)!.name} — an import release`;
 
   if (!ctx.Title) return json({ error: "No product title to describe." }, 400);
 

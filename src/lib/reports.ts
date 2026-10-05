@@ -7,6 +7,7 @@
 //   - A TRADE-IN line (kind='trade_in') is money paid OUT to acquire stock.
 //   - COGS isn't snapshotted at sale time, so margin joins the variant's current
 //     cost_cents (see costUnknownUnits for honesty about coverage).
+import { defaultRegionCode, splitTitleRegion, type Region } from "./regions";
 
 export type Txn = {
   id: string;
@@ -27,6 +28,7 @@ export type Item = {
   category_id: string | null;
   department: string | null; // snapshot dept key: 'retail'|'food_bev'|'arcade'|'other'
   inventory_type: string | null; // snapshot stock-pool key: 'retail'|'online'|'personal_collection'|…
+  region?: string | null; // snapshot region code: 'US'|'PAL'|'JP'|… (absent before migration 20261005000001)
   kind: string;
   description: string;
   qty: number;
@@ -233,4 +235,17 @@ export function inventoryTypeOf(it: Item): string | null {
   if (it.inventory_type) return it.inventory_type;
   if (it.variant_id) return "retail";
   return null;
+}
+
+// The region code for a sold line: the stamped snapshot first; older lines
+// fall back to a "[PAL]"-style tag in their description (the old title tags),
+// then — for stocked lines — the home region. Menu lines and untagged
+// service/custom lines have no region (null → excluded from the by-region
+// rollup).
+export function lineRegionOf(it: Item, regions: Region[]): string | null {
+  if (it.region) return it.region;
+  if (it.menu_item_id) return null;
+  const tagged = splitTitleRegion(it.description ?? "", regions).code;
+  if (tagged) return tagged;
+  return it.variant_id ? defaultRegionCode(regions) : null;
 }

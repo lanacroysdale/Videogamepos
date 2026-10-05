@@ -18,6 +18,9 @@ export type PosCatalogRow = {
   upcs: string[];
   title: string;
   platform: string;
+  /** The listing's region code (migration 20261005000001); "" before it —
+   *  compare via regionOf(code, regions), where "" means the default. */
+  regionCode: string;
   condition: string | null;
   completeness: string | null;
   priceCents: number;
@@ -50,12 +53,16 @@ export async function loadPosCatalog(supabase: Client): Promise<PosCatalogRow[]>
   // Listing UPCs (migration 20260930000003).
   const { error: upcProbeErr } = await supabase.from("product_upcs").select("id").limit(1);
   const upcEmbed = upcProbeErr ? "" : ", product_upcs(upc)";
+  // Listing region (migration 20261005000001) — badges, the region filter and
+  // the "[JP]" in a sale line's description.
+  const { error: rgProbeErr } = await supabase.from("products").select("region_code").limit(1);
+  const rgCol = rgProbeErr ? "" : ", region_code";
 
   // Paged: a single request stops at 1,000 rows, which silently dropped the
   // cheapest items from checkout scanning once the catalog grew past that.
   const { data: variantRows } = await fetchAll((from, to) => supabase
     .from("product_variants")
-    .select(`id, product_id, condition, completeness, price_cents, quantity, sku, barcode, internal_code${hasLabelCodes ? ", label_code" : ""}${hasTypes ? ", inventory_type_id" : ""}${pend}, product_barcodes(barcode), product:products(title, platform${delProbeErr ? "" : ", deleted_at"}${pend}${upcEmbed}, category:categories(id,name,color,is_trackable))`)
+    .select(`id, product_id, condition, completeness, price_cents, quantity, sku, barcode, internal_code${hasLabelCodes ? ", label_code" : ""}${hasTypes ? ", inventory_type_id" : ""}${pend}, product_barcodes(barcode), product:products(title, platform${rgCol}${delProbeErr ? "" : ", deleted_at"}${pend}${upcEmbed}, category:categories(id,name,color,is_trackable))`)
     .order("price_cents", { ascending: false })
     .order("id")
     .range(from, to));
@@ -66,6 +73,7 @@ export async function loadPosCatalog(supabase: Client): Promise<PosCatalogRow[]>
     upcs: (v.product?.product_upcs ?? []).map((u: any) => u.upc),
     title: v.product?.title ?? "Item",
     platform: v.product?.platform ?? "",
+    regionCode: v.product?.region_code ?? "",
     condition: v.condition,
     completeness: v.completeness,
     priceCents: v.price_cents,

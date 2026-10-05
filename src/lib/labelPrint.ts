@@ -120,6 +120,12 @@ export type PrintLine = {
 
 const escH = (s: any) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
+// "Okami HD [JP]" — the same text form as displayTitle(), so a US and a JP
+// copy of one game can be told apart when choosing copies.
+const lineTitle = (it: LabelItem) => {
+  const tag = (it.region ?? "").trim();
+  return tag && !it.title.toLowerCase().endsWith(`[${tag.toLowerCase()}]`) ? `${it.title} [${tag}]` : it.title;
+};
 
 // Shared chooser dialog. Returns immediately; printing happens on user action.
 export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], opts?: { title?: string }): void {
@@ -143,7 +149,7 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
         ${lines.map((l, i) => `
           <div style="display:flex;align-items:center;gap:0.6rem;">
             <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:0.88rem;">
-              ${escH(l.item.title)} <span style="color:var(--muted-2,#888);font-size:0.78rem;">${escH(l.item.condShort)}</span>
+              ${escH(lineTitle(l.item))} <span style="color:var(--muted-2,#888);font-size:0.78rem;">${escH(l.item.condShort)}</span>
               ${l.hint ? `<span style="color:var(--magenta,#ff49d0);font-size:0.74rem;"> · ${escH(l.hint)}</span>` : ""}
             </span>
             <input data-lp-copies="${i}" type="number" min="0" value="${Math.max(0, l.defaultCopies)}" style="width:4rem;text-align:right;font:inherit;padding:0.3rem 0.4rem;background:var(--bg,#000);color:var(--text,#eee);border:1px solid var(--border-strong,#444);">

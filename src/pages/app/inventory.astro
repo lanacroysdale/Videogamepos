@@ -6,6 +6,7 @@ import { fetchAll } from "../../lib/fetchAll";
 import { labelTemplates } from "../../lib/labels";
 import { MARKETING_HOSTS } from "../../consts";
 import { createSupabaseAdminClient } from "../../lib/supabase";
+import { loadRegions, regionsOn, regionBadgeHtml } from "../../lib/regions";
 
 const supabase = Astro.locals.supabase;
 const [{ data: categories }, { data: settings }, { data: completeness }, { data: grades }] = await Promise.all([
@@ -64,11 +65,16 @@ const pendCol = pendProbeErr ? "" : ", pending_entry_id";
 // Listing UPCs + the automatic lookup's last result (migration 20260930000003).
 const { error: upcProbeErr } = await supabase.from("product_upcs").select("id").limit(1);
 const upcCols = upcProbeErr ? "" : ", upc_status, upc_checked_at, product_upcs(id, upc, source, evidence)";
+// Region tag (migration 20261005000001): before it, no column and no list →
+// every region control and badge stays hidden.
+const { error: rgProbeErr } = await supabase.from("products").select("region_code").limit(1);
+const regions = rgProbeErr ? [] : await loadRegions(supabase);
+const rgOn = regionsOn(regions);
 // Paged — one request stops at 1,000 listings (later titles silently vanished).
 const { data: products } = await fetchAll((from, to) => supabase
   .from("products")
   .select(
-    `id, title, slug, platform, franchise, genre, description, image_url, alternative_names, tags, category_id${delProbeErr ? "" : ", deleted_at"}${pendCol}${upcCols}, category:categories(name,color)${srcProbeErr ? "" : ", product_suppliers(id, label, url)"}, product_variants(id, condition, completeness, completeness_code, grade_code, sku, barcode, internal_code, price_cents, online_price_cents, cost_cents, quantity, online_visible${variantExtraCols}${pendCol}, product_barcodes(id, barcode, label))`,
+    `id, title, slug, platform, franchise, genre, description, image_url, alternative_names, tags, category_id${delProbeErr ? "" : ", deleted_at"}${pendCol}${upcCols}${rgProbeErr ? "" : ", region_code"}, category:categories(name,color)${srcProbeErr ? "" : ", product_suppliers(id, label, url)"}, product_variants(id, condition, completeness, completeness_code, grade_code, sku, barcode, internal_code, price_cents, online_price_cents, cost_cents, quantity, online_visible${variantExtraCols}${pendCol}, product_barcodes(id, barcode, label))`,
   )
   .order("title")
   .order("id")
@@ -103,6 +109,7 @@ const allRows = (products ?? []).map((p: any) => ({
   title: p.title,
   slug: p.slug ?? "",
   platform: p.platform ?? "",
+  regionCode: p.region_code ?? "", // "" = the home region (via regionOf)
   franchise: p.franchise ?? "",
   genre: p.genre ?? "",
   description: p.description ?? "",
@@ -128,7 +135,7 @@ const deletedItems = isManager
   ? allRows
       .filter((i) => i.deletedAt)
       .map((i) => ({
-        id: i.id, title: i.title, platform: i.platform,
+        id: i.id, title: i.title, platform: i.platform, regionCode: i.regionCode,
         daysLeft: Math.max(1, Math.ceil(RD_DAYS - (Date.now() - Date.parse(i.deletedAt)) / 864e5)),
       }))
       .sort((a, b) => a.daysLeft - b.daysLeft)
@@ -151,6 +158,8 @@ const posData = {
   sourcesReady: !srcProbeErr,
   receivedOnReady: !roProbeErr,
   upcReady: !upcProbeErr,
+  regions, // [] before the region migration → no region controls / badges
+  regionReady: !rgProbeErr,
 };
 ---
 
@@ -239,6 +248,9 @@ const posData = {
     <div class="add-grid">
       <label>Title<input id="np-title" placeholder="e.g. Donkey Kong 64" /></label>
       <label>Platform<input id="np-platform" placeholder="Nintendo 64" /></label>
+      {rgOn && (
+        <label title="The release's market — an import (PAL, Japan…) gets a badge everywhere">Region<select id="np-region">{regions.filter((r) => r.isActive).map((r) => <option value={r.code} selected={r.isDefault}>{r.flag} {r.name}</option>)}</select></label>
+      )}
       <label>Category<select id="np-cat">{categories?.map((c) => <option value={c.id}>{c.name}</option>)}</select></label>
       <label>Completeness<span class="comp-combo-wrap"><input id="np-comp" class="comp-combo" list="comp-list" placeholder="type CIB, complete, open box…" autocomplete="off" /><span class="comp-abbr" id="np-comp-abbr" aria-live="polite"></span></span></label>
       <label>Grade<select id="np-grade"><option value="">—</option>{grades?.map((g) => <option value={g.code}>{g.label}</option>)}</select></label>
@@ -262,10 +274,14 @@ const posData = {
         <input id="inv-search" type="search" placeholder="Search or add — e.g. zelda botw switch cib good" autocomplete="off" />
       </div>
       <select id="inv-cat"><option value="">All categories</option>{categories?.map((c) => <option value={c.id}>{c.name}</option>)}</select>
+      {rgOn && (
+        <select id="inv-region" title="Only listings from one region (market)"><option value="">All regions</option>{regions.filter((r) => r.isActive).map((r) => <option value={r.code} title={r.name}>{r.flag} {r.short}</option>)}</select>
+      )}
       <select id="inv-sort">
         <option value="title">Sort: Title</option>
         <option value="price">Sort: Price</option>
         <option value="qty">Sort: Quantity</option>
+        {rgOn && <option value="region">Sort: Region</option>}
       </select>
       <button class="chip filt" data-filt="instock">In stock</button>
       <button class="chip filt" data-filt="web">On web</button>
@@ -288,6 +304,9 @@ const posData = {
       <button id="bulk-print" class="btn btn-ghost btn-sm" type="button">🏷 Print labels</button>
       <button id="bulk-offline" class="btn btn-ghost btn-sm" type="button">Unpublish</button>
       <button id="bulk-online" class="btn btn-primary btn-sm" type="button">🌐 Publish to web</button>
+      {rgOn && (
+        <select id="bulk-region" class="bulk-region" title="Move the selected listings to another region (market)"><option value="">Set region…</option>{regions.filter((r) => r.isActive).map((r) => <option value={r.code}>{r.flag} {r.name}</option>)}</select>
+      )}
       {isManager && !delProbeErr && <button id="bulk-delete" class="btn btn-ghost btn-sm bulk-del" type="button" title="Move to Recently deleted (kept 7 days, then purged)">🗑 Delete</button>}
       <button id="bulk-clear" class="btn btn-ghost btn-sm" type="button">✕ Clear</button>
     </div>
@@ -301,6 +320,7 @@ const posData = {
         {deletedItems.map((d) => (
           <li>
             <span class="rd-title">{d.title}</span>
+            <Fragment set:html={regionBadgeHtml(d.regionCode, regions)} />
             {d.platform && <span class="muted">{d.platform}</span>}
             <span class="rd-days">{d.daysLeft} day{d.daysLeft === 1 ? "" : "s"} left</span>
             <button class="btn btn-ghost btn-sm rd-restore" data-id={d.id} type="button">↩ Restore</button>
@@ -413,6 +433,8 @@ const posData = {
   .bulk-count { font-weight:700; }
   .bulk-count strong { color:var(--cyan); font-family:var(--font-mono); }
   .bulk-actions { display:flex; flex-wrap:wrap; gap:0.5rem; }
+  .bulk-region { width:auto; padding:0.3rem 0.45rem; font-size:0.84rem; }
+  .upc-note.m-region-warn { color:var(--yellow,#ffd23f); margin-top:0.5rem; }
   .inv-warn { margin-top:0.5rem; font-size:0.76rem; color:var(--yellow,#ffd23f); font-weight:600; }
   .chip.warn-chip.active { border-color:var(--yellow,#ffd23f); color:var(--yellow,#ffd23f); }
   .inv-cover {
@@ -587,6 +609,7 @@ const posData = {
   import { newListingKey, officialTitleFor, itemKind, norm as normImport } from "../../lib/collectionImport";
   import { upcEligible } from "../../lib/upcMatch";
   import { upcLike, identifyUpc } from "../../lib/upcClient";
+  import { regionOf, regionsOn, regionByCode, isDefaultRegion, regionBadgeHtml, displayTitle, regionTag, regionSortKey, splitTitleRegion, regionFromPlatform, type Region } from "../../lib/regions";
 
   const data = JSON.parse(document.getElementById("pos-data")!.textContent!);
   let items: any[] = data.items;
@@ -598,12 +621,25 @@ const posData = {
   const esc = (s: any) => String(s ?? "").replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m] as string));
   const money = (c: number) => (c / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
   const toCents = (v: string) => Math.max(0, Math.round(parseFloat(v) * 100) || 0);
-  const state = { q: "", cat: "", sort: "title", instock: false, web: false, ebay: false, attention: false, needsupc: false, parsed: null as any };
+  const state = { q: "", cat: "", region: "", sort: "title", instock: false, web: false, ebay: false, attention: false, needsupc: false, parsed: null as any };
   const selected = new Set<string>(); // product ids selected for bulk edit
+
+  // Regions (migration 20261005000001): a listing's market is a tag shown as a
+  // badge next to its title. [] before the migration → no badges / controls.
+  const regions: Region[] = data.regions || [];
+  const rgOn = regionsOn(regions);
+  const regionReady: boolean = !!data.regionReady;
+  const badge = (code: string | null | undefined) => { const h = regionBadgeHtml(code, regions); return h ? " " + h : ""; };
+  const rgTitle = (p: any) => displayTitle(p.title, p.regionCode, regions); // "Okami HD [JP]" for plain text
+  // Same title → the home region first.
+  const byTitle = (a: any, b: any) => a.title.localeCompare(b.title) || regionSortKey(a.regionCode, regions) - regionSortKey(b.regionCode, regions);
+  // A catalog listing's region: its field, else (before the migration) the
+  // "[PAL]" tag its title still carries / a regional platform name.
+  const listingRegion = (p: any) => regionOf(p.regionCode || splitTitleRegion(p.title, regions).code || regionFromPlatform(p.platform, regions).code, regions);
 
   /* ---------- Smart find-or-create (shared module: src/lib/smartSearch.ts) ---------- */
   const PLATFORMS = buildPlatforms(items.map((p) => p.platform));
-  const parseQuery = (raw: string) => _parseQuery(raw, { completeness, grades, platforms: PLATFORMS });
+  const parseQuery = (raw: string) => _parseQuery(raw, { completeness, grades, platforms: PLATFORMS, regions });
   // A draft's not-yet-finished listings / stock rows are hidden everywhere but
   // that draft's own screen (search, scanning, import matching, Finish).
   const liveItems = () => items.filter((p: any) => !p.pendingEntryId);
@@ -659,6 +695,8 @@ const posData = {
     if (!parsed || (!parsed.title && !parsed.platform && !parsed.completenessCode && !parsed.gradeCode)) { bar.hidden = true; return; }
     const chips: string[] = [];
     if (parsed.platform) chips.push(`<span class="sb-chip">${esc(parsed.platform)}</span>`);
+    const pr = parsed.regionCode ? regionByCode(parsed.regionCode, regions) : null;
+    if (pr) chips.push(`<span class="sb-chip" title="${esc(pr.name)}">${esc(`${pr.flag ? pr.flag + " " : ""}${pr.short}`)}</span>`);
     if (parsed.completenessCode) chips.push(`<span class="sb-chip">${esc(complLabel(parsed.completenessCode))}</span>`);
     if (parsed.gradeCode) chips.push(`<span class="sb-chip">${esc(gradeLabel(parsed.gradeCode))}</span>`);
     const matches = smartMatches(parsed);
@@ -673,9 +711,14 @@ const posData = {
     document.getElementById("sb-create")?.addEventListener("click", createFromSmart);
   }
 
+  // The Add form's Region select (regions on only); "" → the home region.
+  const setNpRegion = (code: string | null | undefined) => {
+    const sel = document.getElementById("np-region") as HTMLSelectElement | null;
+    if (sel) sel.value = regionOf(code, regions);
+  };
   // A new product starts clean: no price / UPC / eBay data left from the last
-  // one. Platform, category, condition and type stay (handy for a stack of
-  // games for one console).
+  // one. Platform, region, category, condition and type stay (handy for a
+  // stack of games for one console).
   function clearProductFields() {
     for (const id of ["np-title", "np-price", "np-barcode", "np-ebay"]) { const el = document.getElementById(id) as HTMLInputElement | null; if (el) el.value = ""; }
     const q = document.getElementById("np-qty") as HTMLInputElement | null; if (q) q.value = "1";
@@ -690,6 +733,7 @@ const posData = {
     panel.hidden = false;
     ($("np-title") as HTMLInputElement).value = parsed.titleForNew.replace(/\b\w/g, (c: string) => c.toUpperCase());
     ($("np-platform") as HTMLInputElement).value = parsed.platform || "";
+    setNpRegion(parsed.regionCode);
     setComp($("np-comp") as HTMLInputElement, parsed.completenessCode || "", $("np-comp-abbr"));
     ($("np-grade") as HTMLSelectElement).value = parsed.gradeCode || "3";
     panel.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -727,6 +771,7 @@ const posData = {
     return {
       title: p.title,
       categoryName: p.platform || p.categoryName || "",
+      region: regionTag(p.regionCode, regions),
       condShort: condLabel(v),
       priceCents: v.priceCents,
       invTypeName: typeById.get(v.inventoryTypeId)?.name ?? "",
@@ -745,7 +790,7 @@ const posData = {
   // known platform with none yet — scanning its box would find nothing.
   const upcReady: boolean = !!(data as any).upcReady;
   const upcsOf = (p: any): string[] => (p.upcs || []).map((u: any) => u.upc);
-  const needsUpc = (p: any) => upcReady && !upcsOf(p).length && upcEligible({ title: p.title, platform: p.platform, categoryName: p.categoryName });
+  const needsUpc = (p: any) => upcReady && !upcsOf(p).length && upcEligible({ title: p.title, platform: p.platform, categoryName: p.categoryName, regionCode: p.regionCode });
   // A scanned UPC that isn't in inventory: ask eBay's catalog which game it is
   // (official title + box art from our game database). One lookup per code.
   // Is this code already on a listing loaded here (listing UPC or a condition's barcode)?
@@ -756,13 +801,14 @@ const posData = {
   };
   // The Add-product panel, pre-filled from an identified UPC.
   function addFromUpc(id: any) {
-    if (entryMode) entNewProduct("", { title: id.title, platform: id.platform });
+    if (entryMode) entNewProduct("", { title: id.title, platform: id.platform, region: id.region || "" });
     else {
       clearProductFields();
       const panel = $("add-panel") as HTMLElement;
       panel.hidden = false;
       ($("np-title") as HTMLInputElement).value = id.title;
       ($("np-platform") as HTMLInputElement).value = id.platform || "";
+      setNpRegion(id.region); // eBay's catalog is the US one: "" = home
       ($("np-qty") as HTMLInputElement).value = "1";
       panel.scrollIntoView({ behavior: "smooth", block: "center" });
       ($("np-price") as HTMLInputElement).focus();
@@ -770,15 +816,16 @@ const posData = {
     ($("np-barcode") as HTMLInputElement).value = id.upc; // saved as the listing's UPC too
     const cat = catForKind(id.kind || "");
     if (cat) ($("np-cat") as HTMLSelectElement).value = cat;
-    toast(`📦 ${id.title} — set the condition + price, then Save`);
+    toast(`📦 ${displayTitle(id.title, id.region, regions)} — set the condition + price, then Save`);
   }
   // The "not in inventory" row/bar for an identified UPC.
+  const catalogBadge = (pid: string) => badge(items.find((x: any) => x.id === pid)?.regionCode);
   const upcFoundHtml = (id: any) => id.inCatalog
     ? (id.pending
-      ? `📦 <strong>${esc(id.inCatalog.title)}</strong> is on an unfinished inventory entry — finish that entry to scan it`
-      : `📦 Already in inventory as <strong>${esc(id.inCatalog.title)}</strong> — refresh this page to scan it`)
+      ? `📦 <strong>${esc(id.inCatalog.title)}</strong>${catalogBadge(id.inCatalog.productId)} is on an unfinished inventory entry — finish that entry to scan it`
+      : `📦 Already in inventory as <strong>${esc(id.inCatalog.title)}</strong>${catalogBadge(id.inCatalog.productId)} — refresh this page to scan it`)
     : id.found
-      ? `${id.cover ? `<img src="${esc(id.cover)}" alt="" style="width:30px;height:30px;object-fit:contain;vertical-align:middle;margin-right:0.4rem;">` : "📦 "}Not in inventory: <strong>${esc(id.title)}</strong>${id.platform ? ` (${esc(id.platform)})` : ""}`
+      ? `${id.cover ? `<img src="${esc(id.cover)}" alt="" style="width:30px;height:30px;object-fit:contain;vertical-align:middle;margin-right:0.4rem;">` : "📦 "}Not in inventory: <strong>${esc(id.title)}</strong>${badge(id.region)}${id.platform ? ` (${esc(id.platform)})` : ""}`
       : id.error
         ? `⚠ Couldn't look up UPC ${esc(id.upc || "")}: ${esc(id.evidence || "error")}`
         : `🔎 UPC ${esc(id.upc || "")}: ${esc(id.evidence || "not found")} — type the name to add it`;
@@ -832,11 +879,11 @@ const posData = {
       : "";
     return `
       <div class="inv-card${selected.has(p.id) ? " selected" : ""}" data-p="${p.id}">
-        <input type="checkbox" class="inv-check" data-sel="${p.id}"${selected.has(p.id) ? " checked" : ""} aria-label="Select ${esc(p.title)}">
+        <input type="checkbox" class="inv-check" data-sel="${p.id}"${selected.has(p.id) ? " checked" : ""} aria-label="Select ${esc(rgTitle(p))}">
         ${cover}
         <div class="inv-main">
           <div class="inv-titlerow">
-            <span class="inv-title">${esc(p.title)}</span>
+            <span class="inv-title">${esc(p.title)}</span>${badge(p.regionCode)}
             <span class="inv-catpill" style="background:${esc(p.categoryColor)}22;color:${esc(p.categoryColor)}">${esc(p.categoryName)}</span>
             ${p.ebayId ? `<span class="inv-ebay" title="Imported from eBay">🛒 eBay</span>` : ""}
           </div>
@@ -867,10 +914,11 @@ const posData = {
         (v.internalCode && v.internalCode === Q) ||
         (v.labelCode && v.labelCode === rawQ) ||
         (v.barcodes || []).some((b: any) => barcodeEq(b.barcode, rawQ))));
-      if (codeHits.length) return codeHits.sort((a, b) => a.title.localeCompare(b.title));
+      if (codeHits.length) return codeHits.sort(byTitle);
     }
     let list = liveItems().filter((p) => {
       if (state.cat && p.categoryId !== state.cat) return false;
+      if (state.region && regionOf(p.regionCode, regions) !== state.region) return false;
       if (state.instock && totalQty(p) <= 0) return false;
       if (state.web && !anyWeb(p)) return false;
       if (state.ebay && !p.ebayId) return false;
@@ -886,7 +934,8 @@ const posData = {
       list.sort((a, b) =>
         state.sort === "price" ? maxPrice(b) - maxPrice(a)
         : state.sort === "qty" ? totalQty(b) - totalQty(a)
-        : a.title.localeCompare(b.title));
+        : state.sort === "region" ? regionSortKey(a.regionCode, regions) - regionSortKey(b.regionCode, regions) || a.title.localeCompare(b.title)
+        : byTitle(a, b));
     }
     return list;
   }
@@ -949,6 +998,32 @@ const posData = {
   $("bulk-online").addEventListener("click", () => bulkSetOnline(true));
   $("bulk-offline").addEventListener("click", () => bulkSetOnline(false));
 
+  // Bulk "Set region" (regions on only): fix many listings' market at once.
+  document.getElementById("bulk-region")?.addEventListener("change", async (e) => {
+    const sel = e.currentTarget as HTMLSelectElement;
+    const code = sel.value; sel.value = "";
+    const ids = [...selected];
+    const r = regionByCode(code, regions);
+    if (!r || !ids.length) return;
+    // eBay's UPC lookup is the US catalog: its codes name the US release.
+    const losing = code === "US" ? 0 : items.filter((p) => selected.has(p.id) && regionOf(p.regionCode, regions) !== code && (p.upcs || []).some((u: any) => u.source === "ebay")).length;
+    if (!confirm(`Set the region of ${ids.length} listing${ids.length === 1 ? "" : "s"} to ${r.flag ? r.flag + " " : ""}${r.name}?${losing ? `\n\n${losing} of them ha${losing === 1 ? "s" : "ve"} an automatic eBay UPC — that's the US release's code, so it comes off.` : ""}`)) return;
+    sel.disabled = true;
+    try {
+      const j = await api({ action: "bulkSetRegion", productIds: ids, regionCode: code });
+      const reset = new Set<string>(j.upcReset || []);
+      items.forEach((p) => {
+        if (!selected.has(p.id)) return;
+        p.regionCode = j.regionCode || code;
+        if (reset.has(p.id)) { p.upcs = (p.upcs || []).filter((u: any) => u.source !== "ebay"); p.upcStatus = ""; p.upcCheckedAt = null; }
+      });
+      selected.clear();
+      render();
+      toast(`✓ ${j.updated ?? ids.length} listing${(j.updated ?? ids.length) === 1 ? "" : "s"} → ${r.flag ? r.flag + " " : ""}${r.short}`);
+    } catch (err: any) { alert(err.message); }
+    finally { sel.disabled = false; }
+  });
+
   // Bulk delete (managers only; the button only renders for them — the API
   // enforces the role server-side too). Soft-delete: 7 days in Recently
   // deleted, restorable, then purged for good.
@@ -1004,8 +1079,12 @@ const posData = {
     const p = items.find((x) => x.id === pid);
     if (!p) return;
     modal.dataset.pid = pid;
-    $("m-heading").textContent = "Edit · " + p.title;
+    $("m-heading").innerHTML = "Edit · " + esc(p.title) + badge(p.regionCode);
     const catOpts = categories.map((c) => `<option value="${c.id}"${c.id === p.categoryId ? " selected" : ""}>${esc(c.name)}</option>`).join("");
+    // Active regions + the listing's own (even if since switched off).
+    const curRegion = regionOf(p.regionCode, regions);
+    const regionOpts = regions.filter((r) => r.isActive || r.code === curRegion)
+      .map((r) => `<option value="${esc(r.code)}"${r.code === curRegion ? " selected" : ""}>${esc(`${r.flag ? r.flag + " " : ""}${r.name}`)}</option>`).join("");
 
     const condRows = p.variants.map(condRowHtml).join("");
     const bcBlocks = p.variants.map(bcBlockHtml).join("");
@@ -1016,11 +1095,13 @@ const posData = {
         <div class="m-grid">
           <label>Title<input id="m-title" value="${esc(p.title)}"></label>
           <label>Platform<input id="m-platform" value="${esc(p.platform)}"></label>
+          ${rgOn ? `<label title="The release's market — an import (PAL, Japan…) gets a badge everywhere">Region<select id="m-region">${regionOpts}</select></label>` : ""}
           <label>Genre / set<input id="m-genre" value="${esc(p.genre)}"></label>
           <label>Franchise<input id="m-franchise" value="${esc(p.franchise)}"></label>
           <label>Category<select id="m-category">${catOpts}</select></label>
           <label class="m-span2">Image<div class="img-field"><input id="m-image" value="${esc(p.imageUrl)}" placeholder="https://… or upload →"><label class="btn btn-ghost btn-sm img-up">📷 Upload<input type="file" id="m-imgfile" accept="image/*" hidden></label></div></label>
         </div>
+        ${rgOn ? `<div id="m-region-warn" class="upc-note m-region-warn" hidden></div>` : ""}
         <div id="m-imgprev" class="img-prev"${p.imageUrl ? "" : " hidden"}>${p.imageUrl ? `<img src="${esc(p.imageUrl)}" alt="">` : ""}</div>
         <div class="m-field"><label style="display:flex;align-items:center;gap:0.5rem;justify-content:space-between;">Description (web) <button type="button" class="btn btn-ghost btn-sm" id="m-ai-desc" data-pid="${p.id}">✨ Write with AI</button></label><textarea id="m-desc" rows="3" placeholder="Shown on the website listing">${esc(p.description)}</textarea></div>
       </div>
@@ -1067,6 +1148,18 @@ const posData = {
     const ebayLink = $("m-ebaylink") as HTMLAnchorElement;
     if (p.ebayId) { ebayLink.href = `https://www.ebay.com/itm/${p.ebayId}`; ebayLink.hidden = false; } else { ebayLink.hidden = true; }
 
+    // A UPC names ONE release — moving a listing that has one to another
+    // region deserves a look before saving.
+    document.getElementById("m-region")?.addEventListener("change", (ev) => {
+      const to = (ev.currentTarget as HTMLSelectElement).value;
+      const warn = document.getElementById("m-region-warn");
+      if (!warn) return;
+      warn.hidden = !(upcsOf(p).length && regionOf(to, regions) !== regionOf(p.regionCode, regions));
+      if (warn.hidden) return;
+      // eBay's lookup is the US catalog — the server removes its codes on a move off US.
+      const ebay = (p.upcs || []).some((u: any) => u.source === "ebay");
+      warn.textContent = `⚠ This listing has UPC ${upcsOf(p).join(", ")} — a UPC belongs to one release. ${ebay && to !== "US" ? "The automatic eBay UPC is the US release's, so it comes off when you save." : "Check it's the code on this region's box."}`;
+    });
     bindBarcodes(p);
     if (upcReady) bindUpcBlock(p);
     bindReprice(p);
@@ -1104,14 +1197,14 @@ const posData = {
       const v = p.variants.find((x: any) => x.id === b.dataset.printlabel);
       if (!v) return;
       if (!v.internalCode) { alert("This condition has no label code yet — reload the page and try again."); return; }
-      openPrintDialog([{ item: labelItemOf(p, v), defaultCopies: 1, allCopies: v.quantity }], lblTemplates, { title: `Print · ${p.title}` });
+      openPrintDialog([{ item: labelItemOf(p, v), defaultCopies: 1, allCopies: v.quantity }], lblTemplates, { title: `Print · ${rgTitle(p)}` });
     }));
     // Quick stock adjust — IMMEDIATE (quantity + ledger, no draft). Batch
     // receiving with costs/labels lives in ▶ Start entry.
     document.querySelectorAll<HTMLButtonElement>("[data-recvstock]").forEach((b) => b.addEventListener("click", async () => {
       const v = p.variants.find((x: any) => x.id === b.dataset.recvstock);
       if (!v) return;
-      const qty = parseInt(prompt(`Receive how many — ${p.title} (${condLabel(v)})?`, "1") || "0");
+      const qty = parseInt(prompt(`Receive how many — ${rgTitle(p)} (${condLabel(v)})?`, "1") || "0");
       if (!qty || qty <= 0) return;
       const costRaw = prompt("Cost per unit $ (optional — what you paid):", "");
       const unitCostCents = costRaw && costRaw.trim() !== "" ? Math.round(parseFloat(costRaw) * 100) || 0 : null;
@@ -1183,7 +1276,8 @@ const posData = {
       try {
         const r = await fetch("/api/pos/ai/describe", {
           method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ productId: btn.dataset.pid, title, platform: ($("m-platform") as HTMLInputElement).value.trim() }),
+          body: JSON.stringify({ productId: btn.dataset.pid, title, platform: ($("m-platform") as HTMLInputElement).value.trim(),
+            ...(rgOn ? { regionCode: (document.getElementById("m-region") as HTMLSelectElement | null)?.value || p.regionCode } : {}) }),
         });
         const j = await r.json();
         if (!r.ok || !j.ok) throw new Error(j.error || "Failed");
@@ -1404,11 +1498,13 @@ const posData = {
     if (!get("m-title").trim()) { alert("Title is required"); return; }
     btn.disabled = true; const orig = btn.textContent; btn.textContent = "Saving…";
     try {
-      await api({
+      const regionSel = document.getElementById("m-region") as HTMLSelectElement | null;
+      const pj = await api({
         action: "updateProduct", id: pid,
         title: get("m-title").trim(), platform: get("m-platform").trim(), genre: get("m-genre").trim(),
         franchise: get("m-franchise").trim(), categoryId: get("m-category"), imageUrl: get("m-image").trim(),
         description: ($("m-desc") as HTMLTextAreaElement).value.trim(),
+        ...(regionSel ? { regionCode: regionSel.value } : {}),
       });
       Object.assign(p, {
         title: get("m-title").trim(), platform: get("m-platform").trim(), genre: get("m-genre").trim(),
@@ -1417,6 +1513,10 @@ const posData = {
         categoryName: categories.find((c) => c.id === get("m-category"))?.name ?? p.categoryName,
         categoryColor: categories.find((c) => c.id === get("m-category"))?.color ?? p.categoryColor,
       });
+      // What the server stored: a typed "[JP]" title tag becomes the region.
+      if (typeof pj.title === "string") p.title = pj.title;
+      if (typeof pj.regionCode === "string") p.regionCode = pj.regionCode;
+      if (pj.upcReset) { p.upcs = (p.upcs || []).filter((u: any) => u.source !== "ebay"); p.upcStatus = ""; p.upcCheckedAt = null; }
 
       for (const row of Array.from(document.querySelectorAll<HTMLElement>("[data-vrow]"))) {
         const vid = row.dataset.vrow!;
@@ -1459,6 +1559,7 @@ const posData = {
     render();
   });
   $("inv-cat").addEventListener("change", (e) => { state.cat = (e.target as HTMLSelectElement).value; render(); });
+  document.getElementById("inv-region")?.addEventListener("change", (e) => { state.region = (e.target as HTMLSelectElement).value; render(); });
   $("inv-sort").addEventListener("change", (e) => { state.sort = (e.target as HTMLSelectElement).value; render(); });
   document.querySelectorAll<HTMLElement>(".chip.filt").forEach((chip) => chip.addEventListener("click", () => {
     chip.classList.toggle("active");
@@ -1485,7 +1586,7 @@ const posData = {
   let entryId = "";
   let entryHuman = 0;
   let entryMode = false;
-  let entRows: any[] = []; // {itemId, variantId, title, platform, cond, completenessCode, gradeCode, qty, costCents, priceCents, wasNew, supplier}
+  let entRows: any[] = []; // {itemId, variantId, title, platform, regionCode, cond, completenessCode, gradeCode, qty, costCents, priceCents, wasNew, supplier}
   const entSel = new Set<string>(); // selected draft lines (bulk actions)
   // Condition changes in flight — Finish waits for them (a Finish landing
   // mid-change would apply the line to the row it was leaving).
@@ -1614,14 +1715,14 @@ const posData = {
       </tr>` : `
       <tr data-item="${r.itemId}">
         <td class="ent-ck"><input type="checkbox" data-esel aria-label="Select line"${entSel.has(r.itemId) ? " checked" : ""} /></td>
-        <td><strong>${esc(r.title)}</strong>${r.platform ? ` <span class="ti-sug-meta">${esc(r.platform)}</span>` : ""}${r.wasNew ? ` <span class="pill cyan" style="font-size:0.66rem;">new</span>` : ""}</td>
+        <td><strong>${esc(r.title)}</strong>${badge(r.regionCode)}${r.platform ? ` <span class="ti-sug-meta">${esc(r.platform)}</span>` : ""}${r.wasNew ? ` <span class="pill cyan" style="font-size:0.66rem;">new</span>` : ""}</td>
         <td><select data-ef="comp" title="Completeness — moves the copy to that condition's stock row">${entCompOpts(r.completenessCode)}</select></td>
         <td><select data-ef="grade" title="Grade (stars)">${gradeOpts(r.gradeCode)}</select></td>
         ${invTypes.length ? `<td><select data-ef="type" title="Inventory type — moves the copy to that type's stock row on the same listing">${typeOpts(r.inventoryTypeId || retailTypeId)}</select></td>` : ""}
         <td class="num"><input data-ef="qty" type="number" min="1" value="${r.qty}"></td>
         <td class="num"><input data-ef="cost" type="number" min="0" step="0.01" value="${r.costCents == null ? "" : (r.costCents / 100).toFixed(2)}" placeholder="—"></td>
         <td class="num"><input data-ef="price" type="number" min="0" step="0.01" value="${(r.priceCents / 100).toFixed(2)}"></td>
-        <td>${cmpLinks([r.title, r.platform].filter(Boolean).join(" "))}</td>
+        <td>${cmpLinks([r.title, r.platform, regionTag(r.regionCode, regions)].filter(Boolean).join(" "))}</td>
         <td><button class="link-btn" data-erm title="Remove line">✕</button></td>
       </tr>`).join("") : `<tr><td colspan="${invTypes.length ? 10 : 9}" class="empty" style="padding:1rem 0.4rem;">Nothing staged yet — scan or search above to add the first item.</td></tr>`;
     // Drop selections of lines that are gone; sync the header box + bulk bar.
@@ -1711,7 +1812,7 @@ const posData = {
           kind: "stock",
           itemId: it.id, variantId: v.id, qty: it.qty_added, costCents: it.unit_cost_cents,
           priceCents: v.price_cents ?? 0, wasNew: it.was_new_variant, supplier: it.supplier ?? null,
-          title: pr.title ?? "?", platform: pr.platform || pr.category?.name || "",
+          title: pr.title ?? "?", platform: pr.platform || pr.category?.name || "", regionCode: pr.region_code ?? "",
           cond: condLabel({ completenessCode: v.completeness_code, gradeCode: v.grade_code, condition: v.condition }),
           completenessCode: v.completeness_code || "", gradeCode: v.grade_code || "", inventoryTypeId: v.inventory_type_id || "",
         };
@@ -1752,7 +1853,7 @@ const posData = {
       if (upcP) {
         const vs = entryMode ? draftVariants(upcP) : upcP.variants;
         if (vs.length === 1) hit = { p: upcP, v: vs[0] };
-        else return `${upcP.title}${upcP.platform ? ` (${upcP.platform})` : ""} · ${vs.length ? `${vs.length} conditions${entryMode ? " — choose on the station" : ""}` : "no stock rows yet"}`;
+        else return `${rgTitle(upcP)}${upcP.platform ? ` (${upcP.platform})` : ""} · ${vs.length ? `${vs.length} conditions${entryMode ? " — choose on the station" : ""}` : "no stock rows yet"}`;
       }
       if (!hit) hit = flat.find(({ v }: any) => (v.barcodes || []).some((b: any) => barcodeEq(b.barcode, q)));
       if (!hit) {
@@ -1760,7 +1861,7 @@ const posData = {
         if (skuExact.length === 1) hit = skuExact[0];
       }
       if (!hit) return null;
-      return `${hit.p.title}${hit.p.platform ? ` (${hit.p.platform})` : ""} · ${condLabel(hit.v)} · ${money(hit.v.priceCents)} · ${hit.v.quantity} in stock${entryMode ? " · staged" : ""}`;
+      return `${rgTitle(hit.p)}${hit.p.platform ? ` (${hit.p.platform})` : ""} · ${condLabel(hit.v)} · ${money(hit.v.priceCents)} · ${hit.v.quantity} in stock${entryMode ? " · staged" : ""}`;
     },
   };
   initScanReceiver(scanTarget);
@@ -1822,7 +1923,7 @@ const posData = {
         btn.textContent = `Applying ${i + 1}/${todo.length}…`;
         const r = todo[i];
         try { await setLineCondition(r, comp === "__keep" ? r.completenessCode || "" : comp, grade === "__keep" ? r.gradeCode || "" : grade, type === "__keep" ? undefined : type); }
-        catch (err: any) { errors.push(`${r.title}: ${err.message}`); }
+        catch (err: any) { errors.push(`${rgTitle(r)}: ${err.message}`); }
       }
     } finally { entBusyStep(-1); }
     btn.disabled = false; btn.textContent = "Apply to selected";
@@ -1843,7 +1944,7 @@ const posData = {
         const r = todo[i];
         btn.textContent = `Removing ${i + 1}/${todo.length}…`;
         try { forgetDiscarded(await api({ action: "removeEntryItem", itemId: r.itemId })); entRows = entRows.filter((x) => x.itemId !== r.itemId); }
-        catch (err: any) { errors.push(`${r.title}: ${err.message}`); }
+        catch (err: any) { errors.push(`${rgTitle(r)}: ${err.message}`); }
       }
     } finally { entBusyStep(-1); btn.textContent = label; }
     btn.disabled = false; entSel.clear(); renderEnt();
@@ -1874,7 +1975,7 @@ const posData = {
         return;
       }
       const j = await api({ action: "stageItem", entryId, variantId: v.id, qty: 1 });
-      entRows.push({ itemId: j.itemId, variantId: v.id, qty: 1, costCents: null, priceCents: v.priceCents, wasNew: false, supplier: null, title: p.title, platform: p.platform || p.categoryName || "", cond: condLabel(v), completenessCode: v.completenessCode || "", gradeCode: v.gradeCode || "", inventoryTypeId: v.inventoryTypeId || "" });
+      entRows.push({ itemId: j.itemId, variantId: v.id, qty: 1, costCents: null, priceCents: v.priceCents, wasNew: false, supplier: null, title: p.title, platform: p.platform || p.categoryName || "", regionCode: p.regionCode || "", cond: condLabel(v), completenessCode: v.completenessCode || "", gradeCode: v.gradeCode || "", inventoryTypeId: v.inventoryTypeId || "" });
       renderEnt();
     } catch (e: any) { alert(e.message); }
   }
@@ -1898,7 +1999,7 @@ const posData = {
       if (vs.length === 1) { entSearch.value = ""; box.hidden = true; stageVariant(upcP, vs[0]); return; }
       if (vs.length > 1) {
         entSearch.value = "";
-        box.innerHTML = `<div class="ti-sug-head">Which condition? — ${esc(upcP.title)}${upcP.platform ? ` (${esc(upcP.platform)})` : ""}</div>` + vs.map((v: any, i: number) => {
+        box.innerHTML = `<div class="ti-sug-head">Which condition? — ${esc(upcP.title)}${badge(upcP.regionCode)}${upcP.platform ? ` (${esc(upcP.platform)})` : ""}</div>` + vs.map((v: any, i: number) => {
           const t = typeById.get(v.inventoryTypeId);
           return `<div class="ti-sug" data-cv="${i}">
             <span class="ti-sug-title">${esc(condLabel(v))}</span>
@@ -1930,7 +2031,10 @@ const posData = {
       return;
     }
     const parsed = parseQuery(q);
-    const matches = smartMatches(parsed, draftItems()).slice(0, 5);
+    // A typed region ("okami jp") is a filter — the US and JP copies are
+    // otherwise identical rows.
+    const pool = parsed.regionCode ? draftItems().filter((p: any) => regionOf(p.regionCode, regions) === parsed.regionCode) : draftItems();
+    const matches = smartMatches(parsed, pool).slice(0, 5);
     let opts = matches.flatMap((m: any) => {
       const vs = draftVariants(m.p).sort((a: any, b: any) =>
         (b.completenessCode === parsed.completenessCode ? 1 : 0) - (a.completenessCode === parsed.completenessCode ? 1 : 0));
@@ -1943,7 +2047,7 @@ const posData = {
     }
     box.innerHTML = opts.map((o: any, i: number) => `
       <div class="ti-sug" data-i="${i}">
-        <span class="ti-sug-title">${esc(o.p.title)}</span>
+        <span class="ti-sug-title">${esc(o.p.title)}${badge(o.p.regionCode)}</span>
         <span class="ti-sug-meta">${esc(o.p.platform || "")} · ${esc(condLabel(o.v))}</span>
         <span class="ti-sug-price">${money(o.v.priceCents)}</span>
       </div>`).join("") + `
@@ -1979,15 +2083,18 @@ const posData = {
       } catch { return; }
       const box = $("ent-suggest") as HTMLElement;
       if (seq !== dbSeq || box.hidden || entSearch.value.trim() !== q) return;
-      // Skip games the store already lists on that platform (they're above).
-      const key = (t: string, pl: string) => `${normTitle(t)}|${(resolveStaticPlatform(pl) ?? pl ?? "").toLowerCase()}`;
-      const have = new Set(draftItems().flatMap((p: any) => [p.title, ...(p.altNames || [])].map((t: string) => key(t, p.platform || ""))));
-      games = games.filter((g) => !have.has(key(g.name, g.platform || ""))).slice(0, 6);
+      // Skip games the store already lists on that platform in that region
+      // (they're above). A pick becomes a listing in the region the query
+      // named, else the home one — a JP-only "Okami" must not hide the US one.
+      const dbRegion = regionOf(parsed?.regionCode, regions);
+      const key = (t: string, pl: string, rg: string) => `${normTitle(t)}|${(resolveStaticPlatform(pl) ?? pl ?? "").toLowerCase()}|${rg}`;
+      const have = new Set(draftItems().flatMap((p: any) => [p.title, ...(p.altNames || [])].map((t: string) => key(t, p.platform || "", regionOf(p.regionCode, regions)))));
+      games = games.filter((g) => !have.has(key(g.name, g.platform || "", dbRegion))).slice(0, 6);
       if (!games.length) return;
       box.insertAdjacentHTML("beforeend", `<div class="ti-sug-head">From the game database</div>` + games.map((g, i) => `
         <div class="ti-sug" data-db="${i}" title="Add as a new listing with its official title">
           ${g.cover ? `<img class="ti-db-cover" src="${esc(g.cover)}" alt="" loading="lazy" />` : ""}
-          <span class="ti-sug-title">${esc(g.name)}</span>
+          <span class="ti-sug-title">${esc(g.name)}${badge(dbRegion)}</span>
           <span class="ti-sug-meta">${esc(g.platform || "")} · new listing</span>
         </div>`).join(""));
       box.querySelectorAll<HTMLElement>("[data-db]").forEach((el) => el.addEventListener("mousedown", (e) => {
@@ -2021,18 +2128,21 @@ const posData = {
   entSearch?.addEventListener("input", entSuggest);
   entSearch?.addEventListener("blur", () => setTimeout(() => { ($("ent-suggest") as HTMLElement).hidden = true; }, 150));
   $("ent-new")?.addEventListener("click", () => entNewProduct(entSearch.value.trim()));
-  function entNewProduct(q: string, official?: { title: string; platform: string; parsed?: any }) {
+  function entNewProduct(q: string, official?: { title: string; platform: string; parsed?: any; region?: string }) {
     const parsed = q ? parseQuery(q) : official?.parsed ?? null;
     clearProductFields();
     const panel = $("add-panel") as HTMLElement;
     panel.hidden = false;
     if (official) {
-      // Picked from the game database: its official name + our platform name.
+      // Picked from the game database (or a scanned UPC): its official name +
+      // our platform name, in the region the query named (else the home one).
       ($("np-title") as HTMLInputElement).value = official.title;
       ($("np-platform") as HTMLInputElement).value = official.platform || parsed?.platform || "";
+      setNpRegion(official.region || parsed?.regionCode);
     } else {
       if (parsed?.title) ($("np-title") as HTMLInputElement).value = parsed.titleForNew.replace(/\b\w/g, (c: string) => c.toUpperCase());
       if (parsed?.platform) ($("np-platform") as HTMLInputElement).value = parsed.platform;
+      if (parsed) setNpRegion(parsed.regionCode);
     }
     if (parsed) { setComp($("np-comp") as HTMLInputElement, parsed.completenessCode || "", $("np-comp-abbr")); if (parsed.gradeCode) ($("np-grade") as HTMLSelectElement).value = parsed.gradeCode; }
     ($("np-qty") as HTMLInputElement).value = "1";
@@ -2048,6 +2158,9 @@ const posData = {
   const importCatalog = () => draftItems().map((p: any) => ({
     id: p.id, title: p.title, platform: p.platform || "", franchise: p.franchise || "", altNames: p.altNames || [],
     categoryId: p.categoryId, pcId: p.pcId || "", upcs: upcsOf(p),
+    // The listing's region (left out before the migration → the importer
+    // reads the old "[PAL]" title tag instead).
+    ...(regionReady ? { regionCode: p.regionCode || "" } : {}),
     variants: draftVariants(p).map((v: any) => ({
       id: v.id, completenessCode: v.completenessCode || "", gradeCode: v.gradeCode || "", priceCents: v.priceCents || 0,
       quantity: v.quantity, barcodes: (v.barcodes || []).map((b: any) => b.barcode),
@@ -2124,7 +2237,7 @@ const posData = {
     if (!draftsReady) { alert("Run supabase/migrations/20260801000002_entry_drafts.sql in the Supabase SQL editor first, then refresh."); return; }
     try { await ensureEntry(); setEntryMode(true); } catch (e: any) { alert(e.message); return; }
     openImportDialog({
-      mode: "entry", catalog: importCatalog(), completeness, grades, platforms: PLATFORMS, categories, invTypes,
+      mode: "entry", catalog: importCatalog(), completeness, grades, platforms: PLATFORMS, categories, invTypes, regions,
       onImport: async (rows, ch, progress) => {
         const condText = (r: any) => [completeness.find((c) => c.code === r.row.completenessCode)?.label, grades.find((g) => g.code === r.row.gradeCode)?.label].filter(Boolean).join(" ") || "Used";
         const priceOf = (r: any) => (r.row.priceCents == null ? 0 : importPrice(r.row.priceCents, ch));
@@ -2146,28 +2259,31 @@ const posData = {
           // Not the qty: the server keys each COPY (<key>#1, #2, …), so an edited
           // sheet that goes from 1 to 2 copies adds exactly one.
           // The SHEET's title (not the corrected one), so a re-import of the same
-          // sheet replays whether or not the correction ran this time.
-          const fp = [(r.row.titleFrom ?? r.row.title).toLowerCase().trim(), (r.row.platform || "").toLowerCase(), r.row.completenessCode, r.row.gradeCode, ch.inventoryTypeId || "", r.row.folder || ""].join("|");
+          // sheet replays whether or not the correction ran this time. The
+          // region keeps a US and a PAL row of one game apart (titles are bare).
+          const fp = [(r.row.titleFrom ?? r.row.title).toLowerCase().trim(), (r.row.platform || "").toLowerCase(), r.row.completenessCode, r.row.gradeCode, ch.inventoryTypeId || "", r.row.folder || "", r.row.region || ""].join("|");
           const occ = (seenPrints.get(fp) || 0) + 1; seenPrints.set(fp, occ);
           return `${fileTag}:${h32(fp, 2166136261)}${h32(fp, 5381)}:${occ}`;
         };
         const payload = rows.map((r: any) => {
           const base = {
-            qty: r.row.qty, costCents: r.row.costCents, tagPcId: r.row.pcId && !(r.product && r.product.pcId) ? r.row.pcId : undefined,
+            // A PriceCharting id is per release: never tag a PAL row's id onto
+            // the US listing it was mapped to.
+            qty: r.row.qty, costCents: r.row.costCents, tagPcId: r.row.pcId && !(r.product && (r.product.pcId || listingRegion(r.product) !== regionOf(r.row.region, regions))) ? r.row.pcId : undefined,
             importKey: keyFor(r),
           };
           // Bulk lot etc.: recorded on the entry (what was paid) — no listing, no stock.
           // One line at the sheet's total (cost × qty) so the books match what was paid.
-          if (r.nonInventory) return { kind: "nonInventory", description: `${r.row.title}${r.row.platform ? ` (${r.row.platform})` : ""}${r.row.qty > 1 ? ` ×${r.row.qty}` : ""}`, ...base, qty: 1, costCents: r.row.costCents == null ? null : r.row.costCents * r.row.qty };
+          if (r.nonInventory) return { kind: "nonInventory", description: `${displayTitle(r.row.title, r.row.region, regions)}${r.row.platform ? ` (${r.row.platform})` : ""}${r.row.qty > 1 ? ` ×${r.row.qty}` : ""}`, ...base, qty: 1, costCents: r.row.costCents == null ? null : r.row.costCents * r.row.qty };
           if (r.product && r.variant) return { kind: "variant", variantId: r.variant.id, productId: r.product.id, ...base };
           const v = { completenessCode: r.row.completenessCode, gradeCode: r.row.gradeCode, condition: condText(r), priceCents: priceOf(r), barcode: r.row.upc || null, inventoryTypeId: ch.inventoryTypeId || undefined };
           if (r.product) return { kind: "newVariant", productId: r.product.id, ...v, ...base };
           const g = newListingKey(r.row);
           // title/platform let the server find the listing if its ref row was staged in an earlier attempt.
-          if (firstOfGroup.has(g)) return { kind: "newVariant", productRef: g, title: r.row.title, platform: r.row.platform, ...v, ...base };
+          if (firstOfGroup.has(g)) return { kind: "newVariant", productRef: g, title: r.row.title, platform: r.row.platform, regionCode: r.row.region, ...v, ...base };
           firstOfGroup.add(g);
           // A corrected title keeps the sheet's spelling as a search name.
-          return { kind: "newProduct", ref: g, title: r.row.title, platform: r.row.platform, categoryId: r.categoryId || ch.categoryId, altNames: r.row.titleFrom ? [r.row.titleFrom] : undefined, ...v, ...base };
+          return { kind: "newProduct", ref: g, title: r.row.title, platform: r.row.platform, regionCode: r.row.region, categoryId: r.categoryId || ch.categoryId, altNames: r.row.titleFrom ? [r.row.titleFrom] : undefined, ...v, ...base };
         });
         const refToProduct = new Map<string, string>();
         const results: any[] = [];
@@ -2207,7 +2323,7 @@ const posData = {
             const cat = categories.find((c: any) => c.id === p.categoryId);
             const np: any = {
               id: res.productId, title: r.row.title, slug: res.slug || r.row.title.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""),
-              platform: r.row.platform, franchise: "", genre: "", description: "", imageUrl: "", altNames: p.altNames || [], categoryId: p.categoryId,
+              platform: r.row.platform, regionCode: regionReady ? r.row.region || "" : "", franchise: "", genre: "", description: "", imageUrl: "", altNames: p.altNames || [], categoryId: p.categoryId,
               categoryName: cat?.name ?? "", categoryColor: cat?.color ?? "#2ce6e0", ebayId: "", pcId: r.row.pcId || "", supplierLinks: [],
               // Hidden from the grid until this draft is finished.
               pendingEntryId: entryId, variants: [], pendingVariants: [mkImportedVariant(res, p)],
@@ -2222,9 +2338,10 @@ const posData = {
           }
         });
         }
-        const failed = results.map((res, i) => (res?.ok ? null : `Row ${rows[i].row.n} “${rows[i].row.title}”: ${res?.error || "failed"}`)).filter(Boolean);
-        const replayed = results.map((res, i) => (res?.replay ? `Row ${rows[i].row.n} “${rows[i].row.title}”`
-          : res?.already ? `Row ${rows[i].row.n} “${rows[i].row.title}”: ${res.already} of ${rows[i].row.qty} copies (the rest were added)` : null)).filter(Boolean);
+        const rowTitle = (i: number) => displayTitle(rows[i].row.title, rows[i].row.region, regions);
+        const failed = results.map((res, i) => (res?.ok ? null : `Row ${rows[i].row.n} “${rowTitle(i)}”: ${res?.error || "failed"}`)).filter(Boolean);
+        const replayed = results.map((res, i) => (res?.replay ? `Row ${rows[i].row.n} “${rowTitle(i)}”`
+          : res?.already ? `Row ${rows[i].row.n} “${rowTitle(i)}”: ${res.already} of ${rows[i].row.qty} copies (the rest were added)` : null)).filter(Boolean);
         progress("Loading the draft…");
         await loadEntry(entryId);
         setEntryMode(true);
@@ -2270,6 +2387,7 @@ const posData = {
           item: {
             title: pr.title ?? "?",
             categoryName: pr.platform || pr.category?.name || "",
+            region: regionTag(pr.region_code, regions),
             condShort: condLabel({ completenessCode: v.completeness_code, gradeCode: v.grade_code, condition: v.condition }),
             priceCents: v.price_cents ?? 0,
             invTypeName: typeById.get(v.inventory_type_id)?.name ?? "",
@@ -2368,7 +2486,9 @@ const posData = {
   document.getElementById("fix-titles")?.addEventListener("click", async () => {
     const btn = document.getElementById("fix-titles") as HTMLButtonElement;
     // Games only — a console named after its platform ("Super Nintendo") has no game title to fix.
-    const list = liveItems().filter((p: any) => p.title && p.platform && itemKind(p.title, p.platform) === "");
+    // Home-region listings only: the game database holds North American
+    // names, so it would rename a PAL / JP release to the US title.
+    const list = liveItems().filter((p: any) => p.title && p.platform && itemKind(p.title, p.platform) === "" && isDefaultRegion(listingRegion(p), regions));
     if (!list.length) { toast("No listings to check"); return; }
     btn.disabled = true; const orig = btn.textContent;
     fixSuggestions = [];
@@ -2420,6 +2540,8 @@ const posData = {
       action: "addProduct",
       title: ($("np-title") as HTMLInputElement).value,
       platform: ($("np-platform") as HTMLInputElement).value,
+      // Region select only exists when regions are on (else no key at all).
+      regionCode: (document.getElementById("np-region") as HTMLSelectElement | null)?.value || undefined,
       categoryId: ($("np-cat") as HTMLSelectElement).value,
       condition, completenessCode: comp, gradeCode: grade,
       priceCents: Math.round(parseFloat(($("np-price") as HTMLInputElement).value) * 100) || 0,
@@ -2433,7 +2555,9 @@ const posData = {
     try {
       const j = await api(body);
       const cat = categories.find((c: any) => c.id === body.categoryId);
-      const newItem: any = { id: j.productId, title: body.title, slug: j.slug || body.title.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""), platform: body.platform, franchise: "", genre: "", description: "", imageUrl: "", altNames: [], categoryId: body.categoryId, categoryName: cat?.name ?? "", categoryColor: cat?.color ?? "#2ce6e0",
+      // Title / platform / region as STORED (a "PAL …" platform prefix or a
+      // typed "[JP]" tag becomes the region).
+      const newItem: any = { id: j.productId, title: j.title ?? body.title, slug: j.slug || body.title.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""), platform: j.platform ?? body.platform, regionCode: j.regionCode ?? "", franchise: "", genre: "", description: "", imageUrl: "", altNames: [], categoryId: body.categoryId, categoryName: cat?.name ?? "", categoryColor: cat?.color ?? "#2ce6e0",
         variants: [{ id: j.variantId, condition, completeness: null, completenessCode: comp, gradeCode: grade, sku: null, internalCode: j.internalCode || "", priceCents: body.priceCents, onlinePriceCents: null, costCents: null, quantity: body.quantity, onlineVisible: false, inventoryTypeId: body.inventoryTypeId || retailTypeId, locationId: "", barcodes: body.barcode ? [{ id: "primary:" + j.variantId, barcode: body.barcode, label: "Primary", primary: true }] : [] }] };
       items.push(newItem);
       if (entryMode && j.itemId) {
@@ -2442,7 +2566,7 @@ const posData = {
         entRows.push({
           itemId: j.itemId, variantId: j.variantId, qty: body.quantity || 1, costCents: null,
           priceCents: body.priceCents, wasNew: true, supplier: null, title: newItem.title,
-          platform: newItem.platform || newItem.categoryName || "", cond: condLabel(newItem.variants[0]),
+          platform: newItem.platform || newItem.categoryName || "", regionCode: newItem.regionCode, cond: condLabel(newItem.variants[0]),
           completenessCode: comp || "", gradeCode: grade || "", kind: "stock",
           inventoryTypeId: newItem.variants[0].inventoryTypeId || body.inventoryTypeId || retailTypeId,
         });
@@ -2513,6 +2637,7 @@ const posData = {
       const it = j.item;
       ($("np-title") as HTMLInputElement).value = it.title;
       ($("np-platform") as HTMLInputElement).value = it.platform || "";
+      setNpRegion(it.region); // from eBay's "Region Code" aspect; "" = home
       setComp($("np-comp") as HTMLInputElement, it.completenessCode || "", $("np-comp-abbr"));
       if (it.gradeCode) ($("np-grade") as HTMLSelectElement).value = it.gradeCode;
       ($("np-price") as HTMLInputElement).value = (it.priceCents / 100).toFixed(2);

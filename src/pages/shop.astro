@@ -6,9 +6,10 @@ import { SITE } from "../consts";
 import { fmt } from "../lib/money";
 import { createSupabaseAdminClient } from "../lib/supabase";
 import { lowStockSettings, showLowStock, freeShipSettings } from "../lib/lowStock";
-import { classify, DEPARTMENTS, PLATFORMS, CONDITIONS, REGIONS, FRANCHISES } from "../lib/shopFilters";
+import { classify, DEPARTMENTS, PLATFORMS, CONDITIONS, FRANCHISES } from "../lib/shopFilters";
 import type { Rule } from "../lib/shopFilters";
 import { syncableTypeIds } from "../lib/inventoryTypes";
+import { loadRegions, regionNorm, regionBadgeHtml, displayTitle, regionSortKey } from "../lib/regions";
 
 // HIDDEN, BROWSE-ONLY shop. Reads the SHARED inventory pool so anything sold in
 // store disappears here automatically. Server-side service-role read selecting
@@ -22,10 +23,15 @@ const freeShipText = `🚚 Free shipping on orders over ${fmt(fs.freeShipThresho
 // Inventory-type gate: only web-syncable pools (e.g. NOT Personal Collection)
 // appear online. Null pre-migration → filter skipped, catalog unchanged.
 const allowedTypeIds = await syncableTypeIds(admin);
+// Region tag (migration 20261005000001). Probe first: an unknown column would
+// fail the whole query and blank the shop. Pre-migration → regions = [] → no
+// badges, no Region filter / sort, same shop as before.
+const { error: rgProbeErr } = await admin.from("products").select("region_code").limit(1);
+const regions = rgProbeErr ? [] : await loadRegions(admin);
 let shopQ = admin
   .from("product_variants")
   .select(
-    "id, condition, completeness, price_cents, online_price_cents, quantity, product:products(id, title, slug, platform, franchise, image_url, description, category:categories(name))",
+    `id, condition, completeness, price_cents, online_price_cents, quantity, product:products(id, title, slug, platform, franchise, image_url, description${rgProbeErr ? "" : ", region_code"}, category:categories(name))`,
   )
   .eq("online_visible", true)
   .gt("quantity", 0);
@@ -47,10 +53,20 @@ const listings = (rows ?? []).map((v: any) => {
     priceCents: v.online_price_cents ?? v.price_cents,
     quantity: v.quantity,
     lowStock: showLowStock(v.quantity, v.online_price_cents ?? v.price_cents, ls),
+    regionCode: (v.product?.region_code ?? "") as string,
   };
-  // Keyword-derived department + facets (ignores the unreliable import category).
-  return { ...item, facets: classify(item) };
+  // Keyword-derived department + facets (ignores the unreliable import category);
+  // region comes from the listing's field.
+  return {
+    ...item,
+    facets: classify(item, regions),
+    regionBadge: regionBadgeHtml(item.regionCode, regions),
+    regionSort: regionSortKey(item.regionCode, regions),
+  };
 });
+// Default order = displayed price (the online price when set), low → high —
+// the same order the Sort control's default re-applies on the client.
+listings.sort((a, b) => a.priceCents - b.priceCents || a.title.localeCompare(b.title) || a.regionSort - b.regionSort);
 
 // Build the department tabs + filter facets, keeping only values that actually
 // occur in the catalogue (with live counts).
@@ -71,7 +87,19 @@ const present = (rules: Rule[], counts: Map<string, number>) =>
 const deptTabs = [{ key: "all", label: "All", icon: "🛒", n: listings.length }, ...present(DEPARTMENTS, deptCounts)];
 const platFacets = present(PLATFORMS, platCounts);
 const condFacets = present(CONDITIONS, condCounts);
-const regionFacets = present(REGIONS, regionCounts);
+// Region chips come from the store's region list (home region included, in its
+// order), labelled "🇯🇵 JP". Only worth showing when the shop holds 2+ regions.
+const regionPresent = regions
+  .filter((r) => r.isActive && (regionCounts.get(r.code.toLowerCase()) ?? 0) > 0)
+  .map((r) => ({
+    key: r.code.toLowerCase(),
+    label: `${r.flag ? r.flag + " " : ""}${r.short}`,
+    name: r.name,
+    n: regionCounts.get(r.code.toLowerCase()) ?? 0,
+    // Words a ?region= link may use ("japan" from the old keyword facet, "pal").
+    alias: [...new Set([r.code, r.short, r.name, ...r.aliases].map(regionNorm).filter(Boolean))].join("|"),
+  }));
+const regionFacets = regionPresent.length > 1 ? regionPresent : [];
 const franchiseFacets = present(FRANCHISES, franchiseCounts);
 const hasFilters = platFacets.length + condFacets.length + regionFacets.length + franchiseFacets.length > 0;
 
@@ -116,12 +144,24 @@ const hasFilters = platFacets.length + condFacets.length + regionFacets.length +
         </nav>
       )}
 
-      {listings.length > 0 && hasFilters && (
+      {listings.length > 0 && (
         <div class="shop-filterbar">
-          <button type="button" id="shop-filter-toggle" class="shop-filter-toggle" aria-expanded="false">
-            <span aria-hidden="true">⚙️</span> Filters <span class="shop-filter-count" id="shop-filter-count" hidden></span>
-          </button>
-          <button type="button" id="shop-filter-clear" class="shop-filter-clear" hidden>Clear all</button>
+          {hasFilters && (
+            <Fragment>
+              <button type="button" id="shop-filter-toggle" class="shop-filter-toggle" aria-expanded="false">
+                <span aria-hidden="true">⚙️</span> Filters <span class="shop-filter-count" id="shop-filter-count" hidden></span>
+              </button>
+              <button type="button" id="shop-filter-clear" class="shop-filter-clear" hidden>Clear all</button>
+            </Fragment>
+          )}
+          <label class="shop-vopt shop-sort">Sort
+            <select id="shop-sort">
+              <option value="price">Price: low to high</option>
+              <option value="price-desc">Price: high to low</option>
+              <option value="name">Name: A–Z</option>
+              {regionFacets.length > 0 && <option value="region">Region</option>}
+            </select>
+          </label>
         </div>
       )}
 
@@ -133,6 +173,16 @@ const hasFilters = platFacets.length + condFacets.length + regionFacets.length +
               <div class="shop-chips">
                 {platFacets.map((p) => (
                   <button type="button" class="shop-fchip" data-facet="platform" data-val={p.key}>{p.label}<span class="shop-fchip-n">{p.n}</span></button>
+                ))}
+              </div>
+            </div>
+          )}
+          {regionFacets.length > 0 && (
+            <div class="shop-fgroup">
+              <span class="shop-fgroup-h">Region</span>
+              <div class="shop-chips">
+                {regionFacets.map((r) => (
+                  <button type="button" class="shop-fchip" data-facet="region" data-val={r.key} data-alias={r.alias} title={r.name}>{r.label}<span class="shop-fchip-n">{r.n}</span></button>
                 ))}
               </div>
             </div>
@@ -157,16 +207,6 @@ const hasFilters = platFacets.length + condFacets.length + regionFacets.length +
               </div>
             </div>
           )}
-          {regionFacets.length > 0 && (
-            <div class="shop-fgroup">
-              <span class="shop-fgroup-h">Region</span>
-              <div class="shop-chips">
-                {regionFacets.map((r) => (
-                  <button type="button" class="shop-fchip" data-facet="region" data-val={r.key}>{r.label}<span class="shop-fchip-n">{r.n}</span></button>
-                ))}
-              </div>
-            </div>
-          )}
           <div class="shop-fgroup">
             <span class="shop-fgroup-h">Price</span>
             <div class="shop-price-range">
@@ -182,17 +222,22 @@ const hasFilters = platFacets.length + condFacets.length + regionFacets.length +
         <Fragment>
         <div class:list={["shop-grid", { "low-hover": ls.lowStockHoverOnly }]}>
           {listings.map((item) => (
-            <a class="shop-card" data-dept={item.facets.dept} data-platform={item.facets.platform} data-cond={item.facets.cond} data-region={item.facets.region} data-franchise={item.facets.franchise} data-price={item.priceCents} href={item.slug ? "/shop/" + item.slug : "#"}>
+            <a class="shop-card" data-dept={item.facets.dept} data-platform={item.facets.platform} data-cond={item.facets.cond} data-region={item.facets.region} data-franchise={item.facets.franchise} data-price={item.priceCents} data-title={item.title} data-rsort={item.regionSort} href={item.slug ? "/shop/" + item.slug : "#"}>
               <div class="shop-thumb">
                 {item.image ? (
-                  <img class="shop-thumb-fg" src={item.image} alt={item.title} loading="lazy" />
+                  <img class="shop-thumb-fg" src={item.image} alt={displayTitle(item.title, item.regionCode, regions)} loading="lazy" />
                 ) : (
                   <span class="shop-thumb-ph" aria-hidden="true">🎮</span>
                 )}
                 {item.lowStock && <span class="shop-low">Only {item.quantity} left</span>}
               </div>
               <div class="shop-body">
-                {item.platform && <span class="shop-plat">{item.platform}</span>}
+                {(item.platform || item.regionBadge) && (
+                  <div class="shop-meta">
+                    {item.platform && <span class="shop-plat">{item.platform}</span>}
+                    {item.regionBadge && <Fragment set:html={item.regionBadge} />}
+                  </div>
+                )}
                 <h3 class="shop-title">{item.title}</h3>
                 <p class="shop-cond">{item.condition}{item.completeness ? ` · ${item.completeness}` : ""}</p>
                 <div class="shop-foot">
@@ -247,7 +292,7 @@ const hasFilters = platFacets.length + condFacets.length + regionFacets.length +
 </Layout>
 
 <script>
-  // Storefront: category filter + pagination + columns. Cards carry their
+  // Storefront: category filter + sort + pagination + columns. Cards carry their
   // department keys in data-shopcat; everything is client-side show/hide.
   const grid = document.querySelector<HTMLElement>(".shop-grid");
   const tabs = [...document.querySelectorAll<HTMLButtonElement>(".shop-cat")];
@@ -273,6 +318,13 @@ const hasFilters = platFacets.length + condFacets.length + regionFacets.length +
   let minPrice = 0, maxPrice = Infinity;
 
   const fchips = [...document.querySelectorAll<HTMLButtonElement>(".shop-fchip")];
+  // ?region= may name a region by word or tag ("japan" from the old keyword
+  // facet, "europe") — map it to that region chip's code.
+  if (facet.region) {
+    const w = facet.region.replace(/[^a-z0-9]+/g, " ").trim();
+    const hit = fchips.find((b) => b.dataset.facet === "region" && (b.dataset.val === facet.region || (b.dataset.alias || "").split("|").includes(w)));
+    if (hit) facet.region = hit.dataset.val!;
+  }
   // Drop any deep-linked facet value that isn't actually offered, so a stale or
   // mismatched ?platform=/?cond= link shows everything instead of an empty grid.
   const validVals: Record<string, Set<string>> = {};
@@ -284,6 +336,9 @@ const hasFilters = platFacets.length + condFacets.length + regionFacets.length +
   const filterCount = document.getElementById("shop-filter-count");
   const minIn = document.getElementById("shop-min") as HTMLInputElement | null;
   const maxIn = document.getElementById("shop-max") as HTMLInputElement | null;
+  const sortSel = document.getElementById("shop-sort") as HTMLSelectElement | null;
+  const sortParam = params.get("sort") || "";
+  if (sortSel && [...sortSel.options].some((o) => o.value === sortParam)) sortSel.value = sortParam;
 
   const savedSize = Number(localStorage.getItem("shop-size"));
   if (savedSize) pageSize = savedSize;
@@ -306,6 +361,24 @@ const hasFilters = platFacets.length + condFacets.length + regionFacets.length +
     const n = activeFacetCount();
     if (filterCount) { filterCount.hidden = n === 0; filterCount.textContent = String(n); }
     if (filterClear) filterClear.hidden = n === 0;
+  }
+
+  // Sort reorders the cards themselves (before pagination slices them). Price =
+  // the displayed price; ties fall back to name, then region (home region
+  // first), then the server's order.
+  const serverOrder = new Map(cards.map((c, i) => [c, i]));
+  const byNum = (k: string) => (a: HTMLElement, b: HTMLElement) => Number(a.dataset[k] || 0) - Number(b.dataset[k] || 0);
+  const byPrice = byNum("price"), byRegion = byNum("rsort");
+  const byName = (a: HTMLElement, b: HTMLElement) =>
+    (a.dataset.title || "").localeCompare(b.dataset.title || "", undefined, { numeric: true, sensitivity: "base" });
+  function applySort() {
+    const s = sortSel?.value || "price";
+    const first = s === "price-desc" ? (a: HTMLElement, b: HTMLElement) => byPrice(b, a)
+      : s === "name" ? byName
+      : s === "region" ? byRegion
+      : byPrice;
+    cards.sort((a, b) => first(a, b) || byName(a, b) || byRegion(a, b) || serverOrder.get(a)! - serverOrder.get(b)!);
+    grid?.append(...cards);
   }
 
   function applyView() {
@@ -367,9 +440,17 @@ const hasFilters = platFacets.length + condFacets.length + regionFacets.length +
   pgNext?.addEventListener("click", () => { page++; applyView(); toGridTop(); });
   pgSize?.addEventListener("change", () => { pageSize = Number(pgSize.value) || 24; localStorage.setItem("shop-size", String(pageSize)); page = 1; applyView(); });
   colBtns.forEach((b) => b.addEventListener("click", () => setCols(b.dataset.cols!)));
+  // Keep the chosen sort in the URL (?sort=) so a sorted view can be shared.
+  sortSel?.addEventListener("change", () => {
+    applySort(); page = 1; applyView();
+    const u = new URL(location.href);
+    if (sortSel.value === "price") u.searchParams.delete("sort"); else u.searchParams.set("sort", sortSel.value);
+    history.replaceState(null, "", u);
+  });
 
   // Auto-open the panel if arriving with a facet pre-set from a deep link.
   if (filtersPanel && activeFacetCount() > 0) { filtersPanel.hidden = false; filterToggle?.setAttribute("aria-expanded", "true"); }
+  applySort();
   applyView();
 </script>
 
@@ -422,7 +503,8 @@ const hasFilters = platFacets.length + condFacets.length + regionFacets.length +
   .shop-cat-n { font-family: var(--font-mono); font-size: 0.74rem; opacity: 0.7; }
 
   /* Filters bar + panel */
-  .shop-filterbar { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1rem; }
+  .shop-filterbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; margin-bottom: 1rem; }
+  .shop-sort { margin-left: auto; }
   .shop-filter-toggle {
     display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.5rem 0.9rem;
     font-size: 0.9rem; font-weight: 700; color: var(--text); background: var(--panel);
@@ -470,7 +552,14 @@ const hasFilters = platFacets.length + condFacets.length + regionFacets.length +
     background: #fbf3ec; border-bottom: 3px solid var(--cyan);
   }
   .shop-body { display: flex; flex-direction: column; gap: 0.25rem; padding: 0.7rem 0.8rem 0.85rem; }
+  .shop-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.45rem; }
   .shop-plat { color: var(--muted-2); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; }
+  /* Region badge (regionBadgeHtml → injected HTML, so :global). Home region shows none. */
+  .shop-meta :global(.rg-badge) {
+    display: inline-flex; align-items: center; gap: 0.2em; padding: 0.02rem 0.35rem;
+    font-size: 0.66rem; font-weight: 800; letter-spacing: 0.03em; line-height: 1.35; white-space: nowrap;
+    color: var(--text); background: var(--bg-2); border: 1px solid var(--border-strong); border-radius: 0;
+  }
   .shop-title {
     font-size: clamp(0.98rem, 0.9rem + 0.4vw, 1.22rem); font-weight: 700; line-height: 1.22; margin: 0;
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;

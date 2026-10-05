@@ -17,6 +17,7 @@ import { itemKind } from "./collectionImport";
 import { lbPlatform, lbImageUrl } from "./launchbox";
 import { fetchAll } from "./fetchAll";
 import { barcodeEq } from "./gtin";
+import { type Region, loadRegions, regionsOn, displayTitle, regionFromEbayAspect, splitTitleRegion } from "./regions";
 
 export type UpcStatus = "found" | "not_found" | "ambiguous" | "conflict" | "error" | "rejected";
 export interface UpcLookup { status: UpcStatus; upcs: string[]; evidence: string }
@@ -70,25 +71,43 @@ export async function findCatalogUpcs(title: string, platform: string, ebay = EB
   return { status: "found", upcs, evidence: `eBay catalog: ${first.title} (${first.listings} listings agree)` };
 }
 
+/** products.region_code exists (migration 20261005000001)? PostgREST
+ *  rejects a select naming an unknown column. */
+export async function regionColumnReady(admin: any): Promise<boolean> {
+  const { error } = await admin.from("products").select("region_code").limit(1);
+  return !error;
+}
+// How messages name another listing: "Okami HD [JP]" — two releases of one
+// game share a title, the region tag tells them apart.
+interface Naming { regions: Region[]; rg: string }
+async function naming(admin: any): Promise<Naming> {
+  const regions = await loadRegions(admin);
+  return { regions, rg: regionsOn(regions) && (await regionColumnReady(admin)) ? ", region_code" : "" };
+}
+
 /** Another LISTING already using this code (as its UPC or a condition's
- *  barcode) — its title, or null. Every 12/13/14-digit spelling counts. */
-export async function upcOwner(admin: any, upc: string, productId: string): Promise<string | null> {
+ *  barcode) — its title (with its region tag), or null. Every 12/13/14-digit
+ *  spelling counts. */
+export async function upcOwner(admin: any, upc: string, productId: string, nm?: Naming): Promise<string | null> {
+  const { regions, rg } = nm ?? (await naming(admin));
+  const name = (p: any) => (p?.title ? displayTitle(p.title, p.region_code, regions) : "another listing");
   const forms = upcForms(upc);
-  const { data: u } = await admin.from("product_upcs").select("product_id, product:products(title)").in("upc", forms).neq("product_id", productId).limit(1);
-  if (u?.length) return u[0].product?.title || "another listing";
-  const { data: v } = await admin.from("product_variants").select("product_id, product:products(title)").in("barcode", forms).neq("product_id", productId).limit(1);
-  if (v?.length) return v[0].product?.title || "another listing";
-  const { data: b } = await admin.from("product_barcodes").select("variant:product_variants(product_id, product:products(title))").in("barcode", forms).limit(5);
+  const { data: u } = await admin.from("product_upcs").select(`product_id, product:products(title${rg})`).in("upc", forms).neq("product_id", productId).limit(1);
+  if (u?.length) return name(u[0].product);
+  const { data: v } = await admin.from("product_variants").select(`product_id, product:products(title${rg})`).in("barcode", forms).neq("product_id", productId).limit(1);
+  if (v?.length) return name(v[0].product);
+  const { data: b } = await admin.from("product_barcodes").select(`variant:product_variants(product_id, product:products(title${rg}))`).in("barcode", forms).limit(5);
   const other = (b || []).find((r: any) => r.variant && r.variant.product_id !== productId);
-  return other ? other.variant.product?.title || "another listing" : null;
+  return other ? name(other.variant.product) : null;
 }
 
 /** Attach codes to a listing (skipping ones another listing owns). */
 export async function attachUpcs(admin: any, productId: string, upcs: string[], source: "ebay" | "manual" | "import", evidence: string | null) {
   const added: { id: string; upc: string; source: string }[] = [];
   const conflicts: string[] = [];
+  const nm = upcs.length ? await naming(admin) : undefined;
   for (const upc of upcs) {
-    const owner = await upcOwner(admin, upc, productId);
+    const owner = await upcOwner(admin, upc, productId, nm);
     if (owner) { conflicts.push(`${upc} is already on “${owner}”`); continue; }
     const { data, error } = await admin.from("product_upcs").insert({ product_id: productId, upc, source, evidence }).select("id, upc, source").single();
     if (data) added.push(data);
@@ -113,7 +132,9 @@ export interface FillResult { id: string; status: UpcStatus | "has" | "ineligibl
  */
 export async function fillListingUpcs(admin: any, opts: { productIds?: string[]; force?: boolean; deadline?: number; max?: number } = {}): Promise<{ results: FillResult[]; stopped?: string }> {
   if (!ebayConfigured()) return { results: [], stopped: "eBay isn't connected on the server (EBAY_CLIENT_ID / EBAY_CLIENT_SECRET)" };
-  const cols = "id, title, platform, deleted_at, upc_status, upc_checked_at, upc_rejected, category:categories(name), product_upcs(id, upc, source)";
+  // region_code only once the regions migration ran (an import never gets a US code).
+  const rg = (await regionColumnReady(admin)) ? ", region_code" : "";
+  const cols = `id, title, platform${rg}, deleted_at, upc_status, upc_checked_at, upc_rejected, category:categories(name), product_upcs(id, upc, source)`;
   let rows: any[] = [];
   if (opts.productIds?.length) {
     const { data, error } = await admin.from("products").select(cols).in("id", opts.productIds.slice(0, 50));
@@ -133,7 +154,7 @@ export async function fillListingUpcs(admin: any, opts: { productIds?: string[];
     if (p.deleted_at) { results.push({ id: p.id, status: "skipped", upcs: have, evidence: "Deleted" }); continue; }
     if (have.length && !opts.force) { results.push({ id: p.id, status: "has", upcs: have, evidence: "" }); continue; }
     if (p.upc_status === "rejected" && !opts.force) { results.push({ id: p.id, status: "skipped", upcs: have, evidence: "A manager removed the automatic UPC — add it by hand" }); continue; }
-    if (!upcEligible({ title: p.title, platform: p.platform, categoryName: p.category?.name })) {
+    if (!upcEligible({ title: p.title, platform: p.platform, categoryName: p.category?.name, regionCode: p.region_code })) {
       results.push({ id: p.id, status: "ineligible", upcs: have, evidence: "Not a US game on a known platform — add its UPC by hand" });
       continue;
     }
@@ -170,10 +191,11 @@ export async function fillListingUpcs(admin: any, opts: { productIds?: string[];
 const RETRY_DAYS: Record<string, number> = { found: 30, not_found: 30, ambiguous: 60, conflict: 60, error: 1, rejected: Infinity };
 
 /** Listings the automatic lookup should try now: eligible, no UPC yet, not
- *  tried recently — never-tried first, then the longest ago. */
+ *  tried recently — never-tried first, then the longest ago. Rows carry
+ *  region_code once the regions migration ran. */
 export function needingUpc(rows: any[], now = Date.now()): any[] {
   return rows
-    .filter((p) => !(p.product_upcs || []).length && upcEligible({ title: p.title, platform: p.platform, categoryName: p.category?.name }))
+    .filter((p) => !(p.product_upcs || []).length && upcEligible({ title: p.title, platform: p.platform, categoryName: p.category?.name, regionCode: p.region_code }))
     .filter((p) => {
       if (!p.upc_checked_at) return true;
       const days = RETRY_DAYS[p.upc_status] ?? 1;
@@ -181,6 +203,9 @@ export function needingUpc(rows: any[], now = Date.now()): any[] {
     })
     .sort((a, b) => (a.upc_checked_at ? new Date(a.upc_checked_at).getTime() : 0) - (b.upc_checked_at ? new Date(b.upc_checked_at).getTime() : 0));
 }
+
+// The identity's region: "" for the US (eBay's catalog is the US one) / unknown.
+const usOrBlank = (code: string | null | undefined) => (code && code.toUpperCase() !== "US" ? code.toUpperCase() : "");
 
 // ---------------------------------------------------------------------------
 // The other direction: a scanned UPC → which game is it? (for a box that isn't
@@ -190,8 +215,9 @@ export function needingUpc(rows: any[], now = Date.now()): any[] {
 export interface UpcIdentity {
   found: boolean;
   upc: string;
-  title?: string;          // official title when the game database knows it, else eBay's
+  title?: string;          // official title when the game database knows it, else eBay's (no region tags)
   platform?: string;       // our platform name ("Nintendo 3DS")
+  region?: string;         // region code ("JP", "PAL"); "" = unknown / US
   catalogTitle?: string;   // eBay's catalog name, for reference
   cover?: string | null;   // box art (LaunchBox) when matched
   kind?: string;           // "" game | console | accessory | collectible
@@ -208,13 +234,15 @@ export async function identifyUpc(admin: any, raw: string, ebay = EBAY_ID): Prom
   // Already ours (another station added it since this page loaded)?
   // A listing on an unfinished entry draft says so; a soft-deleted one doesn't count.
   if (admin && (await upcTablesReady(admin))) {
-    const { data } = await admin.from("product_upcs").select("product_id, product:products(title, deleted_at, pending_entry_id)").in("upc", upcForms(upc)).limit(5);
+    const rg = (await regionColumnReady(admin)) ? ", region_code" : "";
+    const { data } = await admin.from("product_upcs").select(`product_id, product:products(title, deleted_at, pending_entry_id${rg})`).in("upc", upcForms(upc)).limit(5);
     const live = (data || []).find((r: any) => r.product && !r.product.deleted_at);
     if (live) {
       const title = live.product.title || "";
+      const region = usOrBlank(live.product.region_code);
       return live.product.pending_entry_id
-        ? { found: true, upc, inCatalog: { productId: live.product_id, title }, title, pending: true, evidence: "On an unfinished inventory entry" }
-        : { found: true, upc, inCatalog: { productId: live.product_id, title }, title, evidence: "Already in inventory" };
+        ? { found: true, upc, inCatalog: { productId: live.product_id, title }, title, region, pending: true, evidence: "On an unfinished inventory entry" }
+        : { found: true, upc, inCatalog: { productId: live.product_id, title }, title, region, evidence: "Already in inventory" };
     }
   }
   if (!ebay.configured()) return { found: false, upc, error: true, evidence: "eBay isn't connected on the server" };
@@ -228,6 +256,9 @@ export async function identifyUpc(admin: any, raw: string, ebay = EBAY_ID): Prom
   const ranked = [...byProduct.entries()].sort((a, b) => b[1].length - a[1].length).slice(0, 3);
   if (!ranked.length) return { found: false, upc, evidence: res.items.length ? "eBay has listings with this code but no catalog product" : "eBay doesn't know this code" };
   let failures = 0, read = 0;
+  // Before the regions migration a title tag is the only record of an
+  // import's region, so it stays in the title (the old behavior).
+  const regionField = !admin || regionsOn(await loadRegions(admin));
   for (const [, ids] of ranked) {
     let item: any = null;
     for (const id of ids.slice(0, 2)) {
@@ -241,7 +272,12 @@ export async function identifyUpc(admin: any, raw: string, ebay = EBAY_ID): Prom
     const platform = (aspects.get("platform") ?? []).map((v) => resolveStaticPlatform(v)).find(Boolean) || resolveStaticPlatform(String(prod.title)) || "";
     // "(Controller Bundle)" / "(Nintendo Selects)" stay as "[…]" tags — the
     // store's own title style — so the base game's box art can still match.
-    const clean = catalogTitleClean(String(prod.title), platform, { bracketTags: true }) || String(prod.title).trim();
+    const clean0 = catalogTitleClean(String(prod.title), platform, { bracketTags: true }) || String(prod.title).trim();
+    // A region tag ("(Japan Import)", "(PAL)") is the region field, not the name.
+    const tagSplit = splitTitleRegion(clean0);
+    const clean = regionField ? tagSplit.title : clean0, tagRegion = tagSplit.code;
+    // eBay's Region Code aspect, else a Japanese JAN (13 digits, 45/49), else the tag.
+    const region = usOrBlank(regionFromEbayAspect(aspects.get("region code") ?? []) || (/^4[59]\d{11}$/.test(upc) ? "JP" : "") || tagRegion);
     // Judged on eBay's own title, where "(Controller Bundle)" stays in brackets
     // — that's a game with a controller, not an accessory.
     const kind = itemKind(String(prod.title), platform);
@@ -257,10 +293,10 @@ export async function identifyUpc(admin: any, raw: string, ebay = EBAY_ID): Prom
       // Edition" stays itself); the same game's box art is fine for the picture.
       const same = cands.find((c) => sameBoxRelease(catalogTitle, String(c.name ?? ""), platform));
       const art = same || cands.find((c) => sameGameName(catalogTitle, String(c.name ?? ""), platform));
-      if (same) title = String(same.name);
+      if (same) title = regionField ? splitTitleRegion(String(same.name)).title : String(same.name);
       if (art) { const f = art.box_3d || art.box_front; cover = f ? lbImageUrl(f) : null; }
     }
-    return { found: true, upc, title, platform, catalogTitle, cover, kind, inCatalog: null, evidence: `eBay catalog: ${prod.title}` };
+    return { found: true, upc, title, platform, region, catalogTitle, cover, kind, inCatalog: null, evidence: `eBay catalog: ${prod.title}` };
   }
   // Nothing readable because eBay failed (not because it doesn't know the code) → retryable.
   if (!read && failures) return { found: false, upc, error: true, evidence: "eBay didn't answer — try again in a moment" };

@@ -11,6 +11,7 @@ import { splitTitle } from "../../lib/title";
 import { lowStockSettings, showLowStock } from "../../lib/lowStock";
 import { classify } from "../../lib/shopFilters";
 import { syncableTypeIds } from "../../lib/inventoryTypes";
+import { loadRegions, regionsOn, regionOf, regionByCode, badgeText, seoTitle, displayTitle, splitTitleRegion, type Region } from "../../lib/regions";
 
 // Product detail page — the SEO surface. Server-rendered, indexable (no
 // noindex) once /shop is ungated at launch. Product JSON-LD + details panel.
@@ -27,9 +28,10 @@ const variantCols = `id, condition, completeness_code, grade_code, price_cents, 
 // pre-migration DB still serves the page (nothing is soft-deleted there anyway).
 const productCols = `id, title, slug, platform, franchise, genre, description, image_url, trailer_url, release_year, brand, alternative_names, tags, category:categories(name), product_variants(${variantCols})`;
 // Newest columns first, dropping one at a time for a DB that predates them
-// (pending_entry_id: migration 20260930000001; product_upcs: 20260930000003).
+// (pending_entry_id: migration 20260930000001; product_upcs: 20260930000003;
+// region_code: 20261005000001).
 let res: { data: any; error: any } = { data: null, error: true };
-for (const extra of ["product_upcs(upc), deleted_at, pending_entry_id, ", "deleted_at, pending_entry_id, ", "deleted_at, ", ""]) {
+for (const extra of ["region_code, product_upcs(upc), deleted_at, pending_entry_id, ", "product_upcs(upc), deleted_at, pending_entry_id, ", "deleted_at, pending_entry_id, ", "deleted_at, ", ""]) {
   res = (await admin.from("products").select(`${extra}${productCols}`).eq("slug", slug).maybeSingle()) as { data: any; error: any };
   if (!res.error) break;
 }
@@ -50,11 +52,15 @@ const stockLabel = (v: any) => (v.lowStock ? `Only ${v.quantity} left` : "In sto
 
 const comp: Record<string, string> = {};
 const grade: Record<string, string> = {};
+let regions: Region[] = [];
 if (product) {
-  const [{ data: cl }, { data: cg }] = await Promise.all([
+  const [{ data: cl }, { data: cg }, rg] = await Promise.all([
     admin.from("completeness_levels").select("code,label"),
     admin.from("condition_grades").select("code,label,icon"),
+    loadRegions(admin),
   ]);
+  // No region_code column (the ladder fell back) → regions off, as before.
+  regions = "region_code" in product ? rg : [];
   (cl ?? []).forEach((c: any) => (comp[c.code] = c.label));
   (cg ?? []).forEach((g: any) => (grade[g.code] = (g.icon ? g.icon + " " : "") + g.label));
 }
@@ -101,6 +107,16 @@ const refurbCond =
 const isElectronic = ["Consoles", "Accessories", "Video Games"].includes(categoryName);
 const isRefurb = !!refurbCond;
 const { main: titleMain, sub: titleSub } = splitTitle(product?.title ?? "");
+
+// Region (a tag on the listing). Every listing gets a Details row once regions
+// are on; only an import region (show_badge, not the home one) gets the chip
+// and the "(Japan (NTSC-J))" in titles, so a US copy and a JP copy of one game
+// don't share <title> / og / JSON-LD names.
+const regionCode: string = product?.region_code ?? "";
+const region = regionsOn(regions) ? regionByCode(regionOf(regionCode, regions), regions) : null;
+const regionLabel = region ? `${region.flag ? region.flag + " " : ""}${region.name}` : null;
+const regionBadged = !!badgeText(regionCode, regions);
+const pageName = product ? seoTitle(product.title, regionCode, regions) : "";
 const titleLong = titleMain.length > 42;
 
 // Completeness and grade are SEPARATE axes — show them as distinct fields.
@@ -112,6 +128,7 @@ const gradeStr = primaryV ? grade[primaryV.grade_code] : null;
 const details: [string, any][] = product
   ? ([
       ["Platform", product.platform],
+      ["Region", regionLabel],
       ["Release Year", product.release_year],
       ["Publisher", product.brand],
       ["Genre", product.genre],
@@ -121,7 +138,10 @@ const details: [string, any][] = product
       ["Completeness", compStr],
       ["Grade", gradeStr],
       ...(!compStr && !gradeStr ? ([["Condition", refurbCond || primaryV?.condition]] as [string, any][]) : []),
-      ["Also known as", (product.alternative_names ?? []).join(", ")],
+      // (An old "Title [JP]" name is just this listing with its region tag — skip it.)
+      ["Also known as", (product.alternative_names ?? [])
+        .filter((n: string) => splitTitleRegion(n, regions).title.toLowerCase() !== String(product.title).toLowerCase())
+        .join(", ")],
     ].filter(([, v]) => v != null && String(v).trim() !== "") as [string, any][])
   : [];
 
@@ -136,13 +156,14 @@ const jsonLd = product
   ? {
       "@context": "https://schema.org",
       "@type": "Product",
-      name: product.title,
+      name: pageName,
       ...(product.image_url ? { image: product.image_url } : {}),
       ...(product.description ? { description: product.description } : {}),
       ...(upc ? { gtin: upc } : {}),
       sku: primaryV?.sku || product.id,
       ...(product.brand ? { brand: { "@type": "Brand", name: product.brand } } : {}),
       category: categoryName || product.genre || "Video Games",
+      ...(region ? { additionalProperty: [{ "@type": "PropertyValue", name: "Region", value: region.name }] } : {}),
       ...(lowest != null
         ? {
             offers: {
@@ -166,7 +187,7 @@ const metaDesc = !product
   ? "Not found"
   : product.description
     ? `${product.description.replace(/\s+/g, " ").trim().slice(0, 104)}… ${inStockLine}`
-    : `${product.title}${product.platform ? ` for ${product.platform}` : ""} — ${inStockLine}`;
+    : `${pageName}${product.platform ? ` for ${product.platform}` : ""} — ${inStockLine}`;
 ---
 
 {
@@ -181,7 +202,7 @@ const metaDesc = !product
       </section>
     </Layout>
   ) : (
-    <Layout title={product.title} description={metaDesc} image={product.image_url || undefined}>
+    <Layout title={pageName} description={metaDesc} image={product.image_url || undefined}>
       <section class="section--tight pdp">
         <div class="container">
           <nav class="pdp-crumbs" aria-label="Breadcrumb">
@@ -198,7 +219,7 @@ const metaDesc = !product
             <div class="pdp-media">
               {mainImage ? (
                 <div class="pdp-frame">
-                  <img class="pdp-cover" id="pdp-main" src={mainImage} alt={product.title} />
+                  <img class="pdp-cover" id="pdp-main" src={mainImage} alt={displayTitle(product.title, regionCode, regions)} />
                   {images.length > 1 && (
                     <Fragment>
                       <button class="pdp-nav pdp-prev" id="pdp-prev" aria-label="Previous image" type="button">‹</button>
@@ -227,7 +248,14 @@ const metaDesc = !product
             </div>
 
             <div class="pdp-info">
-              {refurbCond && <span class="pdp-refurb">✓ {refurbCond}</span>}
+              {(refurbCond || (regionBadged && region)) && (
+                <div class="pdp-badges">
+                  {refurbCond && <span class="pdp-refurb">✓ {refurbCond}</span>}
+                  {regionBadged && region && (
+                    <a class="pdp-region" href={"/shop?region=" + region.code.toLowerCase()} title={`More ${region.name} items`}>{regionLabel}</a>
+                  )}
+                </div>
+              )}
               <h1 class:list={["pdp-title", { "pdp-title--long": titleLong }]}>{titleMain}</h1>
               {titleSub && <p class="pdp-subtitle">{titleSub}</p>}
 
@@ -431,7 +459,11 @@ const metaDesc = !product
   .pdp-thumb-more { display:grid; place-items:center; text-align:center; font-size:0.6rem; font-weight:800; line-height:1.15; color:var(--cyan); text-decoration:none; }
   .pdp-thumb-more:hover { border-color:var(--cyan); }
 
-  .pdp-refurb { display:inline-block; margin-bottom:0.5rem; padding:0.2rem 0.6rem; font-size:0.76rem; font-weight:800; letter-spacing:0.02em; text-transform:uppercase; color:#06121a; background:var(--cyan); }
+  .pdp-badges { display:flex; flex-wrap:wrap; align-items:center; gap:0.4rem; margin-bottom:0.5rem; }
+  .pdp-refurb { display:inline-block; padding:0.2rem 0.6rem; font-size:0.76rem; font-weight:800; letter-spacing:0.02em; text-transform:uppercase; color:#06121a; background:var(--cyan); }
+  /* Region chip — an import's market, linking to that region in the shop. */
+  .pdp-region { display:inline-flex; align-items:center; gap:0.3rem; padding:0.18rem 0.6rem; font-size:0.76rem; font-weight:800; letter-spacing:0.02em; color:var(--text); background:var(--panel); border:1px solid var(--border-strong); border-radius:0; text-decoration:none; transition:border-color .15s; }
+  .pdp-region:hover { border-color:var(--cyan); }
   .pdp-title { font-size:clamp(1.55rem, 1.2rem + 1.8vw, 2.4rem); margin:0 0 0.35rem; line-height:1.1; text-wrap:balance; }
   .pdp-title--long { font-size:clamp(1.25rem, 1rem + 1.3vw, 1.8rem); }
   /* Split-off keywords — bigger & more readable than before. */

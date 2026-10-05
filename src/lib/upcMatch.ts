@@ -54,9 +54,12 @@ export function usUpcs(gtins: unknown): string[] {
 /** Which listings the automatic lookup covers: games on a known platform,
  *  sold in the US market. Consoles/accessories/collectibles and import (JP /
  *  PAL) releases are left to manual entry — eBay's US catalog would give them
- *  the wrong code. */
-export function upcEligible(p: { title: string; platform?: string | null; categoryName?: string | null }): boolean {
+ *  the wrong code. `regionCode` = products.region_code (undefined before the
+ *  regions migration: the title tag / platform name decide). */
+export function upcEligible(p: { title: string; platform?: string | null; categoryName?: string | null; regionCode?: string | null }): boolean {
   const platform = String(p.platform ?? "");
+  // eBay's catalog here is EBAY_US: only a US release can take its code.
+  if (p.regionCode && p.regionCode.toUpperCase() !== "US") return false;
   if (!resolveStaticPlatform(platform)) return false;
   if (/\b(famicom|sfc|pc engine|japan|jpn|jp|pal|ntsc[- ]?j)\b/i.test(platform)) return false;
   if (titleRegion(p.title)) return false;

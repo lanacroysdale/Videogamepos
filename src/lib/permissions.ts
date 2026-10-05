@@ -33,7 +33,7 @@ export const PERMISSIONS: PermissionDef[] = [
   { key: "menu.manage", group: "Pages", label: "Menu builder", description: "Edit the food & beverage menu: sections, items, sizes, modifiers, photos." },
   // ---- Inventory ----
   { key: "inventory.manage", group: "Inventory", label: "Inventory admin", description: "Revert committed entries, supplier links, cost history, eBay import & stock sync, image resync, filling / removing UPCs." },
-  { key: "inventory_config.manage", group: "Inventory", label: "Inventory types & locations", description: "Add or edit inventory pools and storage locations." },
+  { key: "inventory_config.manage", group: "Inventory", label: "Inventory types, locations & regions", description: "Add or edit inventory pools, storage locations and regions (US / PAL / Japan tags)." },
   // ---- Sales ----
   { key: "returns.override", group: "Sales", label: "Approve late returns", description: "Process a return after the return window has passed." },
   { key: "tabs.close_all", group: "Sales", label: "Close all bar tabs", description: "End-of-night close-out of every open tab." },

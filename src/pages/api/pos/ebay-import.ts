@@ -6,6 +6,7 @@ import {
   ebayConfigured, ebaySeller, extractItemId, getItem, listSellerItems, mapItem, type MappedItem,
 } from "../../../lib/ebay";
 import { syncEbayStock } from "../../../lib/ebaySync";
+import { loadRegions, regionsOn, regionByCode } from "../../../lib/regions";
 
 export const prerender = false;
 const json = (d: unknown, s = 200) =>
@@ -25,7 +26,8 @@ const resolveCat = (m: Map<string, string>, name: string) =>
 
 // Persist a mapped eBay item onto a product + variant that already exist.
 // Copies the primary photo + image gallery into our storage, fills metadata,
-// tags the eBay id. `galleryMax` caps how many gallery photos to copy.
+// tags the eBay id. `galleryMax` caps how many gallery photos to copy. Never
+// touches the region: on the paste-a-listing path staff chose it in the form.
 async function attachMedia(admin: any, productId: string, variantId: string | null, mi: MappedItem, galleryMax = 16) {
   let imageUrl: string | null = null;
   if (mi.primaryImage) imageUrl = await copyImageToStorage(admin, mi.primaryImage, "ebay");
@@ -54,8 +56,15 @@ async function importOne(admin: any, cats: Map<string, string>, legacyId: string
 
   const mi = mapItem(await getItem(legacyId));
   const slug = `${slugify(mi.title)}-${mi.ebayItemId.slice(-5)}`;
+  // The listing's region (eBay's Region Code aspect…), when it's one of the
+  // store's and the column exists (migration 20261005000001) — else the
+  // default fills in.
+  const regions = await loadRegions(admin);
+  const region = regionsOn(regions) ? regionByCode(mi.region, regions) : null;
+  const rgReady = !!region && !(await admin.from("products").select("region_code").limit(1)).error;
   const { data: prod, error: pErr } = await admin.from("products").insert({
     title: mi.title, platform: mi.platform || null, category_id: resolveCat(cats, mi.categoryName), slug,
+    ...(rgReady ? { region_code: region!.code } : {}),
   }).select("id").single();
   if (pErr) throw new Error(pErr.message);
 

@@ -3,9 +3,15 @@
 // The imported eBay `category` field is unreliable — games, mugs, towels, skins
 // and plushes were all dumped into "Consoles" (≈half the catalogue), so trusting
 // it makes the category tabs meaningless. Instead we derive a shopper-facing
-// DEPARTMENT plus a set of FACETS (platform / condition / region / franchise)
-// from the listing's title + platform text. Rules live here as data so a future
+// DEPARTMENT plus a set of FACETS (platform / condition / franchise) from the
+// listing's title + platform text. Rules live here as data so a future
 // licensee can retune them without touching the storefront code.
+//
+// REGION is the exception: it's a real field (products.region_code, migration
+// 20261005000001), never guessed from title words — the facet key is the
+// listing's region code, lowercased ("jp"), and "" while regions are off.
+
+import { regionOf, regionsOn, type Region } from "./regions";
 
 export interface ShopItem {
   title?: string | null;
@@ -13,6 +19,7 @@ export interface ShopItem {
   franchise?: string | null;
   category?: string | null;
   description?: string | null;
+  regionCode?: string | null; // products.region_code ("" / null = the default region)
 }
 
 export interface Rule {
@@ -72,10 +79,6 @@ export const CONDITIONS: Rule[] = [
   { key: "loose", label: "Loose", test: /\bloose\b|cart only|disc only|cartridge only/ },
 ];
 
-export const REGIONS: Rule[] = [
-  { key: "japan", label: "🇯🇵 Japan Import", test: /\bjapan\b|japanese|\bimport\b|region ?free|ntsc-?j|famicom/ },
-];
-
 export const FRANCHISES: Rule[] = [
   { key: "pokemon", label: "Pokémon", test: /pok[eé]mon|pikachu|jigglypuff|mewtwo|\beevee\b/ },
   { key: "zelda", label: "Zelda", test: /zelda|hyrule|ganon/ },
@@ -103,12 +106,12 @@ export interface ItemFacets {
   franchise: string;
 }
 
-export function classify(i: ShopItem): ItemFacets {
+export function classify(i: ShopItem, regions?: Region[] | null): ItemFacets {
   return {
     dept: firstMatch(DEPARTMENTS, i) || "other",
     platform: firstMatch(PLATFORMS, i),
     cond: firstMatch(CONDITIONS, i),
-    region: firstMatch(REGIONS, i),
+    region: regionsOn(regions) ? regionOf(i.regionCode, regions).toLowerCase() : "",
     franchise: firstMatch(FRANCHISES, i),
   };
 }

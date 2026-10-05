@@ -1,9 +1,12 @@
 // Shared smart find-or-create parsing, used by BOTH the inventory and trade-in
 // entry screens (the "one entry flow for both"). Pure functions — no DOM.
 //
-// It peels structured tokens (platform / completeness / grade) off a phrase via
-// alias lists, leaving the title remainder, then fuzzy-ranks catalog products by
-// title + alternative names. Reliable because the vocabulary is structured config.
+// It peels structured tokens (region / platform / completeness / grade) off a
+// phrase via alias lists, leaving the title remainder, then fuzzy-ranks catalog
+// products by title + alternative names. Reliable because the vocabulary is
+// structured config.
+
+import { peelRegion, regionFromPlatform, regionsOn, defaultRegionCode, type Region } from "./regions";
 
 export interface TaxoEntry {
   code: string;
@@ -22,12 +25,23 @@ export interface ParsedQuery {
    *  (the platform word LEADS the query, so it's likely part of the name),
    *  "mario kart n64" drops it. */
   titleForNew: string;
+  /** The region the query names ("mario kart pal" → "PAL"), or one its
+   *  platform implies ("super famicom" → "JP"); "" = none. A FILTER — region
+   *  words never stay in `title`. Only when regions are on. */
+  regionCode: string;
+  /** The region words as typed ("pal"), when one was peeled. */
+  regionText: string;
+  /** The store's home region ("" when regions are off) — a listing with no
+   *  region code counts as this one. */
+  defaultRegion: string;
 }
 export interface MatchableProduct {
   title: string;
   platform?: string | null;
   franchise?: string | null;
   altNames?: string[];
+  /** The listing's region code ("" / missing = the default region). */
+  regionCode?: string | null;
 }
 export interface PlatformAlias {
   canonical: string;
@@ -246,10 +260,20 @@ function peel(s: string, entries: { key: string; canonical?: string; aliases: st
 
 export function parseQuery(
   raw: string,
-  opts: { completeness: TaxoEntry[]; grades: TaxoEntry[]; platforms: PlatformAlias[] },
+  opts: { completeness: TaxoEntry[]; grades: TaxoEntry[]; platforms: PlatformAlias[]; regions?: Region[] },
 ): ParsedQuery {
   let s = " " + raw.toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ") + " ";
-  const out: ParsedQuery = { platform: null, completenessCode: "", gradeCode: "", title: "", platformText: "", titleForNew: "" };
+  const rOn = regionsOn(opts.regions);
+  const out: ParsedQuery = { platform: null, completenessCode: "", gradeCode: "", title: "", platformText: "", titleForNew: "",
+    regionCode: "", regionText: "", defaultRegion: rOn ? defaultRegionCode(opts.regions) : "" };
+  // A typed region ("pal", "japan import") comes off FIRST — whole words, never
+  // the home region or everyday words — so it can't be read as part of a
+  // catalog platform name or the title. It becomes a filter, not search text.
+  if (rOn) {
+    const rg = peelRegion(raw, opts.regions);
+    const re = rg.code ? new RegExp("(^|\\s)" + rg.text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "($|\\s)") : null;
+    if (re && re.test(s)) { out.regionCode = rg.code; out.regionText = rg.text; s = s.replace(re, " "); }
+  }
   // Peel the platform the query names by the BUILT-IN table (longest alias
   // wins, so "nintendo game boy color" is Game Boy Color, not the catalog's
   // "Nintendo Game Boy"), using every spelling of that one platform; only when
@@ -259,6 +283,8 @@ export function parseQuery(
     .filter((p) => (named ? p.canonical === named : !BUILTIN_CANON.has(p.canonical)))
     .map((p) => ({ key: p.canonical, canonical: p.canonical, aliases: [p.canonical.toLowerCase(), ...p.aliases] })));
   if (pm) { out.platform = pm.canonical ?? null; out.platformText = pm.alias; s = pm.rest; }
+  // A platform only sold in Japan ("super famicom", "fds") implies the region.
+  if (rOn && pm && !out.regionCode) out.regionCode = regionFromPlatform(pm.alias, opts.regions).code || regionFromPlatform(pm.canonical, opts.regions).code;
   const cm = peel(s, opts.completeness.map((c) => ({ key: c.code, aliases: [...c.aliases, c.label, c.code] })));
   if (cm) { out.completenessCode = cm.key; s = cm.rest; }
   const gm = peel(s, opts.grades.map((g) => ({ key: g.code, aliases: [...g.aliases, g.label, g.code] })));
@@ -286,6 +312,14 @@ export function platformMatches(productPlatform: string | null | undefined, pars
 }
 
 export function matchScore(p: MatchableProduct, parsed: ParsedQuery): number {
+  // Region: a typed one filters (another region never matches); with none
+  // typed, an import ranks just under the home copy of the same title.
+  const own = parsed.defaultRegion ? String(p.regionCode || parsed.defaultRegion).toUpperCase() : "";
+  if (parsed.regionCode && own && own !== parsed.regionCode) return 0;
+  const s = scoreTitle(p, parsed);
+  return !parsed.regionCode && own && own !== parsed.defaultRegion ? s * 0.98 : s;
+}
+function scoreTitle(p: MatchableProduct, parsed: ParsedQuery): number {
   const hay = `${p.title} ${p.platform || ""} ${p.franchise || ""} ${(p.altNames || []).join(" ")}`.toLowerCase();
   if (parsed.platform && !platformMatches(p.platform, parsed.platform)) {
     // The platform word may be part of the NAME ("Wii Sports"), or the listing

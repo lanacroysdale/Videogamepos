@@ -13,6 +13,7 @@ import {
   type CatalogProduct, type ImportRow, type ResolvedRow,
 } from "./collectionImport";
 import type { PlatformAlias, TaxoEntry } from "./smartSearch";
+import { type Region, regionsOn, regionOf, isDefaultRegion, defaultRegionCode, regionByCode, regionBadgeHtml, displayTitle, splitTitleRegion, regionSortKey } from "./regions";
 
 export interface ImportChoices {
   categoryId: string;
@@ -26,6 +27,8 @@ export interface ImportChoices {
   fileName?: string;
   /** name|size|lastModified — with each row's contents, forms its import key. */
   fileKey?: string;
+  /** Region for rows the sheet doesn't place (regions on only). */
+  regionCode?: string;
 }
 export interface ImportDialogOpts {
   mode: "entry" | "trade";
@@ -36,6 +39,8 @@ export interface ImportDialogOpts {
   categories: { id: string; name: string; default_completeness?: string | null }[];
   defaultCategoryId?: string;
   invTypes?: { id: string; name: string; icon?: string | null; key?: string }[];
+  /** The store's regions (loadRegions); missing / [] = before the migration. */
+  regions?: Region[];
   onImport: (rows: ResolvedRow[], choices: ImportChoices, progress: (msg: string) => void) => Promise<void>;
 }
 
@@ -102,7 +107,9 @@ export function openImportDialog(o: ImportDialogOpts) {
   if (!document.getElementById("tli-css")) {
     const st = document.createElement("style"); st.id = "tli-css"; st.textContent = CSS; document.head.appendChild(st);
   }
-  const prepared = prepareCatalog(o.catalog, o.platforms);
+  const prepared = prepareCatalog(o.catalog, o.platforms, o.regions);
+  const rOn = regionsOn(o.regions);
+  const regionName = (code: string) => { const g = regionByCode(code, o.regions); return g ? `${g.flag ? g.flag + " " : ""}${g.short}` : code; };
   const byId = new Map(o.catalog.map((p) => [p.id, p]));
   const compLabel = (code: string) => o.completeness.find((c) => c.code === code)?.label || code || "—";
   const gradeLabel = (code: string) => { const g = o.grades.find((x) => x.code === code); return g ? `${g.icon ? g.icon + " " : ""}${g.label}` : code; };
@@ -119,6 +126,7 @@ export function openImportDialog(o: ImportDialogOpts) {
   let busy = false;
   let folderSel: string | null = null; // folder filter (null = every folder)
   let platformSel: string | null = null; // platform filter (null = every platform; "" = rows with none)
+  let regionSel: string | null = null; // region filter (null = every region)
   // Official titles from the game database (LaunchBox copy) for rows that
   // would create a NEW listing — fixes sheet typos ("Links Aweakening").
   const titleFix = new Map<string, { name: string; sim: number } | null>(); // key: norm(title)|platform
@@ -127,6 +135,7 @@ export function openImportDialog(o: ImportDialogOpts) {
   let fixInFlight = false;
   const fixKey = (row: ImportRow) => `${norm(row.title)}|${row.platform}`;
   const catPicks = new Map<number, string>(); // employee's per-row category picks (by source line)
+  const regionPicks = new Map<number, string>(); // employee's per-row region picks for new listings (by source line)
   // Employee's per-row listing picks + skips (by source line). Persistent so a
   // folder switch or a re-match doesn't drop rows that aren't on screen.
   const picks = new Map<number, { productId: string; skip: boolean; nonInventory: boolean }>();
@@ -144,6 +153,7 @@ export function openImportDialog(o: ImportDialogOpts) {
     gradeCode: o.grades.find((g) => g.code === "3")?.code || o.grades[0]?.code || "",
     completenessCode: "",
     pricePct: 100,
+    regionCode: rOn ? defaultRegionCode(o.regions) : "",
     roundUp: (() => { try { return localStorage.getItem("tl-import-roundup") !== "0"; } catch { return true; } })(),
   };
   // Existing stock rows only count when they're the chosen inventory type
@@ -221,9 +231,9 @@ export function openImportDialog(o: ImportDialogOpts) {
     header = hasHeader ? all[0] : all[0].map((_, i) => `Column ${i + 1}`);
     records = hasHeader ? all.slice(1) : all;
     map = mapFor(all[0]);
-    folderSel = null; platformSel = null;
+    folderSel = null; platformSel = null; regionSel = null;
     // A new file: row numbers mean different games now.
-    resolved = []; picks.clear(); catPicks.clear(); keepSheet.clear();
+    resolved = []; picks.clear(); catPicks.clear(); regionPicks.clear(); keepSheet.clear();
     if (map.title == null) showErr("Couldn't find a Title column — pick it under Columns."); else showErr("");
     renderMap(); renderDefaults(); rebuild();
   }
@@ -251,7 +261,8 @@ export function openImportDialog(o: ImportDialogOpts) {
   function renderMap() {
     const wrap = $("tli-map-wrap"); wrap.hidden = false;
     const opts = (sel: number | undefined) => `<option value="">—</option>` + header.map((h, i) => `<option value="${i}"${sel === i ? " selected" : ""}>${esc(h || `Column ${i + 1}`)}</option>`).join("");
-    const shown = COLUMN_DEFS.filter((d) => o.mode === "entry" || !["cost"].includes(d.key));
+    // No Region column before the regions migration (nowhere to keep it).
+    const shown = COLUMN_DEFS.filter((d) => (o.mode === "entry" || !["cost"].includes(d.key)) && (rOn || d.key !== "region"));
     $("tli-map").innerHTML = shown.map((d) => `<label class="${d.required ? "req" : ""}">${esc(d.label)}${d.required ? " *" : ""}<select data-col="${d.key}">${opts(map[d.key])}</select></label>`).join("")
       + `<label class="chk" style="text-transform:none;letter-spacing:0;font-weight:600;"><input type="checkbox" id="tli-hdr" ${hasHeader ? "checked" : ""}/> First row is a header</label>`;
     $("tli-map").querySelectorAll<HTMLSelectElement>("select[data-col]").forEach((s) => s.addEventListener("change", () => {
@@ -261,6 +272,7 @@ export function openImportDialog(o: ImportDialogOpts) {
       showErr(map.title == null ? "Couldn't find a Title column — pick it under Columns." : "");
       if (k === "folder") { folderSel = null; renderDefaults(); }
       if (k === "platform") platformSel = null;
+      if (k === "region" || k === "platform" || k === "title") regionSel = null;
       rebuild();
     }));
     $<HTMLInputElement>("tli-hdr").addEventListener("change", (e) => {
@@ -271,8 +283,8 @@ export function openImportDialog(o: ImportDialogOpts) {
       header = on ? all[0] : all[0].map((_, i) => `Column ${i + 1}`);
       records = on ? all.slice(1) : all;
       map = mapFor(all[0]);
-      folderSel = null; platformSel = null;
-      resolved = []; picks.clear(); catPicks.clear(); keepSheet.clear(); // row numbers shift by one
+      folderSel = null; platformSel = null; regionSel = null;
+      resolved = []; picks.clear(); catPicks.clear(); regionPicks.clear(); keepSheet.clear(); // row numbers shift by one
       renderMap(); renderDefaults(); rebuild();
     });
   }
@@ -290,14 +302,17 @@ export function openImportDialog(o: ImportDialogOpts) {
       html += sel("tli-folder", "Folder", `<option value="*"${folderSel == null ? " selected" : ""}>All folders (${records.length})</option>`
         + names.map((f) => `<option value="${esc(f)}"${folderSel === f ? " selected" : ""}>${esc(f || "(no folder)")} (${counts.get(f)})</option>`).join(""));
     }
-    // Filled by rebuild(): the platforms in the rows shown (after the folder).
-    html += `<span id="tli-plat-slot" style="display:contents"></span>`;
+    // Filled by rebuild(): the platforms / regions in the rows shown (after the folder).
+    html += `<span id="tli-plat-slot" style="display:contents"></span><span id="tli-region-slot" style="display:contents"></span>`;
     html += sel("tli-cat", "Category", o.categories.map((c) => `<option value="${c.id}"${c.id === choices.categoryId ? " selected" : ""}>${esc(c.name)}</option>`).join(""));
     if (o.mode === "entry" && o.invTypes?.length) {
       html += sel("tli-type", "Inventory type", o.invTypes.map((t) => `<option value="${t.id}"${t.id === choices.inventoryTypeId ? " selected" : ""}>${esc((t.icon ? t.icon + " " : "") + t.name)}</option>`).join(""));
     }
     html += sel("tli-comp", "Condition when blank", o.completeness.map((c) => `<option value="${c.code}"${c.code === choices.completenessCode ? " selected" : ""}>${esc(c.label)}</option>`).join(""));
     html += sel("tli-grade", "Grade when blank", o.grades.map((g) => `<option value="${g.code}"${g.code === choices.gradeCode ? " selected" : ""}>${esc(gradeLabel(g.code))}</option>`).join(""));
+    // A whole lot bought in Japan: every row the sheet doesn't place is JP.
+    if (rOn) html += sel("tli-region", "Region when blank", o.regions!.filter((g) => g.isActive || g.code === choices.regionCode)
+      .map((g) => `<option value="${esc(g.code)}"${g.code === choices.regionCode ? " selected" : ""}>${esc(`${g.flag ? g.flag + " " : ""}${g.name}`)}</option>`).join(""), `title="Used when the sheet has no Region column and the platform / title don't name one"`);
     if (o.mode === "entry") html += `<label>Price = sheet value ×<input id="tli-pct" type="number" min="1" max="500" step="1" value="${choices.pricePct}" style="width:5.5rem;" /></label>`
       + `<label class="chk" style="text-transform:none;letter-spacing:0;font-weight:600;" title="$19.37 → $20 — whole dollars, no change"><input type="checkbox" id="tli-round" ${choices.roundUp ? "checked" : ""}/> Round prices up to whole dollars</label>`;
     html += `<label class="chk" style="text-transform:none;letter-spacing:0;font-weight:600;" title="New listings take the game's official name from the game database — fixes typos in the sheet. The sheet's own title stays searchable."><input type="checkbox" id="tli-official" ${useOfficial ? "checked" : ""}/> Use official game titles</label>`;
@@ -308,6 +323,7 @@ export function openImportDialog(o: ImportDialogOpts) {
     overlay.querySelector<HTMLSelectElement>("#tli-type")?.addEventListener("change", (e) => { choices.inventoryTypeId = (e.target as HTMLSelectElement).value; rebuild(); });
     $<HTMLSelectElement>("tli-comp").addEventListener("change", (e) => { choices.completenessCode = (e.target as HTMLSelectElement).value; rebuild(); });
     $<HTMLSelectElement>("tli-grade").addEventListener("change", (e) => { choices.gradeCode = (e.target as HTMLSelectElement).value; rebuild(); });
+    overlay.querySelector<HTMLSelectElement>("#tli-region")?.addEventListener("change", (e) => { choices.regionCode = (e.target as HTMLSelectElement).value; rebuild(); });
     overlay.querySelector<HTMLInputElement>("#tli-pct")?.addEventListener("change", (e) => { choices.pricePct = Math.max(1, Math.min(500, Math.round(+(e.target as HTMLInputElement).value) || 100)); renderTable(); });
     overlay.querySelector<HTMLInputElement>("#tli-round")?.addEventListener("change", (e) => {
       choices.roundUp = (e.target as HTMLInputElement).checked;
@@ -326,6 +342,17 @@ export function openImportDialog(o: ImportDialogOpts) {
       + `</select></label>`;
     slot.querySelector<HTMLSelectElement>("#tli-plat")!.addEventListener("change", (e) => { const v = (e.target as HTMLSelectElement).value; platformSel = v === "*" ? null : v; rebuild(); });
   }
+  // Region filter — import one market at a time (only when the rows hold 2+).
+  function renderRegionFilter(counts: Map<string, number>, total: number) {
+    const slot = overlay.querySelector<HTMLElement>("#tli-region-slot");
+    if (!slot) return;
+    if (!rOn || counts.size < 2) { slot.innerHTML = ""; return; }
+    const codes = [...counts.keys()].sort((a, b) => regionSortKey(a, o.regions) - regionSortKey(b, o.regions));
+    slot.innerHTML = `<label>Region<select id="tli-rgn"><option value="*"${regionSel == null ? " selected" : ""}>All regions (${total})</option>`
+      + codes.map((c) => `<option value="${esc(c)}"${regionSel === c ? " selected" : ""} title="${esc(regionByCode(c, o.regions)?.name || c)}">${esc(regionName(c))} (${counts.get(c)})</option>`).join("")
+      + `</select></label>`;
+    slot.querySelector<HTMLSelectElement>("#tli-rgn")!.addEventListener("change", (e) => { const v = (e.target as HTMLSelectElement).value; regionSel = v === "*" ? null : v; rebuild(); });
+  }
 
   // ---- rows + matching ----
   function rebuild() {
@@ -338,30 +365,41 @@ export function openImportDialog(o: ImportDialogOpts) {
       if (r.product?.id !== r.match.product?.id || r.skip || nonInv !== defaultNonInv(r.row)) picks.set(r.row.n, { productId: r.product?.id ?? "", skip: r.skip, nonInventory: nonInv });
       else picks.delete(r.row.n);
     }
-    const rows: ImportRow[] = buildRows(records, map, {
+    const rows: ImportRow[] = buildRows(records, rOn ? map : { ...map, region: undefined }, {
       completeness: o.completeness, grades: o.grades, platforms: o.platforms,
       defaultCompleteness: choices.completenessCode, defaultGrade: choices.gradeCode,
       cents: centsColumns(header, map), folder: map.folder != null ? folderSel : null,
+      regions: o.regions, defaultRegion: choices.regionCode,
     });
+    // The employee's per-row region picks (a new listing whose sheet row was wrong).
+    for (const r of rows) { const g = regionPicks.get(r.n); if (g) r.region = g; }
     // Platform filter — import one console at a time ("Nintendo DS only").
     const platCounts = new Map<string, number>();
     for (const r of rows) platCounts.set(r.platform || "", (platCounts.get(r.platform || "") || 0) + 1);
     if (platformSel != null && !platCounts.has(platformSel)) platformSel = null;
     renderPlatformFilter(platCounts, rows.length);
-    const shown = platformSel == null ? rows : rows.filter((r) => (r.platform || "") === platformSel);
+    const onPlat = platformSel == null ? rows : rows.filter((r) => (r.platform || "") === platformSel);
+    // Region filter — the regions in the rows on that platform.
+    const rgnCounts = new Map<string, number>();
+    for (const r of onPlat) rgnCounts.set(r.region, (rgnCounts.get(r.region) || 0) + 1);
+    if (regionSel != null && !rgnCounts.has(regionSel)) regionSel = null;
+    renderRegionFilter(rgnCounts, onPlat.length);
+    const shown = regionSel == null ? onPlat : onPlat.filter((r) => r.region === regionSel);
     const wanted: ImportRow[] = [];
     resolved = shown.map((row0) => {
       let row = row0;
-      let match = matchRow(row, prepared, o.platforms, typeFilter());
+      let match = matchRow(row, prepared, o.platforms, typeFilter(), o.regions);
       // A row that would create a NEW listing takes the game's official title
       // (then re-matches — the typo may have been hiding an existing listing).
+      // Not an import's: the database's names are the North American ones.
       const isNewListing = match.status === "new-product" || match.status === "review";
-      if (useOfficial && isNewListing && !row.kind && !row.lot && !keepSheet.has(row.n)) {
+      if (useOfficial && isNewListing && !row.kind && !row.lot && !keepSheet.has(row.n) && isDefaultRegion(row.region, o.regions)) {
         if (!titleFix.has(fixKey(row))) wanted.push(row);
         const fixed = officialTitleFor(row.title, titleFix.get(fixKey(row)), row.platform);
         if (fixed) {
-          row = { ...row, title: fixed, titleFrom: row.title };
-          match = matchRow(row, prepared, o.platforms, typeFilter());
+          // The sheet's title stays searchable (alternative names) — without a region tag.
+          row = { ...row, title: fixed, titleFrom: splitTitleRegion(row.title, o.regions).title };
+          match = matchRow(row, prepared, o.platforms, typeFilter(), o.regions);
         }
       }
       const hint = row.kind ? kindCat[row.kind] : "";
@@ -442,23 +480,34 @@ export function openImportDialog(o: ImportDialogOpts) {
       const st = statusOf(r, followers);
       if (onlyReview && !(st.cls === "rev" || r.row.warnings.length)) return "";
       const cands = r.match.candidates;
+      // Option text can't hold a badge: "Okami HD [JP] · Nintendo Switch".
+      const optTitle = (p: CatalogProduct) => esc(displayTitle(p.title, p.regionCode, o.regions));
       const opts = [`<option value=""${!r.product ? " selected" : ""}>＋ New listing</option>`]
-        .concat(cands.map((c) => `<option value="${c.product.id}"${r.product?.id === c.product.id ? " selected" : ""}>${esc(c.product.title)} · ${esc(c.product.platform || "?")} (${Math.round(c.score * 100)}%)</option>`));
-      if (r.product && !cands.some((c) => c.product.id === r.product!.id)) opts.push(`<option value="${r.product.id}" selected>${esc(r.product.title)} · ${esc(r.product.platform || "?")}</option>`);
+        .concat(cands.map((c) => `<option value="${c.product.id}"${r.product?.id === c.product.id ? " selected" : ""}>${optTitle(c.product)} · ${esc(c.product.platform || "?")} (${Math.round(c.score * 100)}%)</option>`));
+      if (r.product && !cands.some((c) => c.product.id === r.product!.id)) opts.push(`<option value="${r.product.id}" selected>${optTitle(r.product)} · ${esc(r.product.platform || "?")}</option>`);
+      // A PAL copy put on the US listing (or the other way round) is a different release.
+      const rowRg = regionOf(r.row.region, o.regions);
+      const prodRg = r.product ? regionOf(r.product.regionCode, o.regions) : rowRg;
+      const rgWarn = rOn && !r.nonInventory && prodRg !== rowRg
+        ? ` <span class="warn" title="This row is a ${esc(regionByCode(rowRg, o.regions)?.name || rowRg)} copy, but the chosen listing is ${esc(regionByCode(prodRg, o.regions)?.name || prodRg)} — a different release (own UPC / price). Pick “＋ New listing” unless the sheet's region is wrong.">⚠ ${esc(regionName(rowRg))} copy → ${esc(regionName(prodRg))} listing</span>` : "";
+      // New listing: its region, editable (like its category).
+      const rgPick = rOn && !r.product && !r.nonInventory && !followers.has(r)
+        ? ` <select data-region title="Region of this new listing">${o.regions!.filter((g) => g.isActive || g.code === rowRg).map((g) => `<option value="${esc(g.code)}"${g.code === rowRg ? " selected" : ""}>${esc(regionName(g.code))}</option>`).join("")}</select>` : "";
       const cond = [compLabel(r.row.completenessCode), r.row.gradeCode ? gradeLabel(r.row.gradeCode) : ""].filter(Boolean).join(" · ");
+      const badge = regionBadgeHtml(r.row.region, o.regions) ? " " + regionBadgeHtml(r.row.region, o.regions) : "";
       const warn = r.row.warnings.length ? ` <span class="warn" title="${esc(r.row.warnings.join("\n"))}">⚠</span>` : "";
       const price = entry ? (r.variant ? `<span class="tli-muted" title="Existing listing keeps its price">${money(r.variant.priceCents)}</span>` : newPrice(r) == null ? `<span class="warn" title="No value in the sheet — set the price on the entry screen">—</span>` : money(newPrice(r)!)) : "";
       return `<tr data-i="${i}" class="${r.skip ? "skip" : ""} ${st.cls === "rev" ? "review" : ""}">
         <td><input type="checkbox" data-keep ${r.skip ? "" : "checked"} title="Uncheck to skip this row" /></td>
         <td class="tli-muted">${r.row.n}</td>
-        <td class="t">${esc(r.row.title)}${warn}${r.row.titleFrom ? `<div class="tli-fix" title="Official title from the game database — the sheet said “${esc(r.row.titleFrom)}” (kept as a search name)">✎ sheet: “${esc(r.row.titleFrom)}” <button type="button" class="tli-link" data-keeptitle>keep sheet title</button></div>` : ""}</td>
+        <td class="t">${esc(r.row.title)}${badge}${warn}${r.row.titleFrom ? `<div class="tli-fix" title="Official title from the game database — the sheet said “${esc(r.row.titleFrom)}” (kept as a search name)">✎ sheet: “${esc(r.row.titleFrom)}” <button type="button" class="tli-link" data-keeptitle>keep sheet title</button></div>` : ""}</td>
         <td>${esc(r.row.platform || "—")}${r.row.platformRaw && !r.row.platformResolved ? ` <span class="warn" title="Platform not recognized">?</span>` : ""}</td>
         <td>${esc(cond)}</td>
         <td class="num">${r.row.qty}</td>
         <td class="num">${r.row.priceCents == null ? "—" : money(r.row.priceCents)}</td>
         ${pcCol ? `<td class="num tli-muted">${r.row.pcValueCents == null ? "—" : money(r.row.pcValueCents)}</td>` : ""}
         ${entry ? `<td class="num">${r.row.costCents == null ? "—" : money(r.row.costCents)}</td>` : ""}
-        <td>${r.nonInventory ? "" : `<select data-pick>${opts.join("")}</select> `}<span class="tli-pill ${st.cls}">${st.text}</span>${r.nonInventory ? "" : followers.has(r) ? ` <span class="tli-muted" title="This condition is added to the listing row ${followers.get(r)} creates — set the category there">category: row ${followers.get(r)}</span>` : !r.product ? ` <select data-cat title="Category for this new listing">${catOpts(r.categoryId || choices.categoryId)}</select>` : ""}${entry ? `<label class="tli-ni" title="Non-inventory: record what was paid on the entry, but create no listing or stock (bulk lots, parts)"><input type="checkbox" data-noninv${r.nonInventory ? " checked" : ""} /> non-inv</label>` : ""}</td>
+        <td>${r.nonInventory ? "" : `<select data-pick>${opts.join("")}</select> `}<span class="tli-pill ${st.cls}">${st.text}</span>${rgWarn}${rgPick}${r.nonInventory ? "" : followers.has(r) ? ` <span class="tli-muted" title="This condition is added to the listing row ${followers.get(r)} creates — set the category there">category: row ${followers.get(r)}</span>` : !r.product ? ` <select data-cat title="Category for this new listing">${catOpts(r.categoryId || choices.categoryId)}</select>` : ""}${entry ? `<label class="tli-ni" title="Non-inventory: record what was paid on the entry, but create no listing or stock (bulk lots, parts)"><input type="checkbox" data-noninv${r.nonInventory ? " checked" : ""} /> non-inv</label>` : ""}</td>
         ${entry ? `<td class="num">${price}</td>` : ""}
       </tr>`;
     }).join("");
@@ -489,6 +538,11 @@ export function openImportDialog(o: ImportDialogOpts) {
       tr.querySelector<HTMLSelectElement>("[data-cat]")?.addEventListener("change", (e) => {
         r.categoryId = (e.target as HTMLSelectElement).value;
         catPicks.set(r.row.n, r.categoryId);
+      });
+      // Another region = another listing: re-match (it may exist already).
+      tr.querySelector<HTMLSelectElement>("[data-region]")?.addEventListener("change", (e) => {
+        regionPicks.set(r.row.n, (e.target as HTMLSelectElement).value);
+        rebuild();
       });
     });
     summary();
