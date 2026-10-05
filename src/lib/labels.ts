@@ -83,6 +83,7 @@ export type LabelTemplate = {
   show: {
     logo: boolean; title: boolean; category: boolean; condition: boolean;
     price: boolean; invType: boolean; location: boolean; sku: boolean; barcode: boolean;
+    region: boolean;                     // "JP" / "PAL" after the platform in the meta line
     spineText: boolean;
     spineCondition: boolean;             // "CIB" / "NEW" on the spine, between logo and price
   };
@@ -107,6 +108,7 @@ export type LabelTemplate = {
 export type LabelItem = {
   title: string;
   categoryName: string;   // e.g. "Super Nintendo" (platform preferred)
+  region?: string;        // short region tag, e.g. "JP" ("" / absent = home region; regionTag())
   condShort: string;      // e.g. "CIB · ★★★" (conditionDisplay compAbbrev style)
   priceCents: number;
   invTypeName: string;    // e.g. "Personal Collection" ("" hides)
@@ -125,7 +127,7 @@ export const DEFAULT_TEMPLATE: LabelTemplate = {
   spine: "left", // front-to-spine: face on the case FRONT, flap wraps the spine
   spineDir: "down",
   spineWidthMm: 13,
-  show: { logo: true, title: true, category: true, condition: true, price: true, invType: true, location: true, sku: false, barcode: true, spineText: true, spineCondition: false },
+  show: { logo: true, title: true, category: true, condition: true, price: true, invType: true, location: true, sku: false, barcode: true, region: true, spineText: true, spineCondition: false },
   spineText: "",
   barcodeHeightMm: 8,
   barcodeShowText: true,
@@ -174,6 +176,7 @@ export function sanitizeLabelTemplates(raw: any): LabelTemplate[] {
         logo: t.show?.logo !== false, title: t.show?.title !== false, category: t.show?.category !== false,
         condition: t.show?.condition !== false, price: t.show?.price !== false, invType: t.show?.invType !== false,
         location: t.show?.location !== false, sku: t.show?.sku === true, barcode: t.show?.barcode !== false,
+        region: t.show?.region !== false,
         spineText: t.show?.spineText !== false, spineCondition: t.show?.spineCondition === true,
       },
       spineText: String(t.spineText ?? "").slice(0, 30),
@@ -441,8 +444,11 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
   const sideW = nsSide ? Math.min(contentW * 0.38, Math.max(lgW, lgName.length * nameF * 0.62, nsTagline.length * tagF * 0.56)) + 0.8 : 0;
   const colW = contentW - sideW;                            // title/meta column
   const colCx = fx + (sideRight ? colW / 2 : sideW + colW / 2);
+  // The region tag rides the meta line right after the platform ("Nintendo
+  // Switch · JP · CIB") — the title and price sizes stay untouched.
   const metaBits = [
     tpl.show.category ? item.categoryName : "",
+    tpl.show.region && item.region ? item.region : "",
     tpl.show.condition ? item.condShort : "",
     tpl.show.sku && item.sku ? item.sku : "",
   ].filter(Boolean);
@@ -489,7 +495,14 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
     y += 3.2 * fs;
   }
   if (metaBits.length) {
-    parts.push(`<text x="${colCx.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="middle" font-family="${fam}"${ls(metaSize)} font-size="${metaSize.toFixed(2)}" fill="#000">${esc(metaBits.join("  ·  "))}</text>`);
+    // The meta line shrinks to fit its column (a long platform + region +
+    // grade ran off the label); past 75% it squeezes instead of clipping.
+    // Its slot height stays metaSize, so nothing else moves.
+    const metaText = metaBits.join("  ·  ");
+    const estW = (sz: number) => [...metaText].length * sz * chW;
+    const mSize = estW(metaSize) > colW ? Math.max(metaSize * 0.75, colW / ([...metaText].length * chW)) : metaSize;
+    const squeeze = estW(mSize) > colW ? ` textLength="${(colW * 0.98).toFixed(2)}" lengthAdjust="spacingAndGlyphs"` : "";
+    parts.push(`<text x="${colCx.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="middle" font-family="${fam}"${ls(mSize)} font-size="${mSize.toFixed(2)}"${squeeze} fill="#000">${esc(metaText)}</text>`);
     y += metaSize * 1.08;
   }
   // Draw the side column stack, vertically centered on the title+meta block.

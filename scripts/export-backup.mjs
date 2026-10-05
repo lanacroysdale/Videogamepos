@@ -32,7 +32,7 @@ const TABLES = [
   "price_changes", "product_barcodes", "product_skus", "product_suppliers",
   "product_variants", "products", "profiles", "repairs", "shifts",
   "sop_files", "sops", "stock_movements", "store_departments",
-  "store_inventory_types", "store_locations", "store_settings",
+  "store_inventory_types", "store_locations", "store_regions", "store_settings",
   "task_files", "task_lists", "tasks", "time_entries", "trade_margins",
   "transaction_items", "transactions",
 ];

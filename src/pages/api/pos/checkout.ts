@@ -1,5 +1,5 @@
 import type { APIRoute } from "astro";
-import { typeMapByVariant } from "../../../lib/inventoryTypes";
+import { regionMapByVariant, typeMapByVariant } from "../../../lib/inventoryTypes";
 
 export const prerender = false;
 
@@ -79,10 +79,14 @@ export const POST: APIRoute = async ({ locals, request }) => {
     const names = [...new Set(blockedLines.map((it) => it.description))].join(", ");
     return json({ error: `Not for sale: ${names} — blocked inventory type. A manager can unblock it in Settings → Inventory types.` }, 409);
   }
+  // Region snapshot (the listing's region_code at sale time) — same guard:
+  // pre-migration the region key is OMITTED, never sent empty.
+  const { ready: regionsReady, map: regionMap } = await regionMapByVariant(locals.supabase, items.filter((it) => it.variant_id).map((it) => it.variant_id as string));
   const stamped = items.map((it) => ({
     ...it,
     department: it.variant_id ? "retail" : null,
     ...(typesReady ? { inventory_type: it.variant_id ? (typeMap.get(it.variant_id as string)?.key ?? null) : null } : {}),
+    ...(regionsReady ? { region: it.variant_id ? (regionMap.get(it.variant_id as string) ?? null) : null } : {}),
   }));
 
   const cartDiscount = Math.max(0, Math.round(Number(body.cartDiscountCents)) || 0);

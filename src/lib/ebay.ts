@@ -6,6 +6,8 @@
 // by seller USERNAME (EBAY_SELLER, e.g. "timelag" — note the store NAME is
 // "timelaggaming"). Keys are server-only (EBAY_CLIENT_ID / EBAY_CLIENT_SECRET).
 // ============================================================================
+import { regionFromEbayAspect, regionFromPlatform, splitTitleRegion } from "./regions";
+
 const TOKEN_URL = "https://api.ebay.com/identity/v1/oauth2/token";
 const API = "https://api.ebay.com/buy/browse/v1";
 const MARKETPLACE = "EBAY_US";
@@ -245,6 +247,8 @@ export interface MappedItem {
   priceCents: number;
   currency: string;
   platform: string;
+  /** Region code ("JP", "PAL", "US"); "" = default / unknown. */
+  region: string;
   brand: string | null;
   mpn: string | null;
   upc: string | null;
@@ -277,6 +281,10 @@ export function mapItem(item: any): MappedItem {
     priceCents: Math.round(parseFloat(item.price?.value || "0") * 100) || 0,
     currency: item.price?.currency || "USD",
     platform: aspects["Platform"] || item.brand || "",
+    // The seller's "Region Code" aspect ("Region Free" isn't a market), else a
+    // Japan-only platform ("Super Famicom"), else a bracket tag ("[PAL]") —
+    // never loose title words: eBay titles are keyword soup.
+    region: regionFromEbayAspect(aspects["Region Code"]) || regionFromPlatform(aspects["Platform"] || "").code || splitTitleRegion(title).code,
     brand: item.brand || aspects["Brand"] || null,
     mpn: cleanId(item.mpn || aspects["MPN"] || aspects["Model"] || undefined),
     upc: cleanId(aspects["UPC"] || item.gtin || undefined),

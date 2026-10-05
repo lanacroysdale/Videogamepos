@@ -4,6 +4,7 @@ export const prerender = false;
 import AppLayout from "../../layouts/AppLayout.astro";
 import { fetchAll } from "../../lib/fetchAll";
 import { fmt, fullName } from "../../lib/money";
+import { loadRegions } from "../../lib/regions";
 
 const supabase = Astro.locals.supabase;
 // Soft-deleted products (migration 20260903000001) shouldn't be offered for trade.
@@ -14,7 +15,10 @@ const pend = pendProbeErr ? "" : ", pending_entry_id";
 // Listing UPCs (migration 20260930000003): scanning a customer's box finds the title.
 const { error: upcProbeErr } = await Astro.locals.supabase.from("product_upcs").select("id").limit(1);
 const upcEmbed = upcProbeErr ? "" : ", product_upcs(upc)";
-const [{ data: margins }, { data: categories }, { data: completeness }, { data: grades }, { data: productRows }] = await Promise.all([
+// Listing region (migration 20261005000001): a JP copy is its own release.
+const { error: rgProbeErr } = await Astro.locals.supabase.from("products").select("region_code").limit(1);
+const rgCol = rgProbeErr ? "" : ", region_code";
+const [{ data: margins }, { data: categories }, { data: completeness }, { data: grades }, { data: productRows }, regions] = await Promise.all([
   supabase.from("trade_margins").select("*").order("sort_order"),
   supabase.from("categories").select("id,name").order("sort_order"),
   supabase.from("completeness_levels").select("code,label,aliases").eq("is_active", true).order("sort_order"),
@@ -22,10 +26,11 @@ const [{ data: margins }, { data: categories }, { data: completeness }, { data: 
   // Paged — one request stops at 1,000 listings.
   fetchAll((from, to) => supabase
     .from("products")
-    .select(`id, title, platform, franchise, alternative_names, tags, category_id${delProbeErr ? "" : ", deleted_at"}${pend}${upcEmbed}, product_variants(price_cents, completeness_code, grade_code, barcode${pend}, product_barcodes(barcode))`)
+    .select(`id, title, platform${rgCol}, franchise, alternative_names, tags, category_id${delProbeErr ? "" : ", deleted_at"}${pend}${upcEmbed}, product_variants(price_cents, completeness_code, grade_code, barcode${pend}, product_barcodes(barcode))`)
     .order("title")
     .order("id")
     .range(from, to)),
+  loadRegions(supabase), // [] before the migration → no badges, no region words peeled
 ]);
 const products = (productRows ?? [])
   .filter((p: any) => !p.deleted_at && !p.pending_entry_id)
@@ -45,6 +50,7 @@ const catalog = (products ?? []).map((p: any) => ({
   id: p.id,
   title: p.title,
   platform: p.platform ?? "",
+  regionCode: p.region_code ?? "",
   franchise: p.franchise ?? "",
   altNames: p.alternative_names ?? [],
   categoryId: p.category_id,
@@ -65,6 +71,7 @@ const posData = {
   grades: grades ?? [],
   catalog,
   customer,
+  regions,
 };
 ---
 
@@ -162,6 +169,7 @@ const posData = {
   import { barcodeEq } from "../../lib/gtin";
   import { upcLike, identifyUpc } from "../../lib/upcClient";
   import { openImportDialog } from "../../lib/importDialog";
+  import { displayTitle, regionBadgeHtml, regionsOn, type Region } from "../../lib/regions";
 
   type Row = { key: string; description: string; categoryId: string | null; resaleCents: number };
   const data = JSON.parse(document.getElementById("pos-data")!.textContent!);
@@ -171,13 +179,15 @@ const posData = {
   const grades: any[] = data.grades || [];
   const catalog: any[] = data.catalog || [];
   const customer: any = data.customer;
+  const regions: Region[] = data.regions || []; // [] = regions off
   const $ = (id: string) => document.getElementById(id)!;
   const money = (c: number) => (c / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
   const esc = (s: string) => String(s).replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m] as string));
 
   // Smart entry (shared with the inventory screen).
   const PLATFORMS = buildPlatforms(catalog.map((p) => p.platform));
-  const parseQuery = (raw: string) => parseQ(raw, { completeness, grades, platforms: PLATFORMS });
+  // A typed region ("okami jp") becomes a region filter, not title words.
+  const parseQuery = (raw: string) => parseQ(raw, { completeness, grades, platforms: PLATFORMS, regions });
   const complLabel = (code: string) => completeness.find((c) => c.code === code)?.label || code;
   const gradeLabel = (code: string) => { const g = grades.find((x) => x.code === code); return g ? (g.icon ? g.icon + " " : "") + g.label : code; };
   // Suggested resale = what we'd sell that exact condition for (falls back to top variant).
@@ -295,14 +305,14 @@ const posData = {
         if (!rows.includes(r) || r.description.trim() !== q) return;
         if (!id.found || id.inCatalog) {
           const msg = id.inCatalog
-            ? (id.pending ? `${esc(id.inCatalog.title)} is on an unfinished inventory entry` : `Already in inventory as ${esc(id.inCatalog.title)} — refresh this page to scan it`)
+            ? (id.pending ? `${esc(displayTitle(id.inCatalog.title, id.region, regions))} is on an unfinished inventory entry` : `Already in inventory as ${esc(displayTitle(id.inCatalog.title, id.region, regions))} — refresh this page to scan it`)
             : id.error ? `Couldn't look it up: ${esc(id.evidence || "error")}` : `${esc(id.evidence || "Not found")} — type the name instead`;
           const live = $("ti-body").querySelector<HTMLElement>(`tr[data-key="${r.key}"] [data-suggest]`) || box;
           live.innerHTML = `<div class="ti-sug-head">UPC ${esc(q)}</div><div class="ti-sug"><span class="ti-sug-meta">${msg}</span></div>`;
           live.hidden = false;
           return;
         }
-        r.description = id.title + (id.platform ? ` (${id.platform})` : "");
+        r.description = displayTitle(id.title, id.region, regions) + (id.platform ? ` (${id.platform})` : "");
         const cat = catForKind(id.kind || "");
         if (cat) r.categoryId = cat;
         // Only take the cursor back if the employee isn't busy in another field.
@@ -332,7 +342,7 @@ const posData = {
     box.innerHTML = matches.map((m: any, i: number) => {
       const sug = suggestResale(m.p, parsed);
       return `<div class="ti-sug" data-i="${i}">
-        <span class="ti-sug-title">${esc(m.p.title)}</span>
+        <span class="ti-sug-title">${esc(m.p.title)}</span>${regionBadgeHtml(m.p.regionCode, regions)}
         <span class="ti-sug-meta">${esc(m.p.platform || "")}${cond}</span>
         ${sug != null ? `<span class="ti-sug-price">${money(sug)}</span>` : ""}
       </div>`;
@@ -347,7 +357,8 @@ const posData = {
   }
   function pickSuggestion(r: Row, p: any, parsed: any) {
     const cond = [complLabel(parsed.completenessCode), gradeLabel(parsed.gradeCode)].filter(Boolean).join(" · ");
-    r.description = p.title + (p.platform ? ` (${p.platform})` : "") + (cond ? ` — ${cond}` : "");
+    // The ticket line's text — "Okami HD [JP] (Switch) — CIB" keeps the release.
+    r.description = displayTitle(p.title, p.regionCode, regions) + (p.platform ? ` (${p.platform})` : "") + (cond ? ` — ${cond}` : "");
     r.categoryId = p.categoryId || r.categoryId;
     const sug = suggestResale(p, parsed);
     if (sug != null) r.resaleCents = sug;
@@ -419,7 +430,7 @@ const posData = {
       if (!bc) return null;
       const top = bc.p.variants.length ? Math.max(...bc.p.variants.map((x: any) => x.priceCents)) : 0;
       const n = conditionsOf(bc.p).length;
-      return `${bc.p.title}${bc.p.platform ? ` (${bc.p.platform})` : ""}${top ? ` · resale up to ${money(top)}` : ""}${n > 1 ? ` · ${n} conditions — choose on the station` : ""}`;
+      return `${displayTitle(bc.p.title, bc.p.regionCode, regions)}${bc.p.platform ? ` (${bc.p.platform})` : ""}${top ? ` · resale up to ${money(top)}` : ""}${n > 1 ? ` · ${n} conditions — choose on the station` : ""}`;
     },
   };
   initScanReceiver(scanTarget);
@@ -432,17 +443,18 @@ const posData = {
     openImportDialog({
       mode: "trade",
       catalog: catalog.map((p: any) => ({
-        id: p.id, title: p.title, platform: p.platform || "", franchise: p.franchise || "", altNames: p.altNames || [],
+        // regionCode undefined = regions off → the importer reads legacy "[PAL]" title tags.
+        id: p.id, title: p.title, platform: p.platform || "", regionCode: regionsOn(regions) ? p.regionCode ?? "" : undefined, franchise: p.franchise || "", altNames: p.altNames || [],
         categoryId: p.categoryId, pcId: p.pcId || "", upcs: p.upcs || [],
         variants: (p.variants || []).map((v: any) => ({ completenessCode: v.completenessCode || "", gradeCode: v.gradeCode || "", priceCents: v.priceCents || 0, barcodes: v.barcodes || [] })),
       })),
-      completeness, grades, platforms: PLATFORMS, categories,
+      completeness, grades, platforms: PLATFORMS, categories, regions,
       onImport: async (list, ch) => {
         // Drop the untouched placeholder row so the ticket starts clean.
         rows = rows.filter((r) => r.description.trim() || r.resaleCents > 0);
         for (const r of list) {
           const cond = [complLabel(r.row.completenessCode), r.row.gradeCode ? gradeLabel(r.row.gradeCode) : ""].filter(Boolean).join(" · ");
-          const title = r.product ? r.product.title : r.row.title;
+          const title = displayTitle(r.product ? r.product.title : r.row.title, r.product ? r.product.regionCode : r.row.region, regions);
           const platform = r.product ? r.product.platform : r.row.platform;
           const description = title + (platform ? ` (${platform})` : "") + (cond ? ` — ${cond}` : "");
           const resale = r.row.priceCents ?? r.variant?.priceCents

@@ -1,6 +1,7 @@
 import type { APIRoute } from "astro";
 import { createSupabaseAdminClient } from "../lib/supabase";
 import { syncableTypeIds } from "../lib/inventoryTypes";
+import { loadRegions, regionsOn, regionOf, regionByCode, regionTag, seoTitle } from "../lib/regions";
 import { SITE } from "../consts";
 
 export const prerender = false;
@@ -25,9 +26,13 @@ export const GET: APIRoute = async () => {
   const allowedTypeIds = await syncableTypeIds(admin);
   // Listing UPCs (migration 20260930000003) → <g:gtin>.
   const { error: upcProbeErr } = await admin.from("product_upcs").select("id").limit(1);
+  // Listing region (migration 20261005000001) → title / description / Region
+  // detail. Probed so a pre-migration DB still serves the feed unchanged.
+  const { error: rgProbeErr } = await admin.from("products").select("region_code").limit(1);
+  const regions = rgProbeErr ? [] : await loadRegions(admin);
   let feedQ = admin
     .from("product_variants")
-    .select(`price_cents, online_price_cents, quantity, condition, completeness_code, product:products(id, title, slug, platform, brand, genre, description, image_url, category:categories(name)${upcProbeErr ? "" : ", product_upcs(upc)"})`)
+    .select(`price_cents, online_price_cents, quantity, condition, completeness_code, product:products(id, title, slug, platform, brand, genre, description, image_url, category:categories(name)${upcProbeErr ? "" : ", product_upcs(upc)"}${rgProbeErr ? "" : ", region_code"})`)
     .eq("online_visible", true)
     .gt("quantity", 0);
   if (allowedTypeIds) feedQ = feedQ.in("inventory_type_id", allowedTypeIds);
@@ -43,11 +48,17 @@ export const GET: APIRoute = async () => {
     const cents = (v as any).online_price_cents ?? (v as any).price_cents;
     if (cents == null) continue;
     const link = `${SITE.url}/shop/${p.slug}`;
-    const desc = (p.description || `${p.title}${p.platform ? ` for ${p.platform}` : ""} — in stock at ${SITE.name}, ${SITE.location}.`).replace(/\s+/g, " ").trim().slice(0, 4000);
+    // US and JP copies of one game are separate listings (own id / GTIN) —
+    // an import region goes into the title so Shopping can tell them apart.
+    const region = regionsOn(regions) ? regionByCode(regionOf(p.region_code, regions), regions) : null;
+    const isImport = !!regionTag(p.region_code, regions);
+    const title = seoTitle(p.title, p.region_code, regions);
+    const desc = ((isImport && region && p.description ? `Region: ${region.name}. ` : "") +
+      (p.description || `${title}${p.platform ? ` for ${p.platform}` : ""} — in stock at ${SITE.name}, ${SITE.location}.`)).replace(/\s+/g, " ").trim().slice(0, 4000);
     items.push(
       `    <item>
       <g:id>${esc(p.id)}</g:id>
-      <g:title>${esc(p.title)}</g:title>
+      <g:title>${esc(title)}</g:title>
       <g:description>${esc(desc)}</g:description>
       <g:link>${esc(link)}</g:link>
       ${p.image_url ? `<g:image_link>${esc(p.image_url)}</g:image_link>` : ""}
@@ -58,6 +69,12 @@ export const GET: APIRoute = async () => {
       ${p.product_upcs?.[0]?.upc ? `<g:gtin>${esc(p.product_upcs[0].upc)}</g:gtin>` : "<g:identifier_exists>no</g:identifier_exists>"}
       <g:product_type>${esc(p.category?.name || "Video Games")}</g:product_type>
       <g:google_product_category>Electronics &gt; Video Games</g:google_product_category>
+      ${region ? `<g:product_detail>
+        <g:section_name>General</g:section_name>
+        <g:attribute_name>Region</g:attribute_name>
+        <g:attribute_value>${esc(region.name)}</g:attribute_value>
+      </g:product_detail>
+      <g:custom_label_0>${esc(region.code)}</g:custom_label_0>` : ""}
     </item>`,
     );
   }

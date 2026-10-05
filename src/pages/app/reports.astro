@@ -5,8 +5,9 @@ import AppLayout from "../../layouts/AppLayout.astro";
 import { createSupabaseAdminClient } from "../../lib/supabase";
 import { fmt } from "../../lib/money";
 import {
-  summarize, pctChange, bucketSeries, granularityFor, rollupBy, departmentOf, inventoryTypeOf, type Txn, type Item,
+  summarize, pctChange, bucketSeries, granularityFor, rollupBy, departmentOf, inventoryTypeOf, lineRegionOf, type Txn, type Item,
 } from "../../lib/reports";
+import { loadRegions, regionByCode, regionsOn } from "../../lib/regions";
 
 // Permission-gated (middleware already enforces it; explicit guard for defense-in-depth).
 const profile = Astro.locals.profile;
@@ -58,13 +59,19 @@ const allTxns = await fetchAll<Txn>(() => {
 // table: selecting it pre-migration would 400 and silently zero the whole page.
 const { data: invTypeData } = await admin.from("store_inventory_types").select("key,name,icon").order("sort_order");
 const typesReady = !!invTypeData;
+// Regions (migration 20261005000001): the list ([] before it → no region chips
+// or breakdown) and the transaction_items.region sale snapshot — probed, same
+// reason as inventory_type.
+const regions = await loadRegions(admin);
+const { error: regionColErr } = await admin.from("transaction_items").select("region").limit(1);
+const regionsReady = !regionColErr;
 
 // Items filtered by their parent's status/date via an inner embed (avoids a giant
 // .in() of transaction ids), then the embed is stripped off.
 const itemsRaw = await fetchAll<any>(() => {
   let qq = admin
     .from("transaction_items")
-    .select(`transaction_id,variant_id,menu_item_id,category_id,department${typesReady ? ",inventory_type" : ""},kind,description,qty,unit_price_cents,discount_cents,transactions!inner(status,completed_at)`)
+    .select(`transaction_id,variant_id,menu_item_id,category_id,department${typesReady ? ",inventory_type" : ""}${regionsReady ? ",region" : ""},kind,description,qty,unit_price_cents,discount_cents,transactions!inner(status,completed_at)`)
     .eq("transactions.status", "completed")
     .order("transaction_id", { ascending: true });
   if (fetchStartISO) qq = qq.gte("transactions.completed_at", fetchStartISO);
@@ -95,6 +102,11 @@ const invTypeInfo = new Map<string, { name: string; icon: string | null }>((invT
 const INVTYPE_FALLBACK: Record<string, string> = { retail: "Retail", online: "Online", personal_collection: "Personal Collection" };
 const invTypeLabel = (key: string) => invTypeInfo.get(key)?.name ?? INVTYPE_FALLBACK[key] ?? key;
 const invTypeIcon = (key: string) => invTypeInfo.get(key)?.icon ?? "";
+// Region labels: "🇯🇵 JP" on chips, the full name in the breakdown; a code no
+// longer in the list (deleted region, old snapshot) shows as itself.
+const regionChipLabel = (code: string) => { const r = regionByCode(code, regions); return r ? `${r.flag ? r.flag + " " : ""}${r.short}` : code; };
+const regionName = (code: string) => regionByCode(code, regions)?.name ?? code;
+const regionFlag = (code: string) => regionByCode(code, regions)?.flag ?? "";
 
 // Department labels/icons for the by-department split (falls back before the
 // departments migration runs).
@@ -122,11 +134,22 @@ const curItemsAll = items.filter((i) => curIds.has(i.transaction_id));
 const prevItemsAll = items.filter((i) => prevIds.has(i.transaction_id));
 
 // Optional ?invType= scope (chips): report a single stock pool — e.g. only
-// "sold from My Personal Collection" at the expo.
+// "sold from My Personal Collection" at the expo. ?region= (a region code)
+// scopes to one market the same way — e.g. only Japanese imports.
 const invTypeFilter = Astro.url.searchParams.get("invType") ?? "";
-const inScope = (it: Item) => !invTypeFilter || inventoryTypeOf(it) === invTypeFilter;
-const curItems = invTypeFilter ? curItemsAll.filter(inScope) : curItemsAll;
-const prevItems = invTypeFilter ? prevItemsAll.filter(inScope) : prevItemsAll;
+const regionParam = (Astro.url.searchParams.get("region") ?? "").toUpperCase();
+const regionFilter = regionsOn(regions) && /^[A-Z0-9]{1,8}$/.test(regionParam) ? regionParam : "";
+const inScope = (it: Item) =>
+  (!invTypeFilter || inventoryTypeOf(it) === invTypeFilter) && (!regionFilter || lineRegionOf(it, regions) === regionFilter);
+const scoped = !!(invTypeFilter || regionFilter);
+const curItems = scoped ? curItemsAll.filter(inScope) : curItemsAll;
+const prevItems = scoped ? prevItemsAll.filter(inScope) : prevItemsAll;
+// Report links keep the other scope when one changes.
+const repHref = (o: { range?: string; invType?: string; region?: string }) => {
+  const range = o.range ?? sel.key, it = o.invType ?? invTypeFilter, rg = o.region ?? regionFilter;
+  return `/reports?range=${range}${it ? `&invType=${encodeURIComponent(it)}` : ""}${rg ? `&region=${encodeURIComponent(rg)}` : ""}`;
+};
+const scopeLabel = (invTypeFilter ? ` · ${invTypeLabel(invTypeFilter)} only` : "") + (regionFilter ? ` · ${regionName(regionFilter)} only` : "");
 
 const cur = summarize(curTxns, curItems, costOf, menuCostOf);
 const prev = summarize(prevTxns, prevItems, costOf, menuCostOf);
@@ -165,6 +188,20 @@ const typeRows = [...rollupBy(curItems, (it) => inventoryTypeOf(it), costOf, men
 const maxTypeRow = Math.max(1, ...typeRows.map((r) => r.net));
 // Chips: every type that exists (config) + any key seen in the data.
 const typeChipKeys = [...new Set([...(invTypeData ?? []).map((t: any) => t.key), ...typeRows.map((r) => r.key)])];
+
+// By region (market: US / PAL / JP…) — from the sale-line snapshot. Menu and
+// custom lines have no region (null key) and stay out, like the type rollup.
+const regionRows = regionsOn(regions)
+  ? [...rollupBy(curItems, (it) => lineRegionOf(it, regions), costOf, menuCostOf).entries()]
+    .filter(([key]) => key !== "—")
+    .map(([key, v]) => ({ key, name: regionName(key), flag: regionFlag(key), ...v }))
+    .sort((a, b) => b.net - a.net)
+  : [];
+const maxRegionRow = Math.max(1, ...regionRows.map((r) => r.net));
+// Chips: every active region + any code seen in the data.
+const regionChipKeys = regionsOn(regions)
+  ? [...new Set([...regions.filter((r) => r.isActive).map((r) => r.code), ...regionRows.map((r) => r.key)])]
+  : [];
 
 const empAgg = rollupBy(curItems, (it) => txnById.get(it.transaction_id)?.employee_id ?? null);
 const empTxnCount = new Map<string, Set<string>>();
@@ -243,7 +280,7 @@ const cEsc = (raw: string) => {
 };
 const d2 = (c: number) => (c / 100).toFixed(2);
 const csv =
-  `TimeLag sales report,${cEsc(rangeLabel + (invTypeFilter ? ` · ${invTypeLabel(invTypeFilter)} only` : ""))}\n\nSummary\nMetric,Value\n` +
+  `TimeLag sales report,${cEsc(rangeLabel + scopeLabel)}\n\nSummary\nMetric,Value\n` +
   `Gross sales,${d2(cur.grossSales)}\nDiscounts,${d2(cur.discounts)}\nReturns,${d2(cur.returns)}\n` +
   `Net sales,${d2(cur.netSales)}\nCost of goods,${d2(cur.cogs)}\nGross profit,${d2(cur.grossProfit)}\n` +
   `Margin %,${cur.marginPct.toFixed(1)}\nTransactions,${cur.txnCount}\nUnits sold,${cur.unitsSold}\n` +
@@ -253,13 +290,15 @@ const csv =
   deptRows.map((r) => `${cEsc(r.name)},${d2(r.net)},${r.units},${marginOf(r) ?? ""}`).join("\n") +
   `\n\nBy inventory type\nInventory type,Net,Units,Margin %\n` +
   typeRows.map((r) => `${cEsc(r.name)},${d2(r.net)},${r.units},${marginOf(r) ?? ""}`).join("\n") +
+  (regionRows.length ? `\n\nBy region\nRegion,Net,Units,Margin %\n` +
+    regionRows.map((r) => `${cEsc(r.name)},${d2(r.net)},${r.units},${marginOf(r) ?? ""}`).join("\n") : "") +
   `\n\nBy category\nCategory,Net,Units,Margin %\n` +
   catRows.map((r) => `${cEsc(r.name)},${d2(r.net)},${r.units},${marginOf(r) ?? ""}`).join("\n") +
   `\n\nBy employee\nEmployee,Net,Transactions\n` +
   empRows.map((r) => `${cEsc(r.name)},${d2(r.net)},${r.txns}`).join("\n") +
   `\n\nTop products\nProduct,Net,Units\n` +
   topProducts.map((r) => `${cEsc(r.name)},${d2(r.net)},${r.units}`).join("\n");
-const csvName = `timelag-report-${sel.key}${invTypeFilter ? `-${invTypeFilter}` : ""}.csv`;
+const csvName = `timelag-report-${sel.key}${invTypeFilter ? `-${invTypeFilter}` : ""}${regionFilter ? `-${regionFilter.toLowerCase()}` : ""}.csv`;
 
 const gaTraffic = false; // GA Data API not wired yet — see panel below.
 ---
@@ -267,20 +306,30 @@ const gaTraffic = false; // GA Data API not wired yet — see panel below.
 <AppLayout title="Reports" active="reports">
   <div slot="actions" class="rep-actions">
     {RANGES.map((r) => (
-      <a href={`/reports?range=${r.key}${invTypeFilter ? `&invType=${invTypeFilter}` : ""}`} class:list={["chip", { on: r.key === sel.key }]}>{r.label}</a>
+      <a href={repHref({ range: r.key })} class:list={["chip", { on: r.key === sel.key }]}>{r.label}</a>
     ))}
     <button id="rep-csv" class="btn btn-ghost btn-sm" type="button">⬇ CSV</button>
     <button id="rep-print" class="btn btn-ghost btn-sm" type="button">🖨 Print</button>
   </div>
 
-  <p class="muted rep-sub">Completed sales · <strong>{rangeLabel}</strong>{invTypeFilter ? ` · ${invTypeLabel(invTypeFilter)} only` : ""}{hasPrev ? " · vs. previous period" : ""}</p>
+  <p class="muted rep-sub">Completed sales · <strong>{rangeLabel}</strong>{scopeLabel}{hasPrev ? " · vs. previous period" : ""}</p>
 
   {typeChipKeys.length > 0 && (
     <div class="rep-actions" style="margin-bottom:1rem;">
       <span class="muted" style="font-size:0.8rem;">Stock pool:</span>
-      <a href={`/reports?range=${sel.key}`} class:list={["chip", { on: !invTypeFilter }]}>All</a>
+      <a href={repHref({ invType: "" })} class:list={["chip", { on: !invTypeFilter }]}>All</a>
       {typeChipKeys.map((k: string) => (
-        <a href={`/reports?range=${sel.key}&invType=${k}`} class:list={["chip", { on: invTypeFilter === k }]}>{invTypeIcon(k)} {invTypeLabel(k)}</a>
+        <a href={repHref({ invType: k })} class:list={["chip", { on: invTypeFilter === k }]}>{invTypeIcon(k)} {invTypeLabel(k)}</a>
+      ))}
+    </div>
+  )}
+
+  {regionChipKeys.length > 0 && (
+    <div class="rep-actions" style="margin-bottom:1rem;">
+      <span class="muted" style="font-size:0.8rem;">Region:</span>
+      <a href={repHref({ region: "" })} class:list={["chip", { on: !regionFilter }]}>All regions</a>
+      {regionChipKeys.map((k: string) => (
+        <a href={repHref({ region: k })} class:list={["chip", { on: regionFilter === k }]} title={regionName(k)}>{regionChipLabel(k)}</a>
       ))}
     </div>
   )}
@@ -326,6 +375,20 @@ const gaTraffic = false; // GA Data API not wired yet — see panel below.
         </div>
       )}
 
+      {/* ---- By region (market: US / PAL / JP…) ---- */}
+      {regionRows.length > 0 && (
+        <div class="pos-panel rep-block">
+          <h2>By region <span class="sub">— which market's releases sold</span></h2>
+          {regionRows.map((r) => (
+            <div class="hbar-row">
+              <span>{r.flag} {r.name} <span class="pill muted">{marginTxt(r)}</span> <span class="muted-2" style="font-size:0.78rem;">{r.units}u</span></span>
+              <div class="hbar-track"><div class="hbar-fill" style={`width:${Math.round((r.net / maxRegionRow) * 100)}%`}></div></div>
+              <span class="num">{fmt(r.net)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* ---- Sales trend ---- */}
       <div class="pos-panel rep-block">
         <h2>Sales trend <span class="sub">— net sales by {gran}</span></h2>
@@ -361,8 +424,8 @@ const gaTraffic = false; // GA Data API not wired yet — see panel below.
         {/* ---- Payment mix + trade-ins ---- */}
         <div class="pos-panel">
           <h2>Payments <span class="sub">— tender on sales</span></h2>
-          {invTypeFilter ? (
-            <p class="empty">Tender isn't split by stock pool — a single sale can mix pools on one payment. Clear the Stock pool filter to see payments.</p>
+          {scoped ? (
+            <p class="empty">Tender isn't split by stock pool or region — a single sale can mix them on one payment. Clear the Stock pool / Region filter to see payments.</p>
           ) : (
             <>
               {totalTender === 0 ? <p class="empty">No tender recorded.</p> : payRows.map((p) => (

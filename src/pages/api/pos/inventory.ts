@@ -1,6 +1,7 @@
 import type { APIRoute } from "astro";
 import { attachUpcs } from "../../../lib/upcFinder";
 import { canonicalUpc } from "../../../lib/upcMatch";
+import { loadRegions, regionsOn, regionOf, regionByCode, isDefaultRegion, defaultRegionCode, regionFromPlatform, type Region } from "../../../lib/regions";
 
 export const prerender = false;
 
@@ -59,10 +60,40 @@ export const POST: APIRoute = async ({ locals, request }) => {
     await attachUpcs(sb, productId, [upc], source, source === "import" ? "From the imported sheet" : null).catch(() => {});
   };
 
+  // Regions (migration 20261005000001): a listing's market is a field, not a
+  // "[PAL]" title tag. [] = not applied yet → every region key below is left
+  // out (PostgREST rejects unknown columns) and writes behave as before.
+  let regionsP: Promise<Region[]> | null = null;
+  const getRegions = () => (regionsP ??= hasCol("products", "region_code").then((ok) => (ok ? loadRegions(sb) : [])));
+  // The region a write puts a listing in (null = regions off → send no key).
+  // An import platform name ("PAL Nintendo Switch", "Super Famicom") names
+  // one: it beats the home region (the add form preselects it) but never a
+  // region picked on purpose, and its prefix leaves the platform.
+  const resolveRegion = async (platform: string | null, sent: unknown) => {
+    const regions = await getRegions();
+    if (!regionsOn(regions)) return null;
+    const pf = regionFromPlatform(platform, regions);
+    const picked = sent ? regionOf(String(sent), regions) : "";
+    const code = picked && !isDefaultRegion(picked, regions) ? picked : pf.code || picked || defaultRegionCode(regions);
+    const r = regionByCode(code, regions);
+    return { code, platform: pf.code && platform ? pf.platform : platform, slugTag: r && !r.isDefault ? r.short : "" };
+  };
+  // eBay's catalog lookup is EBAY_US, so an automatic UPC names the US
+  // release. A listing moved to another region drops those (entered / sheet
+  // UPCs stay — staff read them off the box) and its lookup status resets.
+  const resetUpcsForRegion = async (ids: string[]) => {
+    if (!ids.length || !(await hasCol("product_upcs", "id"))) return;
+    await sb.from("product_upcs").delete().in("product_id", ids).eq("source", "ebay");
+    await sb.from("products").update({ upc_status: null, upc_checked_at: null }).in("id", ids);
+  };
+
   // /shop/<slug> looks the slug up with maybeSingle(), so it MUST be unique:
-  // "mario-kart-64", else "…-<platform>", else a numeric suffix.
+  // "mario-kart-64", else "…-<platform>", else a numeric suffix. A new
+  // listing in another region carries its tag ("okami-hd-jp") — the home
+  // release usually has the plain slug already. Existing slugs never change.
   const slugify = (t: string) => t.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-  const uniqueSlug = async (title: string, platform: string | null) => {
+  const uniqueSlug = async (title0: string, platform: string | null, regionTag = "") => {
+    const title = regionTag ? `${title0} ${regionTag}` : title0;
     const base = slugify(title) || "item";
     const alt = platform ? slugify(`${title} ${platform}`) : "";
     // Both prefixes: the alt slug ("item-nintendo-ds") need not start with base.
@@ -221,10 +252,12 @@ export const POST: APIRoute = async ({ locals, request }) => {
         const { data } = await q.limit(1);
         return data?.[0] ?? null;
       };
-      // A live (not soft-deleted) listing with exactly this title + platform.
-      const findListing = async (title: string, platform: string | null) => {
+      // A live (not soft-deleted) listing with exactly this title + platform
+      // (+ region — a JP copy is its own listing, same title or not).
+      const findListing = async (title: string, platform: string | null, regionCode: string | null) => {
         let q = sb.from("products").select("id").eq("title", title);
         q = platform ? q.eq("platform", platform) : q.is("platform", null);
+        if (regionCode) q = q.eq("region_code", regionCode);
         if (!delErr) q = q.is("deleted_at", null);
         const { data } = await q.limit(1);
         return (data?.[0]?.id as string | undefined) ?? null;
@@ -285,8 +318,12 @@ export const POST: APIRoute = async ({ locals, request }) => {
         if (r.kind === "newVariant") {
           let productId = r.productId || (r.productRef ? createdByRef.get(String(r.productRef)) : "");
           // Its listing may have been created in an EARLIER attempt (the ref row
-          // replayed or failed after staging) — find it by title + platform.
-          if (!productId && r.productRef && r.title) productId = (await findListing(String(r.title).trim().slice(0, 200), r.platform ? String(r.platform).slice(0, 80) : null)) ?? "";
+          // replayed or failed after staging) — find it by title + platform + region.
+          if (!productId && r.productRef && r.title) {
+            const platform = r.platform ? String(r.platform).slice(0, 80) : null;
+            const rg = await resolveRegion(platform, r.regionCode);
+            productId = (await findListing(String(r.title).trim().slice(0, 200), rg ? rg.platform : platform, rg?.code ?? null)) ?? "";
+          }
           if (!productId) throw new Error(r.productRef ? "Its listing wasn't created (see the row it shares a listing with)" : "productId required");
           // Another row of a listing THIS import created: its UPC counts too
           // (the first row may not have had one).
@@ -297,18 +334,20 @@ export const POST: APIRoute = async ({ locals, request }) => {
         }
         if (r.kind === "newProduct") {
           const title = String(r.title ?? "").trim().slice(0, 200);
-          const platform = r.platform ? String(r.platform).slice(0, 80) : null;
+          const rg = await resolveRegion(r.platform ? String(r.platform).slice(0, 80) : null, r.regionCode);
+          const platform = rg ? rg.platform : r.platform ? String(r.platform).slice(0, 80) : null;
           if (!title || !r.categoryId) throw new Error("Title and category required");
-          // Same title + platform already listed (catalog on the client was
-          // stale)? Use it — one game, one listing.
-          const sameId = await findListing(title, platform);
+          // Same title + platform + region already listed (catalog on the
+          // client was stale)? Use it — one game, one listing.
+          const sameId = await findListing(title, platform, rg?.code ?? null);
           if (sameId) {
             if (r.ref) createdByRef.set(String(r.ref), sameId);
             if (r.tagPcId) await tagPc(sameId, r.tagPcId).catch(() => {});
             return onListing(sameId, true);
           }
           const { data: prod, error: pErr } = await sb.from("products").insert({
-            title, platform, category_id: r.categoryId, slug: await uniqueSlug(title, platform),
+            title, platform, category_id: r.categoryId, slug: await uniqueSlug(title, platform, rg?.slugTag),
+            ...(rg ? { region_code: rg.code } : {}),
             ...(r.tagPcId ? { tags: [`pricecharting:${String(r.tagPcId).slice(0, 40)}`] } : {}),
             // The sheet's own spelling when the title was corrected — stays searchable.
             ...(Array.isArray(r.altNames) && r.altNames.length ? { alternative_names: [...new Set(r.altNames.map((a: any) => String(a).trim().slice(0, 200)).filter((a: string) => a && a !== title))].slice(0, 5) } : {}),
@@ -690,11 +729,12 @@ export const POST: APIRoute = async ({ locals, request }) => {
       const supCol = supErr ? "" : ", supplier";
       const roCol = roErr ? "" : ", received_on";
       const kindCol = (await hasCol("inventory_entry_items", "kind")) ? ", kind, description" : "";
+      const rgCol = (await hasCol("products", "region_code")) ? ", region_code" : "";
       const stockedCols = (await hasCol("inventory_entry_items", "stocked_qty")) ? ", stocked_qty, stocked_variant_id" : "";
       const [{ data: entry }, { data: items, error }] = await Promise.all([
         sb.from("inventory_entries").select(`id, human_id, source, status, note, created_at, committed_at${otCol}${supCol}${roCol}, employee:profiles(full_name)`).eq("id", b.entryId).maybeSingle(),
         sb.from("inventory_entry_items")
-          .select(`id, qty_added, unit_cost_cents, price_cents_at_entry, was_new_variant, created_at${supCol}${kindCol}${stockedCols}, variant:product_variants(id, sku, internal_code${lcCol}, price_cents, quantity, completeness_code, grade_code, condition, inventory_type_id, location_id, product:products(title, platform, category:categories(name)))`)
+          .select(`id, qty_added, unit_cost_cents, price_cents_at_entry, was_new_variant, created_at${supCol}${kindCol}${stockedCols}, variant:product_variants(id, sku, internal_code${lcCol}, price_cents, quantity, completeness_code, grade_code, condition, inventory_type_id, location_id, product:products(title, platform${rgCol}, category:categories(name)))`)
           .eq("entry_id", b.entryId).order("created_at"),
       ]);
       if (!entry) return json({ error: "Entry not found." }, 404);
@@ -740,10 +780,25 @@ export const POST: APIRoute = async ({ locals, request }) => {
       if (b.categoryId !== undefined) patch.category_id = b.categoryId || null;
       if (b.description !== undefined) patch.description = b.description || null;
       if (b.imageUrl !== undefined) patch.image_url = b.imageUrl || null;
+      // Region: not sent = keep; unknown / empty = the home region.
+      const regions = await getRegions();
+      const rgOn = regionsOn(regions);
+      if (b.regionCode !== undefined && rgOn) patch.region_code = regionOf(String(b.regionCode ?? ""), regions);
       if (!Object.keys(patch).length) return json({ error: "Nothing to update" }, 400);
-      const { error } = await sb.from("products").update(patch).eq("id", b.id);
+      // The region before, to see whether this save moved the listing (a
+      // typed "[JP]" title tag moves it too — the database guard does that).
+      let before: string | null = null;
+      if (rgOn && (patch.region_code !== undefined || patch.title !== undefined)) {
+        const { data: cur } = await sb.from("products").select("region_code").eq("id", b.id).maybeSingle();
+        before = cur?.region_code ?? null;
+      }
+      const { data: saved, error } = await sb.from("products").update(patch).eq("id", b.id).select().maybeSingle();
       if (error) return json({ error: error.message }, 500);
-      return json({ ok: true });
+      // Moved off US: its automatic (eBay US catalog) UPC is another release's.
+      const upcReset = !!(rgOn && before && saved?.region_code && saved.region_code !== before && saved.region_code !== "US");
+      if (upcReset) await resetUpcsForRegion([b.id]);
+      // What was stored (the guard may have moved a title tag into the region).
+      return json({ ok: true, ...(saved ? { title: saved.title, ...(rgOn ? { regionCode: saved.region_code ?? "" } : {}) } : {}), upcReset });
     }
     case "addBarcode": {
       if (!b.variantId || !String(b.barcode ?? "").trim()) return json({ error: "Variant and barcode required" }, 400);
@@ -762,13 +817,19 @@ export const POST: APIRoute = async ({ locals, request }) => {
     }
     case "addProduct": {
       if (!String(b.title ?? "").trim() || !b.categoryId) return json({ error: "Title and category required" }, 400);
-      const slug = await uniqueSlug(String(b.title).trim(), b.platform || null);
+      // No region sent (eBay paste, older screens) → the platform's, else home.
+      const rg = await resolveRegion(b.platform || null, b.regionCode);
+      const platform: string | null = rg ? rg.platform : b.platform || null;
+      const slug = await uniqueSlug(String(b.title).trim(), platform, rg?.slugTag);
       const { data: prod, error: pErr } = await sb
         .from("products")
-        .insert({ title: String(b.title).trim(), platform: b.platform || null, franchise: b.franchise || null, category_id: b.categoryId, slug, ...(await pendingFor(b.stageEntryId)) })
+        .insert({ title: String(b.title).trim(), platform, franchise: b.franchise || null, category_id: b.categoryId, slug, ...(rg ? { region_code: rg.code } : {}), ...(await pendingFor(b.stageEntryId)) })
         .select()
         .single();
       if (pErr) return json({ error: pErr.message }, 500);
+      // What was stored, for the screen's copy: the platform may have lost its
+      // region prefix, and the guard moves a typed "[JP]" tag into the region.
+      const stored = { title: prod.title, platform: prod.platform ?? "", ...(rg ? { regionCode: prod.region_code ?? rg.code } : {}) };
       const { data: variant, error: vErr } = await sb
         .from("product_variants")
         .insert({
@@ -800,13 +861,13 @@ export const POST: APIRoute = async ({ locals, request }) => {
           price_cents_at_entry: variant.price_cents ?? 0, was_new_variant: true, applied: false,
         }).select("id").single();
         if (stErr) return json({ error: stErr.message }, 500);
-        return json({ ok: true, productId: prod.id, slug: prod.slug, variantId: variant.id, internalCode: variant.internal_code ?? "", itemId: st.id });
+        return json({ ok: true, productId: prod.id, slug: prod.slug, variantId: variant.id, internalCode: variant.internal_code ?? "", itemId: st.id, ...stored });
       }
       if (b.entryId && variant.quantity > 0) {
         await logReceive(b.entryId, variant.id, variant.quantity, variant.price_cents ?? 0,
           b.unitCostCents == null ? null : Math.max(0, Math.round(Number(b.unitCostCents)) || 0), true);
       }
-      return json({ ok: true, productId: prod.id, slug: prod.slug, variantId: variant.id, internalCode: variant.internal_code ?? "" });
+      return json({ ok: true, productId: prod.id, slug: prod.slug, variantId: variant.id, internalCode: variant.internal_code ?? "", ...stored });
     }
     case "addVariant": {
       if (!b.productId) return json({ error: "productId required" }, 400);
@@ -853,6 +914,22 @@ export const POST: APIRoute = async ({ locals, request }) => {
         .select("id");
       if (error) return json({ error: error.message }, 500);
       return json({ ok: true, updated: data?.length ?? 0 });
+    }
+    case "bulkSetRegion": {
+      // Move many listings to one region at once (e.g. imports the migration's
+      // backfill missed). Listings moved off US lose their automatic eBay UPC.
+      const ids: string[] = Array.isArray(b.productIds) ? b.productIds.filter(Boolean).map(String) : [];
+      if (!ids.length) return json({ error: "No items selected" }, 400);
+      const regions = await getRegions();
+      if (!regionsOn(regions)) return json({ error: "Run supabase/migrations/20261005000001_regions.sql in the Supabase SQL editor first." }, 400);
+      const code = regionOf(String(b.regionCode ?? ""), regions);
+      const { data: cur } = await sb.from("products").select("id, region_code").in("id", ids);
+      const moved = (cur ?? []).filter((p: any) => p.region_code !== code).map((p: any) => String(p.id));
+      const { data, error } = await sb.from("products").update({ region_code: code }).in("id", ids).select("id");
+      if (error) return json({ error: error.message }, 500);
+      const upcReset = code !== "US" ? moved : [];
+      await resetUpcsForRegion(upcReset);
+      return json({ ok: true, updated: data?.length ?? 0, regionCode: code, upcReset });
     }
     case "bulkDelete": {
       // Soft-delete: stamp deleted_at → items move to "Recently deleted" for

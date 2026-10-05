@@ -21,8 +21,22 @@ export function splitTitle(title: string): { main: string; sub: string | null } 
   while ((m = reW.exec(t))) { if (m.index >= 14) { if (best < 0 || m.index < best) best = m.index; break; } }
   if (best < 0) return { main: t, sub: null };
 
-  const main = t.slice(0, best).replace(/[\s\-|+/·,:;]+$/, "").trim();
-  const sub = t.slice(best).replace(/^[\s\-|+/·,:;]+/, "").trim();
+  // Never cut inside a bracket ("…Edition [Japan Import]" must not become
+  // "…Edition [" + "Japan Import]"): back the cut up to the unclosed "[" / "(".
+  const opens: number[] = [];
+  for (let i = 0; i < best; i++) {
+    if (t[i] === "[" || t[i] === "(") opens.push(i);
+    else if ((t[i] === "]" || t[i] === ")") && opens.length) opens.pop();
+  }
+  if (opens.length) best = opens[0];
+
+  const main = t.slice(0, best).replace(/[\s\-|+/·,:;[(]+$/, "").trim();
+  let sub = t.slice(best).replace(/^[\s\-|+/·,:;\])]+/, "").trim();
+  // A subtitle that is one whole bracket group reads better unwrapped; one
+  // whose bracket never closes (a cut-off eBay title) loses the stray opener.
+  const wrapped = sub.match(/^[[(]([^[\]()]*)[\])]$/);
+  if (wrapped) sub = wrapped[1].trim();
+  else if (/^[[(]/.test(sub) && !/[\])]/.test(sub)) sub = sub.slice(1).trim();
   if (main.length < 14 || sub.length < 3) return { main: t, sub: null };
   return { main, sub };
 }

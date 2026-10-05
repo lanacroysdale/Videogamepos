@@ -7,7 +7,7 @@ import { themeSettings, THEMES, SIDEBARS } from "../../lib/themeSettings";
 import { aiSettings, aiStatus, AI_PROVIDERS, AI_QUALITIES } from "../../lib/ai";
 import { barSettings } from "../../lib/barSettings";
 import { labelTemplates, LABEL_FONTS } from "../../lib/labels";
-import type { StoreDepartment, StoreInventoryType, StoreLocation } from "../../lib/types";
+import type { StoreDepartment, StoreInventoryType, StoreLocation, StoreRegion } from "../../lib/types";
 import { createSupabaseAdminClient } from "../../lib/supabase";
 import { PERMISSIONS, PERMISSION_GROUPS, loadRoles, roleName } from "../../lib/permissions";
 
@@ -76,6 +76,12 @@ if (canInvConfig) {
   invTypes = (itRows as StoreInventoryType[]) ?? [];
   locations = (locRows as StoreLocation[]) ?? [];
 }
+// Regions (US / PAL / Japan… tags). No table before migration 20261005000001
+// → [] → the Regions table shows a setup note and the label designer hides
+// its Region toggle (nothing prints one yet).
+const { data: rgRows } = await supabase.from("store_regions").select("*").order("sort_order").order("name");
+const regionRows: StoreRegion[] = (rgRows as StoreRegion[]) ?? [];
+const regionsOn = regionRows.length > 0;
 const aiSt = aiStatus(ai.provider);
 const aiProviderLabel = aiSt.provider === "gemini" ? "Gemini" : aiSt.provider === "anthropic" ? "Claude" : "";
 const minPriceDollars = (ls.lowStockMinPriceCents / 100).toFixed(2);
@@ -347,6 +353,49 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
         <button id="loc-add" class="btn btn-ghost btn-sm" type="button">+ Location</button>
         <span id="loc-status" class="muted"></span>
       </div>
+
+      <h3 class="set-subh">Regions</h3>
+      <p class="muted set-desc" style="margin-bottom:0.6rem;">
+        A listing's market — US, PAL, Japan… — kept as a tag on the listing instead of in its title. A badged region
+        shows its badge next to the title (POS + shop), prints after the platform on labels, and can be filtered and
+        sorted by. The <strong>default</strong> is your home market: it never shows a badge and new listings get it.
+        <strong>Aliases</strong> are the words that mean the region in import sheets, eBay listings and searches.
+      </p>
+      {regionRows.length === 0 ? (
+        <p class="muted">Run <code>supabase/migrations/20261005000001_regions.sql</code> in the Supabase SQL editor, then refresh.</p>
+      ) : (
+        <div class="rg-wrap">
+          <table class="tbl dept-tbl">
+            <thead><tr><th></th><th>Code</th><th>Name</th><th title="What the badge and labels show">Badge</th><th>Aliases</th><th title="Show the badge on listings in this region">Show badge</th><th title="Your home market — no badge; new listings get it">Default</th><th title="Off = hidden from region pickers and filters (tagged listings keep it)">Active</th><th class="dept-act-col"></th></tr></thead>
+            <tbody id="rg-body">
+              {regionRows.map((r) => (
+                <tr data-rg-id={r.id} data-code={r.code} data-name={r.name} data-short={r.short_tag} data-flag={r.flag ?? ""} data-aliases={(r.aliases ?? []).join(", ")} data-system={r.is_system ? "1" : "0"} data-default={r.is_default ? "1" : "0"}>
+                  <td class="dept-ico">{r.flag}</td>
+                  <td><strong>{r.code}</strong>{r.is_system && <span class="muted dept-core"> · core</span>}</td>
+                  <td>{r.name}</td>
+                  <td><span class:list={["rg-badge", { "rg-off": r.is_default || !r.show_badge }]} title={r.is_default ? "Default region — no badge" : undefined}>{r.flag ? `${r.flag} ` : ""}{r.short_tag}</span></td>
+                  <td class="muted"><span class="rg-aliases" title={(r.aliases ?? []).join(", ")}>{(r.aliases ?? []).join(", ")}</span></td>
+                  <td><input type="checkbox" class="dept-enabled rg-show" checked={r.show_badge} /></td>
+                  <td><input type="radio" name="rg-default" class="rg-default" checked={r.is_default} /></td>
+                  <td><input type="checkbox" class="dept-enabled rg-active" checked={r.is_active} disabled={r.is_default} title={r.is_default ? "The default region is always active" : undefined} /></td>
+                  <td class="dept-act-col">
+                    <button class="link-btn rg-up" type="button" title="Move up">▲</button>
+                    <button class="link-btn rg-down" type="button" title="Move down">▼</button>
+                    <button class="link-btn rg-edit" type="button">edit</button>
+                    {!r.is_system && <button class="link-btn rg-del" type="button">delete</button>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {regionRows.length > 0 && (
+        <div class="dept-actions">
+          <button id="rg-add" class="btn btn-ghost btn-sm" type="button">+ Region</button>
+          <span id="rg-status" class="muted"></span>
+        </div>
+      )}
     </div>
   )}
 
@@ -408,7 +457,7 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
             <div class="lt-group">
               <div class="lt-group-h">👁 Show on label</div>
               <div class="lt-toggles" id="lt-shows">
-                {["logo","title","category","condition","price","invType","location","sku","barcode","spineText","spineCondition"].map((k) => (
+                {["logo","title","category","region","condition","price","invType","location","sku","barcode","spineText","spineCondition"].filter((k) => k !== "region" || regionsOn).map((k) => (
                   <label><input type="checkbox" data-ltshow={k} /> {k === "invType" ? "Inv. type" : k === "sku" ? "SKU" : k === "spineText" ? "Tagline" : k === "spineCondition" ? "Condition on spine" : k[0].toUpperCase() + k.slice(1)}</label>
                 ))}
               </div>
@@ -469,6 +518,30 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
           <button id="lm-save" class="btn btn-primary btn-sm" type="button">Save</button>
           <button id="lm-cancel" class="btn btn-ghost btn-sm" type="button">Cancel</button>
           <span id="lm-status" class="muted-2"></span>
+        </div>
+      </div>
+    </div>
+  )}
+
+  {canInvConfig && regionsOn && (
+    <div class="dept-modal" id="rg-modal" hidden>
+      <div class="dept-modal-card">
+        <h3 id="rgm-title">New region</h3>
+        <input type="hidden" id="rgm-id" />
+        <div class="dm-grid">
+          <label class="dm-field">Code<input id="rgm-code" maxlength="8" placeholder="JP" autocomplete="off" style="text-transform:uppercase;" /></label>
+          <label class="dm-field">Badge text<input id="rgm-short" maxlength="10" placeholder="JP" autocomplete="off" /></label>
+          <label class="dm-field">Flag <span class="muted-2">(emoji)</span><input id="rgm-flag" maxlength="16" placeholder="🇯🇵" autocomplete="off" /></label>
+        </div>
+        <p class="muted-2" id="rgm-system-note" hidden>Core region — its code can't change (listings, links and past sales use it).</p>
+        <label class="dm-field">Name<input id="rgm-name" autocomplete="off" placeholder="Japan (NTSC-J)" /></label>
+        <label class="dm-field">Aliases <span class="muted-2">— comma-separated words that mean this region</span><textarea id="rgm-aliases" rows="3" placeholder="japan, japanese, ntsc j, japan import"></textarea></label>
+        <label class="dm-toggle"><input type="checkbox" id="rgm-show" checked /> Show a badge on listings (never on the default region)</label>
+        <label class="dm-toggle"><input type="checkbox" id="rgm-active" checked /> Active — offered in region pickers and filters</label>
+        <div class="dm-actions">
+          <button id="rgm-save" class="btn btn-primary btn-sm" type="button">Save</button>
+          <button id="rgm-cancel" class="btn btn-ghost btn-sm" type="button">Cancel</button>
+          <span id="rgm-status" class="muted-2"></span>
         </div>
       </div>
     </div>
@@ -723,7 +796,7 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       </div>
     </div>
   )}
-  <textarea id="lt-data" hidden set:text={JSON.stringify({ templates: lblTemplates, storeName })}></textarea>
+  <textarea id="lt-data" hidden set:text={JSON.stringify({ templates: lblTemplates, storeName, regionsOn })}></textarea>
 </AppLayout>
 
 <style>
@@ -811,9 +884,16 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   .dept-modal-card h3 { margin: 0; }
   .dm-grid { display: flex; gap: 0.7rem; flex-wrap: wrap; }
   .dm-field { display: grid; gap: 0.25rem; font-size: 0.82rem; font-weight: 600; flex: 1; min-width: 120px; }
-  .dm-field input, .dm-field select { font: inherit; font-weight: 400; padding: 0.45rem 0.55rem; background: var(--bg); color: var(--text); border: 1px solid var(--border-strong); }
+  .dm-field input, .dm-field select, .dm-field textarea { font: inherit; font-weight: 400; padding: 0.45rem 0.55rem; background: var(--bg); color: var(--text); border: 1px solid var(--border-strong); }
+  .dm-field textarea { resize: vertical; min-height: 3.6rem; }
   .dm-toggle { display: flex; align-items: center; gap: 0.4rem; font-size: 0.9rem; }
   .dm-actions { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.3rem; }
+  /* Regions table — wide; scrolls sideways on a phone instead of the page. */
+  .rg-wrap { overflow-x: auto; }
+  .rg-wrap .dept-tbl { min-width: 640px; }
+  .rg-aliases { display: block; font-size: 0.78rem; max-width: 16rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rg-off { opacity: 0.35; }
+  .rg-up, .rg-down { font-size: 0.7rem; }
 
   /* Label template designer — preview on top, fields below */
   .lt-layout { display: flex; flex-direction: column; gap: 1.1rem; }
@@ -1296,6 +1376,91 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       if (!confirm(`Delete location “${tr.dataset.key}”?`)) return;
       try { await icApi({ action: "deleteLocation", id: tr.dataset.locId }); location.reload(); } catch (e: any) { alert(e.message); }
     }));
+
+    // Regions. The quick toggles re-save the whole row (saveRegion) from its
+    // data attributes, so there's one write path for a region.
+    const rgStatus = document.getElementById("rg-status");
+    const rgRow = (tr: HTMLElement) => ({
+      action: "saveRegion", id: tr.dataset.rgId, code: tr.dataset.code, name: tr.dataset.name,
+      shortTag: tr.dataset.short, flag: tr.dataset.flag, aliases: tr.dataset.aliases,
+      showBadge: (tr.querySelector(".rg-show") as HTMLInputElement).checked,
+      isActive: (tr.querySelector(".rg-active") as HTMLInputElement).checked,
+    });
+    const rgSay = (t: string) => { if (rgStatus) rgStatus.textContent = t; };
+    invPanel.querySelectorAll<HTMLInputElement>(".rg-show, .rg-active").forEach((cb) => cb.addEventListener("change", async () => {
+      const tr = cb.closest("tr") as HTMLElement;
+      rgSay("Saving…");
+      try {
+        await icApi(rgRow(tr));
+        rgSay("✓ Saved");
+        tr.querySelector(".rg-badge")?.classList.toggle("rg-off", tr.dataset.default === "1" || !(tr.querySelector(".rg-show") as HTMLInputElement).checked);
+      } catch (e: any) { cb.checked = !cb.checked; rgSay(""); alert(e.message); }
+    }));
+    invPanel.querySelectorAll<HTMLInputElement>(".rg-default").forEach((r) => r.addEventListener("change", async () => {
+      const tr = r.closest("tr") as HTMLElement;
+      const prev = invPanel.querySelector<HTMLInputElement>('tr[data-default="1"] .rg-default');
+      const prevName = (prev?.closest("tr") as HTMLElement | null)?.dataset.name;
+      if (!confirm(`Make ${tr.dataset.name} the default region?\n\nIt stops showing a badge and new listings get it${prevName ? `; ${prevName} starts showing its badge` : ""}. Existing listings keep the region they have.`)) {
+        r.checked = false;
+        if (prev) prev.checked = true;
+        return;
+      }
+      rgSay("Saving…");
+      try { await icApi({ action: "setDefaultRegion", id: tr.dataset.rgId }); location.reload(); }
+      catch (e: any) { rgSay(""); alert(e.message); location.reload(); }
+    }));
+    // ▲ / ▼ — the order regions are listed in (filters, pickers; the default
+    // always sorts first).
+    invPanel.querySelectorAll<HTMLButtonElement>(".rg-up, .rg-down").forEach((b) => b.addEventListener("click", async () => {
+      const tr = b.closest("tr") as HTMLElement;
+      const body = tr.parentElement!;
+      if (b.classList.contains("rg-up")) { if (tr.previousElementSibling) body.insertBefore(tr, tr.previousElementSibling); else return; }
+      else { if (tr.nextElementSibling) body.insertBefore(tr.nextElementSibling, tr); else return; }
+      rgSay("Saving…");
+      try {
+        await icApi({ action: "reorderRegions", ids: [...body.querySelectorAll<HTMLElement>("tr[data-rg-id]")].map((x) => x.dataset.rgId) });
+        rgSay("✓ Order saved");
+      } catch (e: any) { rgSay(""); alert(e.message); location.reload(); }
+    }));
+    const rgModal = document.getElementById("rg-modal");
+    function openRegion(tr?: HTMLElement) {
+      (document.getElementById("rgm-title") as HTMLElement).textContent = tr ? "Edit region" : "New region";
+      const core = tr?.dataset.system === "1";
+      iq("rgm-id").value = tr?.dataset.rgId || "";
+      iq("rgm-code").value = tr?.dataset.code || "";
+      iq("rgm-code").disabled = core;
+      (document.getElementById("rgm-system-note") as HTMLElement).hidden = !core;
+      iq("rgm-short").value = tr?.dataset.short || "";
+      iq("rgm-flag").value = tr?.dataset.flag || "";
+      iq("rgm-name").value = tr?.dataset.name || "";
+      iq("rgm-aliases").value = tr?.dataset.aliases || "";
+      iq("rgm-show").checked = tr ? (tr.querySelector(".rg-show") as HTMLInputElement).checked : true;
+      iq("rgm-active").checked = tr ? (tr.querySelector(".rg-active") as HTMLInputElement).checked : true;
+      iq("rgm-active").disabled = tr?.dataset.default === "1";
+      document.getElementById("rgm-status")!.textContent = "";
+      if (rgModal) rgModal.hidden = false;
+    }
+    document.getElementById("rg-add")?.addEventListener("click", () => openRegion());
+    invPanel.querySelectorAll<HTMLButtonElement>(".rg-edit").forEach((b) => b.addEventListener("click", () => openRegion(b.closest("tr") as HTMLElement)));
+    document.getElementById("rgm-cancel")?.addEventListener("click", () => { if (rgModal) rgModal.hidden = true; });
+    rgModal?.addEventListener("click", (e) => { if (e.target === rgModal) rgModal.hidden = true; });
+    document.getElementById("rgm-save")?.addEventListener("click", async () => {
+      const code = iq("rgm-code").value.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+      const name = iq("rgm-name").value.trim();
+      if (!code || !name) { alert("Region needs a code (letters/digits, e.g. JP) and a name."); return; }
+      document.getElementById("rgm-status")!.textContent = "Saving…";
+      try {
+        await icApi({ action: "saveRegion", id: iq("rgm-id").value || undefined, code, name,
+          shortTag: iq("rgm-short").value.trim(), flag: iq("rgm-flag").value.trim(), aliases: iq("rgm-aliases").value,
+          showBadge: iq("rgm-show").checked, isActive: iq("rgm-active").checked });
+        location.reload();
+      } catch (e: any) { document.getElementById("rgm-status")!.textContent = ""; alert(e.message); }
+    });
+    invPanel.querySelectorAll<HTMLButtonElement>(".rg-del").forEach((b) => b.addEventListener("click", async () => {
+      const tr = b.closest("tr") as HTMLElement;
+      if (!confirm(`Delete region “${tr.dataset.name}”?`)) return;
+      try { await icApi({ action: "deleteRegion", id: tr.dataset.rgId }); location.reload(); } catch (e: any) { alert(e.message); }
+    }));
   }
 
   // ---- Label template designer (managers) ----
@@ -1306,6 +1471,8 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     let sel = Math.max(0, lts.findIndex((t: any) => t.isDefault));
     const SAMPLE = {
       title: "Mega Man X3", categoryName: "Super Nintendo", condShort: "CIB · ★★★",
+      // Shows where a region tag lands (after the platform) once regions exist.
+      region: blob.regionsOn ? "JP" : "",
       priceCents: 26000, invTypeName: "Retail", locationKey: "PDX",
       // Real code lengths: 10-digit numeric label code (compact Code 128C —
       // what actually prints) + the 12-char internal fallback.
@@ -1504,7 +1671,7 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     [/^Team/, "👥", "Invite · roles · remove"],
     [/^Roles/, "🔐", "Who can do what — per-role matrix"],
     [/^Departments/, "🏢", "Retail / F&B / Arcade — governed"],
-    [/^Inventory types/, "📦", "Stock pools · locations · expo block"],
+    [/^Inventory types/, "📦", "Stock pools · locations · regions · expo block"],
     [/^Label templates/, "🏷️", "Barcode price-tag designer"],
     [/^Appearance/, "🎨", "Themes & sidebar accent"],
     [/^Low-stock/, "📉", "“Only N left” web badge"],

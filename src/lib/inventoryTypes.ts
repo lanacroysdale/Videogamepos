@@ -1,7 +1,7 @@
 // Inventory-type helpers shared by the website gate (shop / PDP / feed / eBay)
-// and the checkout stamp/block pass. Types are a small table — fetch fresh per
-// request; never cache flags for enforcement (the expo toggle must bite
-// immediately).
+// and the checkout stamp/block pass (+ the sale-line region stamp). Types are a
+// small table — fetch fresh per request; never cache flags for enforcement (the
+// expo toggle must bite immediately).
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 type Client = SupabaseClient<any, any, any>;
@@ -41,6 +41,31 @@ export async function typeMapByVariant(
   for (const v of data as any[]) {
     const t = v.inventory_type;
     if (t) map.set(v.id, { key: t.key, name: t.name, block_at_checkout: !!t.block_at_checkout, allow_website_sync: !!t.allow_website_sync });
+  }
+  return { ready: true, map };
+}
+
+// variant_id → its listing's region code, for the transaction_items.region
+// sale snapshot (reports "by region" survive later edits). Both columns ship in
+// migration 20261005000001; `ready` is false until BOTH exist, and callers must
+// then OMIT the region key (same reason as inventory_type above).
+export async function regionMapByVariant(
+  client: Client,
+  variantIds: string[],
+): Promise<{ ready: boolean; map: Map<string, string> }> {
+  const map = new Map<string, string>();
+  const ids = [...new Set(variantIds.filter(Boolean))];
+  if (!ids.length) return { ready: false, map };
+  const { error: colErr } = await client.from("transaction_items").select("region").limit(1);
+  if (colErr) return { ready: false, map };
+  const { data, error } = await client
+    .from("product_variants")
+    .select("id, product:products(region_code)")
+    .in("id", ids);
+  if (error || !data) return { ready: false, map };
+  for (const v of data as any[]) {
+    const code = v.product?.region_code;
+    if (code) map.set(v.id, String(code));
   }
   return { ready: true, map };
 }

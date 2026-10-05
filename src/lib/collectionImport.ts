@@ -14,12 +14,15 @@ import { PLATFORM_ALIASES, resolveStaticPlatforms, platformNameExact, withoutTra
 // Built-in platform names — catalog-only spellings are treated more strictly.
 const BUILTIN = new Set(PLATFORM_ALIASES.map((p) => p.canonical));
 import { barcodeEq } from "./gtin";
+import {
+  type Region, regionsOn, regionOf, isDefaultRegion, regionFromText, regionFromPlatform, regionFromEbayAspect, splitTitleRegion,
+} from "./regions";
 
 /* ---------------- Column detection ---------------- */
 
 export type ColumnKey =
   | "title" | "platform" | "condition" | "grade" | "qty" | "price" | "pcValue" | "cost" | "upc" | "pcId" | "notes" | "folder"
-  | "loosePrice" | "cibPrice" | "newPrice" | "gradedPrice";
+  | "loosePrice" | "cibPrice" | "newPrice" | "gradedPrice" | "region";
 export type ColumnMap = Partial<Record<ColumnKey, number>>;
 
 export const COLUMN_DEFS: { key: ColumnKey; label: string; required?: boolean; aliases: string[] }[] = [
@@ -44,6 +47,8 @@ export const COLUMN_DEFS: { key: ColumnKey; label: string; required?: boolean; a
   { key: "newPrice", label: "New price", aliases: ["new price", "new", "sealed price", "new value", "brand new price"] },
   { key: "gradedPrice", label: "Graded price", aliases: ["graded price", "graded", "graded value"] },
   { key: "folder", label: "Folder", aliases: ["folder", "collection folder"] },
+  // US / PAL / Japan… — wins over the platform name and a title tag.
+  { key: "region", label: "Region", aliases: ["region", "region code", "market"] },
 ];
 
 /** Lowercase, strip accents/punctuation, "&"→"and", collapse whitespace. */
@@ -84,6 +89,8 @@ export function detectColumns(header: string[]): ColumnMap {
   // Only an explicitly-PriceCharting header survives on a non-PriceCharting
   // sheet — "eBay Product ID" / "Shopify Product ID" (contains-pass hits) don't.
   if (map.pcId != null && !/^(pricecharting id|price charting id|pc id|pricecharting product id)$/.test(hs[map.pcId]) && !pcExport) delete map.pcId;
+  // "Market price" / "Market value" are money, not the market (region).
+  if (map.region != null && /price|value|cost|pennies|cents/.test(hs[map.region])) delete map.region;
   return map;
 }
 
@@ -143,17 +150,18 @@ export function parseQty(raw: string): number {
 }
 
 const REGION_RE = /(^| )(pal|jp|jpn|japan|japanese|asian english|asia|eu|europe|uk|ntsc j)( |$)/;
-const IMPLIED_JP_RE = /(^| )(super famicom|famicom|famicom disk system|sfc|pc engine|pc engine cd|pc engine duo)( |$)/;
 
-/** Canonical platform for free text like "Switch - Nintendo" / "PAL Nintendo 64". */
-export function resolvePlatform(raw: string, platforms: PlatformAlias[]): { canonical: string | null; region: string | null } {
+/** Canonical platform for free text like "Switch - Nintendo" / "PAL Nintendo 64".
+ *  `region` is a region CODE ("PAL", "JP") the name implies, else null. */
+export function resolvePlatform(raw: string, platforms: PlatformAlias[], regions?: Region[] | null): { canonical: string | null; region: string | null } {
   let s = " " + norm(raw) + " ";
   if (!s.trim()) return { canonical: null, region: null };
   let region: string | null = null;
   const rm = s.match(REGION_RE);
-  if (rm) { region = rm[2].toUpperCase().replace("JAPANESE", "JP").replace("JAPAN", "JP").replace("JPN", "JP").replace("NTSC J", "JP"); s = s.replace(REGION_RE, " "); }
-  // PriceCharting names Japanese consoles without a "JP" prefix.
-  else if (IMPLIED_JP_RE.test(s)) region = "JP";
+  if (rm) { region = regionFromText(rm[2], regions) || null; s = s.replace(REGION_RE, " "); }
+  // PriceCharting names Japanese consoles without a "JP" prefix (Super
+  // Famicom, PC Engine, WonderSwan…).
+  else region = regionFromPlatform(raw, regions).code || null;
   // Built-in platforms first, by their OWN aliases only — a catalog spelling
   // ("Nintendo Game Boy", "Microsoft Xbox") must never outrank a longer
   // platform ("… Game Boy Color", "… Xbox 360"). A catalog-ONLY spelling
@@ -235,7 +243,7 @@ export interface ImportRow {
   platform: string;          // canonical (or raw when unresolvable)
   platformRaw: string;
   platformResolved: boolean;
-  region: string | null;
+  region: string;            // region CODE, always explicit (the default when nothing says otherwise)
   completenessCode: string;
   gradeCode: string;
   gradeFromSheet: boolean;   // the sheet named a grade (else gradeCode is the default)
@@ -264,6 +272,10 @@ export interface BuildOpts {
   cents?: Partial<Record<ColumnKey, boolean>>;
   /** Only rows in this folder; "" = rows with no folder; null/undefined = all. */
   folder?: string | null;
+  /** The store's regions ([] / missing = before the migration: legacy "[PAL]" title tags). */
+  regions?: Region[];
+  /** Region for rows nothing in the sheet places ("" = the store's default). */
+  defaultRegion?: string;
 }
 
 const fmtCents = (c: number) => "$" + (c / 100).toFixed(2);
@@ -297,9 +309,10 @@ export function itemKind(title: string, platform: string): ImportRow["kind"] {
   return "";
 }
 
-/** Rows that would create the SAME new listing (one game, several conditions). */
-export const newListingKey = (row: { title: string; platform: string }) =>
-  `${row.title.toLowerCase().replace(/\s+/g, " ").trim()}|${(row.platform || "").toLowerCase()}`;
+/** Rows that would create the SAME new listing (one game, several conditions)
+ *  — a JP copy is its own listing. */
+export const newListingKey = (row: { title: string; platform: string; region?: string | null }) =>
+  `${row.title.toLowerCase().replace(/\s+/g, " ").trim()}|${(row.platform || "").toLowerCase()}|${(row.region || "").toUpperCase()}`;
 
 /** A spreadsheet's totals row ("Total", "Grand total", …) with no platform. */
 export function isSummaryRow(title: string, platform: string): boolean {
@@ -320,7 +333,7 @@ export function buildRows(records: string[][], map: ColumnMap, opts: BuildOpts):
     if (opts.folder != null && folder !== opts.folder) return;
     const warnings: string[] = [];
     const platformRaw = cell(rec, "platform");
-    const pr = resolvePlatform(platformRaw, opts.platforms);
+    const pr = resolvePlatform(platformRaw, opts.platforms, opts.regions);
     if (platformRaw && !pr.canonical) warnings.push(`Platform “${platformRaw}” not recognized — kept as typed`);
     if (!platformRaw) warnings.push("No platform");
     const conditionRaw = cell(rec, "condition");
@@ -358,12 +371,28 @@ export function buildRows(records: string[][], map: ColumnMap, opts: BuildOpts):
     if (PARTS_RE.test(title0)) warnings.push("Title says it's defective / for parts — check the grade");
     const kind = itemKind(title0, platformRaw);
     let title = title0.replace(/\s+/g, " ");
-    // One spelling per market ("Europe" / "UK" / "EU" → [PAL]) so later
+    // Region: the sheet's Region column, else the platform ("PAL Nintendo
+    // Switch", "Super Famicom"), else a title tag ("Okami HD [JP]"), else the
+    // dialog's "Region when blank", else the store's home region.
+    const rOn = regionsOn(opts.regions);
+    const split = splitTitleRegion(title, opts.regions);
+    const regionRaw = cell(rec, "region");
+    const sheetRegion = regionRaw ? regionFromText(regionRaw, opts.regions) || regionFromEbayAspect(regionRaw, opts.regions) : "";
+    if (regionRaw && !sheetRegion) warnings.push(`Region “${regionRaw}” isn't one of the store's regions (“Region Free” isn't a market) — used the platform / title / default instead`);
+    const said = [...new Set([sheetRegion, pr.region || "", split.code].filter(Boolean))];
+    const region = regionOf(said[0] || opts.defaultRegion, opts.regions);
+    if (said.length > 1) warnings.push(`The sheet names more than one region (${said.join(" vs ")}) — used ${region}`);
+    if (rOn && !said.length && isDefaultRegion(region, opts.regions) && /(^| )(mega drive|megadrive|mega cd)( |$)/.test(norm(platformRaw))) warnings.push(`“${platformRaw}” is the PAL / Japanese name — check the region (used ${region})`);
+    // The region is the listing's field: never a title tag.
+    if (rOn) title = split.title;
+    // Before the regions migration the title tag is the only record of it —
+    // one spelling per market ("Europe" / "UK" / "EU" → [PAL]) so later
     // imports of the same region land on this listing.
-    if (pr.region && pr.region !== "NTSC") title = `${title} [${regionCode(pr.region)}]`;
+    else if (!isDefaultRegion(region, opts.regions) && !split.code) title = `${title} [${region}]`;
     const row: ImportRow = {
       n: i + 1, title,
-      platform: pr.canonical || platformRaw, platformRaw, platformResolved: !!pr.canonical, region: pr.region,
+      // An unrecognized platform keeps its words, less a region prefix the region field now holds.
+      platform: pr.canonical || (rOn ? regionFromPlatform(platformRaw, opts.regions).platform : platformRaw), platformRaw, platformResolved: !!pr.canonical, region,
       completenessCode, gradeCode, gradeFromSheet: !!cond.gradeCode, conditionRaw,
       qty: parseQty(cell(rec, "qty")),
       // PriceCharting writes 0 when no cost basis was entered → unknown, not free.
@@ -372,8 +401,8 @@ export function buildRows(records: string[][], map: ColumnMap, opts: BuildOpts):
       notes: cell(rec, "notes"), folder, pcValueCents, kind, lot: LOT_WORDS_RE.test(title0), warnings,
     };
     if (row.qty > 50) row.warnings.push(`Qty ${row.qty} looks high — check the Qty column`);
-    // Same title + platform + condition twice in the sheet → one line, summed qty.
-    const key = [norm(row.title), norm(row.platform), row.completenessCode, row.gradeCode].join("|");
+    // Same title + platform + region + condition twice in the sheet → one line, summed qty.
+    const key = [norm(row.title), norm(row.platform), row.region, row.completenessCode, row.gradeCode].join("|");
     const dup = byKey.get(key);
     if (dup) {
       // One stock row has one price: keep the first, but say so when the
@@ -420,6 +449,9 @@ export interface CatalogProduct {
   pcId?: string;
   /** The listing's UPCs (shared by every condition). */
   upcs?: string[];
+  /** products.region_code; undefined / "" = the column isn't there yet →
+   *  read from a title tag / regional platform name (else the default). */
+  regionCode?: string;
   variants: CatalogVariant[];
 }
 export interface Candidate { product: CatalogProduct; score: number }
@@ -436,11 +468,11 @@ export const REVIEW_MATCH = 0.6;
 
 const stripBrackets = (s: string) => s.replace(/\[[^\]]*\]|\([^)]*\)/g, " ");
 // Bracket qualifiers that DON'T make a different product (reprint labels,
-// condition words, the region tag we append ourselves).
+// condition words, region tags).
 const BENIGN_QUALS = new Set(["greatest hits", "players choice", "player s choice", "nintendo selects", "platinum hits", "platinum", "reprint", "cib", "complete", "loose", "sealed", "new", "used", "ntsc", "ntsc u", "us", "usa", "pal", "jp", "japan", "eu"]);
 /** "Wii Nunchuk [White]" → "white"; edition / colour / variant qualifiers only. */
-// Region tags are compared separately (regionCode), so they're not qualifiers.
-const qualifiers = (s: string) => (s.match(/\[[^\]]*\]|\([^)]*\)/g) || []).map(norm).filter((q) => q && !BENIGN_QUALS.has(q) && !REGION_CODE[q]).sort().join("|");
+// Region tags are compared separately (the region field), so they're not qualifiers.
+const qualifiers = (s: string) => (s.match(/\[[^\]]*\]|\([^)]*\)/g) || []).map(norm).filter((q) => q && !BENIGN_QUALS.has(q) && !regionFromText(q)).sort().join("|");
 const dropArticle = (s: string) => s.replace(/^(the|a|an) /, "").replace(/ (the|a|an)$/, "");
 const bigrams = (s: string) => {
   const t = " " + s + " ";
@@ -459,13 +491,12 @@ function dice(a: Map<string, number>, b: Map<string, number>): number {
 // Arabic AND roman numerals: "Final Fantasy VII" vs "VIII" must never auto-match.
 const numbers = (s: string) => (s.match(/\b(?:\d+|(?=[ivx])x{0,3}(?:ix|iv|v?i{0,3}))\b/g) || []).filter(Boolean).join(",");
 
-// Region tags → one code per market, so "[EU]" and "PAL" compare equal.
-const REGION_CODE: Record<string, string> = { pal: "PAL", eu: "PAL", europe: "PAL", uk: "PAL", jp: "JP", jpn: "JP", japan: "JP", japanese: "JP", "ntsc j": "JP", asia: "ASIA", "asian english": "ASIA" };
-const regionCode = (r: string | null | undefined) => (r ? REGION_CODE[norm(r)] ?? norm(r).toUpperCase() : "");
-/** The market a title's bracket tag names: "Okami HD [JP]" → "JP", else "". */
+/** The IMPORT market a title's bracket tag names: "Okami HD [JP]" /
+ *  "… [Japan Import]" → "JP", else "" ("(USA)" too). Legacy titles from before
+ *  the region field, eBay / game-database names. */
 export const titleRegion = (t: string) => {
-  for (const q of (t.match(/\[[^\]]*\]|\([^)]*\)/g) || []).map(norm)) if (REGION_CODE[q]) return REGION_CODE[q];
-  return "";
+  const code = splitTitleRegion(t).code;
+  return code && !isDefaultRegion(code, null) ? code : "";
 };
 
 /* ---------------- Official titles (typo correction) ---------------- */
@@ -479,12 +510,17 @@ export const OFFICIAL_TITLE_SIM = 0.6;
  * ("The Legend of Zelda Links Aweakening" → "The Legend of Zelda: Link's
  * Awakening"). Safety: similar enough, and the NUMBERS must agree — "Mario
  * Party 8" never becomes "Mario Party 9". Bracket qualifiers ([Collector's
- * Edition], [JP]) aren't part of the game name, so they're carried over.
+ * Edition]) aren't part of the game name, so they're carried over — region
+ * tags never are (the region is the listing's field). The database names the
+ * North American release, so a title tagged as an import ([JP], [PAL]) is
+ * left alone: renaming it would also drop the only record of its region
+ * before the regions migration.
  */
 export function officialTitleFor(original: string, candidate: { name: string; sim: number } | null | undefined, platform?: string | null): string | null {
   if (!candidate?.name || !(candidate.sim >= OFFICIAL_TITLE_SIM)) return null;
+  if (titleRegion(original)) return null;
   const official = candidate.name.trim();
-  const quals = (original.match(/\[[^\]]*\]|\([^)]*\)/g) || []).join(" ");
+  const quals = (original.match(/\[[^\]]*\]|\([^)]*\)/g) || []).filter((q) => !regionFromText(q.slice(1, -1))).join(" ");
   // The row's own platform on the end isn't part of the name ("Street Fighter
   // II Super Nintendo"); the lookup was made without it too.
   const bareOrig = withoutTrailingPlatform(original.replace(/\[[^\]]*\]|\([^)]*\)/g, " ").replace(/\s+/g, " ").trim(), platform);
@@ -601,20 +637,23 @@ const STOP_WORDS = new Set(["the", "and", "n", "for", "of", "a", "an", "in", "on
 interface Prepared {
   product: CatalogProduct;
   platforms: string[]; // every platform the listing names ("GameCube, Wii" → both)
-  region: string; // "" = NTSC/US; "JP" / "PAL" from a title tag or the platform ("Super Famicom")
+  region: string; // region code (explicit — the default when the listing has none)
   names: { full: string; bare: string; grams: Map<string, number>; nums: string; quals: string }[];
 }
 
-export function prepareCatalog(catalog: CatalogProduct[], platforms: PlatformAlias[]): Prepared[] {
+export function prepareCatalog(catalog: CatalogProduct[], platforms: PlatformAlias[], regions?: Region[] | null): Prepared[] {
   return catalog.map((product) => {
     const names = [product.title, ...(product.altNames || [])].filter(Boolean).map((t) => {
       const full = dropArticle(norm(t));
       const bare = dropArticle(norm(stripBrackets(t))) || full;
       return { full, bare, grams: bigrams(bare), nums: numbers(bare), quals: qualifiers(t) };
     });
-    const rp = resolvePlatform(product.platform || "", platforms);
+    const rp = resolvePlatform(product.platform || "", platforms, regions);
     const all = resolveStaticPlatforms(product.platform);
-    return { product, platforms: all.length ? all : rp.canonical ? [rp.canonical] : [], region: titleRegion(product.title) || regionCode(rp.region), names };
+    // The listing's region field; before the migration (undefined / "") a
+    // title tag or a regional platform name ("Super Famicom").
+    const region = product.regionCode || titleRegion(product.title) || rp.region || "";
+    return { product, platforms: all.length ? all : rp.canonical ? [rp.canonical] : [], region: regionOf(region, regions), names };
   });
 }
 
@@ -654,9 +693,10 @@ export function pickVariant(product: CatalogProduct, completenessCode: string, g
   return same.find((v) => (v.gradeCode || "") === (gradeCode || "")) || same[0];
 }
 
-export function matchRow(row: ImportRow, prepared: Prepared[], platforms: PlatformAlias[], inventoryTypeId = ""): RowMatch {
+export function matchRow(row: ImportRow, prepared: Prepared[], platforms: PlatformAlias[], inventoryTypeId = "", regions?: Region[] | null): RowMatch {
   const gradeFromSheet = row.gradeFromSheet;
-  const rowPlatform = resolvePlatform(row.platform, platforms).canonical;
+  const rowPlatform = resolvePlatform(row.platform, platforms, regions).canonical;
+  const rowRegion = regionOf(row.region, regions);
   const rowPlatNorm = norm(row.platform);
   const rowFull = dropArticle(norm(row.title));
   const rowBare = dropArticle(norm(stripBrackets(row.title))) || rowFull;
@@ -673,11 +713,15 @@ export function matchRow(row: ImportRow, prepared: Prepared[], platforms: Platfo
       const pp = norm(p.product.platform || "");
       if (rowPlatform && p.platforms.length) { if (!p.platforms.includes(rowPlatform)) continue; }
       else if (rowPlatNorm && pp) { if (!(pp.includes(rowPlatNorm) || rowPlatNorm.includes(pp))) continue; }
-      score = titleScore(rowFull, rowBare, rowGrams, rowNums, rowQuals, regionCode(row.region) || titleRegion(row.title), p);
+      score = titleScore(rowFull, rowBare, rowGrams, rowNums, rowQuals, rowRegion, p);
       // Platform-less listing: a little less sure, even on an exact title, so a
       // same-title listing ON the row's platform wins the tie.
       if (!pp) score *= score >= 1 ? 0.97 : 0.9;
     }
+    // PriceCharting ids and UPCs are per release, but one tagged onto the
+    // other region's listing by mistake would auto-match every later row —
+    // a region mismatch is always reviewed.
+    if (score >= AUTO_MATCH && p.region !== rowRegion) score = 0.85;
     if (score >= REVIEW_MATCH) cands.push({ product: p.product, score });
   }
   cands.sort((a, b) => b.score - a.score);

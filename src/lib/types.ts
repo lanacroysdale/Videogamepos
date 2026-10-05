@@ -53,6 +53,9 @@ export interface Product {
   alternative_names: string[];
   release_year: number | null;
   trailer_url: string | null;
+  // Market (store_regions.code: "US" / "PAL" / "JP"…) — an explicit code once
+  // migration 20261005000001 runs; read it through regionOf() (lib/regions).
+  region_code: string;
   created_at: string;
 }
 
@@ -150,6 +153,25 @@ export interface StoreLocation {
   key: string;
   name: string;
   is_default: boolean;
+  sort_order: number;
+  created_at: string;
+}
+
+// A listing's market as a tag (US / PAL / Japan…) — products.region_code.
+// The default region (the store's home market) shows no badge; core rows
+// (is_system) keep their code and can't be deleted. lib/regions.ts maps a row
+// to the client-side Region shape.
+export interface StoreRegion {
+  id: string;
+  code: string;          // stable: "US", "PAL", "JP"
+  name: string;          // "Japan (NTSC-J)"
+  short_tag: string;     // badge / "[JP]" text
+  flag: string | null;   // emoji
+  aliases: string[];     // normalized words: "japan import", "ntsc j"
+  show_badge: boolean;
+  is_default: boolean;
+  is_active: boolean;
+  is_system: boolean;
   sort_order: number;
   created_at: string;
 }

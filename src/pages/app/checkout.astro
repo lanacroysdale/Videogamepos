@@ -5,6 +5,7 @@ import AppLayout from "../../layouts/AppLayout.astro";
 import { fmt, fullName } from "../../lib/money";
 import { themeSettings } from "../../lib/themeSettings";
 import { loadPosCatalog } from "../../lib/posCatalog";
+import { loadRegions, regionsOn } from "../../lib/regions";
 
 const supabase = Astro.locals.supabase;
 
@@ -16,6 +17,8 @@ const { data: categories } = await supabase.from("categories").select("*").order
 // Sellable catalog snapshot (shared loader — /api/pos/catalog re-pulls it for
 // open stations). The SERVER re-checks live type flags on submit — UX only.
 const catalog = await loadPosCatalog(supabase);
+// Regions ([] before migration 20261005000001 → no badges / chips).
+const regions = await loadRegions(supabase);
 
 const customerId = Astro.url.searchParams.get("customer");
 let customer = null;
@@ -24,7 +27,7 @@ if (customerId) {
   customer = data;
 }
 
-const posData = { catalog, categories: categories ?? [], customer };
+const posData = { catalog, categories: categories ?? [], customer, regions };
 ---
 
 <AppLayout title="Checkout" active="checkout">
@@ -45,11 +48,12 @@ const posData = { catalog, categories: categories ?? [], customer };
 
       <div class="search" style="margin-bottom:0.8rem;">
         <span class="mag" aria-hidden="true">🔎</span>
-        <input id="prod-search" type="search" placeholder="Search title, platform, or SKU — or scan a barcode" autocomplete="off" />
+        <input id="prod-search" type="search" placeholder={regionsOn(regions) ? "Search title, platform, region, or SKU — or scan a barcode" : "Search title, platform, or SKU — or scan a barcode"} autocomplete="off" />
         <button id="scan-btn" class="btn btn-ghost btn-sm" type="button" title="Scan a barcode" style="position:absolute;right:74px;top:50%;transform:translateY(-50%);">📷 Scan</button>
         <button id="phone-scan-btn" class="btn btn-ghost btn-sm" type="button" title="Pair your phone as a wireless scanner" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);">📱</button>
       </div>
 
+      <div id="rg-chips" class="rg-chips" hidden></div>
       <div class="tiles" id="cat-tiles" data-gem-glow={gemGlow ? "on" : "off"}></div>
       <div id="prod-list" style="margin-top:0.9rem;display:grid;gap:0.4rem;"></div>
     </div>
@@ -133,7 +137,17 @@ const posData = { catalog, categories: categories ?? [], customer };
   .prod-row { appearance:none; -webkit-appearance:none; font:inherit; display:flex; align-items:center; justify-content:space-between; gap:0.8rem; width:100%; text-align:left; padding:0.55rem 0.7rem; border:1px solid var(--border); background:rgba(255,255,255,.02); color:var(--text); cursor:pointer; }
   .prod-row:hover { border-color:var(--cyan); background:rgba(255,255,255,.06); }
   .prod-info { display:flex; flex-direction:column; gap:0.1rem; min-width:0; }
-  .prod-title { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* Title + region badge: the badge never gets ellipsized away (US and JP
+     copies of a game share a title). */
+  .prod-title-line { display:flex; align-items:center; gap:0.4rem; min-width:0; }
+  .prod-title-line .rg-badge { flex:none; }
+  .prod-title { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+  .pick-head .rg-badge, .cart-line .rg-badge { margin-left:0.35rem; }
+  /* Region filter chips (built at runtime; only when regions are on). */
+  .rg-chips { display:flex; gap:0.4rem; flex-wrap:wrap; align-items:center; margin-bottom:0.8rem; }
+  .rg-chips[hidden] { display:none; }
+  .rg-chips .chip { cursor:pointer; padding:0.3rem 0.75rem; font:inherit; font-size:0.8rem; font-weight:600; }
+  .rg-chips .chip.active { border-color:var(--cyan); color:var(--cyan); }
   .prod-meta { font-size:0.78rem; color:var(--muted-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .prod-meta .oos { color:#ff9aa2; font-weight:600; }
   .prod-price { font-weight:700; flex:none; white-space:nowrap; }
@@ -146,11 +160,15 @@ const posData = { catalog, categories: categories ?? [], customer };
 <script>
   import { initScanReceiver, openPairDialog } from "../../lib/scanReceive";
   import { barcodeEq } from "../../lib/gtin";
-  type Item = { key: string; variantId: string | null; categoryId: string | null; kind: string; title: string; meta: string; unitPriceCents: number; qty: number; discountCents: number };
+  import { displayTitle, peelRegion, regionBadgeHtml, regionNorm, regionOf, regionTag, regionsOn, type Region } from "../../lib/regions";
+  // title = the line's saved text (transaction_items.description) — for a
+  // stocked item displayTitle() ("Okami HD [JP]"), set ONCE when it's added.
+  type Item = { key: string; variantId: string | null; categoryId: string | null; kind: string; title: string; meta: string; unitPriceCents: number; qty: number; discountCents: number; regionCode?: string };
   const data = JSON.parse(document.getElementById("pos-data")!.textContent!);
   const catalog: any[] = data.catalog;
   const categories: any[] = data.categories;
   const customer: any = data.customer;
+  const regions: Region[] = data.regions || []; // [] = regions off
 
   const money = (c: number) => (c / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
   const esc = (s: string) => String(s).replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m] as string));
@@ -218,6 +236,7 @@ const posData = { catalog, categories: categories ?? [], customer };
 
   let cart: Item[] = [];
   let activeCat: string | null = null;
+  let activeRegion: string | null = null; // region chip (a code), null = all
   let search = "";
 
   // ---------- Category tiles ----------
@@ -288,20 +307,50 @@ const posData = { catalog, categories: categories ?? [], customer };
     });
   });
 
+  // ---------- Region chips ----------
+  // Only when regions are on and the stock spans more than one region (one
+  // choice filters nothing). Combines with the category tile and the search.
+  const rgChipsEl = $("rg-chips");
+  function renderRegionChips() {
+    const present = new Set(catalog.map((v) => regionOf(v.regionCode, regions)));
+    const list = regions.filter((r) => (r.isActive && present.has(r.code)) || r.code === activeRegion);
+    if (!regionsOn(regions) || list.length < 2) { rgChipsEl.hidden = true; rgChipsEl.innerHTML = ""; activeRegion = null; return; }
+    rgChipsEl.hidden = false;
+    rgChipsEl.innerHTML = `<button type="button" class="chip${activeRegion ? "" : " active"}" data-rg="">All regions</button>`
+      + list.map((r) => `<button type="button" class="chip${activeRegion === r.code ? " active" : ""}" data-rg="${esc(r.code)}" title="${esc(r.name)}">${esc(`${r.flag ? r.flag + " " : ""}${r.short}`)}</button>`).join("");
+    rgChipsEl.querySelectorAll<HTMLButtonElement>("[data-rg]").forEach((b) => b.addEventListener("click", () => {
+      const code = b.dataset.rg || null;
+      activeRegion = activeRegion === code ? null : code; pick = null;
+      renderRegionChips();
+      renderProducts();
+    }));
+  }
+
   // ---------- Product list ----------
   function filtered() {
-    const q = search.trim().toLowerCase();
-    if (!activeCat && !q) return []; // keep the full catalog hidden until needed
+    // A region the cashier TYPES ("mario kart pal") is peeled into a region
+    // filter (it wins over the chip) — never matched as text.
+    const peel = regionsOn(regions) ? peelRegion(search, regions) : null;
+    const rg = peel?.code || activeRegion;
+    const q = peel?.code ? peel.rest : search.trim().toLowerCase();
+    if (!activeCat && !q && !rg) return []; // keep the full catalog hidden until needed
     return catalog.filter((v) => {
       if (activeCat && v.categoryId !== activeCat) return false;
+      const hay = `${v.title} ${v.platform} ${v.condition} ${v.sku ?? ""}`;
+      // …unless those words are part of this item's NAME ("Medal of Honor:
+      // European Assault") — then the whole phrase is a plain title search.
+      if (peel?.code && (" " + regionNorm(v.title) + " ").includes(" " + peel.text + " ") && regionNorm(hay).includes(regionNorm(search)))
+        return !activeRegion || regionOf(v.regionCode, regions) === activeRegion;
+      if (rg && regionOf(v.regionCode, regions) !== rg) return false;
       if (!q) return true;
-      return (`${v.title} ${v.platform} ${v.condition} ${v.sku ?? ""}`.toLowerCase().includes(q));
+      // The peeled rest is normalized (lowercase words) — compare like with like.
+      return peel?.code ? regionNorm(hay).includes(q) : hay.toLowerCase().includes(q);
     });
   }
   const prodRowHtml = (v: any) => `
       <button class="prod-row" type="button" data-add="${v.variantId}"${v.qty <= 0 ? ' data-oos="1"' : ""}>
         <span class="prod-info">
-          <span class="prod-title">${esc(v.title)}</span>
+          <span class="prod-title-line"><span class="prod-title">${esc(v.title)}</span>${regionBadgeHtml(v.regionCode, regions)}</span>
           <span class="prod-meta">${esc(v.platform)}${v.condition ? " · " + esc(v.condition) : ""}${v.completeness ? " · " + esc(v.completeness) : ""}${v.typeName && v.typeName !== "Retail" ? " · " + esc(v.typeName) : ""} · ${v.qty <= 0 ? '<span class="oos">out of stock</span>' : v.qty + " in stock"}</span>
         </span>
         <span class="prod-price">${money(v.priceCents)}</span>
@@ -309,7 +358,7 @@ const posData = { catalog, categories: categories ?? [], customer };
   function renderProducts() {
     const list = $("prod-list");
     if (pick) {
-      list.innerHTML = `<div class="pick-head"><span>Which condition? — <strong>${esc(pick.title)}</strong></span><button type="button" class="pick-cancel" data-pick-cancel>Cancel</button></div>`
+      list.innerHTML = `<div class="pick-head"><span>Which condition? — <strong>${esc(pick.title)}</strong>${regionBadgeHtml(pick.regionCode, regions)}</span><button type="button" class="pick-cancel" data-pick-cancel>Cancel</button></div>`
         + pick.rows.map((v) => prodRowHtml(v)).join("");
       // mousedown → preventDefault: picking must not pull focus out of the
       // search box, or the next wedge scan would type into nothing.
@@ -320,7 +369,7 @@ const posData = { catalog, categories: categories ?? [], customer };
       return;
     }
     // Nothing below the grid until the cashier searches or picks a category.
-    if (!activeCat && !search.trim()) {
+    if (!activeCat && !search.trim() && !activeRegion) {
       list.innerHTML = `<p class="prod-hint">Search or tap a category to add items.</p>`;
       return;
     }
@@ -344,12 +393,14 @@ const posData = { catalog, categories: categories ?? [], customer };
     // keep refusing an item a manager has since flipped back to Retail.
     if ((v as any).blocked) {
       if (!fresh) { refreshCatalog().then(() => addVariant(variantId, true)); return; }
-      alert(`“${v.title}” is ${(v as any).typeName || "a blocked inventory type"} — not for sale. A manager can unblock it in Settings → Inventory types.`);
+      alert(`“${displayTitle(v.title, v.regionCode, regions)}” is ${(v as any).typeName || "a blocked inventory type"} — not for sale. A manager can unblock it in Settings → Inventory types.`);
       return;
     }
     const existing = cart.find((i) => i.variantId === variantId);
     if (existing) existing.qty++;
-    else cart.push({ key: crypto.randomUUID(), variantId, categoryId: v.categoryId, kind: "sale", title: v.title, meta: `${v.platform} · ${v.condition}`, unitPriceCents: v.priceCents, qty: 1, discountCents: 0 });
+    // The region tag goes into the line's text HERE, once (it's the saved
+    // description) — hold/resume reuse that text as-is.
+    else cart.push({ key: crypto.randomUUID(), variantId, categoryId: v.categoryId, kind: "sale", title: displayTitle(v.title, v.regionCode, regions), meta: `${v.platform} · ${v.condition}`, unitPriceCents: v.priceCents, qty: 1, discountCents: 0, regionCode: v.regionCode });
     renderCart();
   }
   function addCustom(cat: any) {
@@ -361,11 +412,19 @@ const posData = { catalog, categories: categories ?? [], customer };
     renderCart();
   }
 
+  // On screen a line's "[JP]" shows as the badge (the saved text keeps it).
+  function cartTitleHtml(i: Item): string {
+    const badge = regionBadgeHtml(i.regionCode, regions);
+    if (!badge) return esc(i.title);
+    const tag = ` [${regionTag(i.regionCode, regions)}]`;
+    return esc(i.title.toLowerCase().endsWith(tag.toLowerCase()) ? i.title.slice(0, -tag.length) : i.title) + badge;
+  }
+
   function renderCart() {
     const el = $("cart");
     el.innerHTML = cart.map((i) => `
       <div class="cart-line" data-key="${i.key}">
-        <div><span class="title">${esc(i.title)}</span><span class="meta" style="display:block;">${esc(i.meta)}</span></div>
+        <div><span class="title">${cartTitleHtml(i)}</span><span class="meta" style="display:block;">${esc(i.meta)}</span></div>
         <div class="price">${money(i.unitPriceCents * i.qty - i.discountCents)}</div>
         <div style="display:flex;align-items:center;gap:0.5rem;">
           <label class="meta">Qty <input type="number" min="1" value="${i.qty}" data-qty style="width:3.6rem;"></label>
@@ -442,14 +501,16 @@ const posData = { catalog, categories: categories ?? [], customer };
         const j = await r.json();
         if (!r.ok || !j.ok || !Array.isArray(j.catalog)) return false;
         lastRefreshAt = Date.now();
-        const before = JSON.stringify(catalog);
+        const before = JSON.stringify([catalog, regions]);
         catalog.splice(0, catalog.length, ...j.catalog);
-        if (JSON.stringify(catalog) === before) return false;
+        if (Array.isArray(j.regions)) regions.splice(0, regions.length, ...j.regions);
+        if (JSON.stringify([catalog, regions]) === before) return false;
         // Tile counts + whatever product list is showing follow the new data.
         tilesEl.querySelectorAll<HTMLElement>("[data-cat]").forEach((btn) => {
           const small = btn.querySelector("small");
           if (small && btn.dataset.track === "true") small.textContent = catalog.filter((v) => v.categoryId === btn.dataset.cat).length + " items";
         });
+        renderRegionChips();
         renderProducts();
         return true;
       } catch { return false; } finally { refreshInFlight = null; }
@@ -494,11 +555,11 @@ const posData = { catalog, categories: categories ?? [], customer };
   // "Which condition?" — shown in place of the search results. Never focused:
   // a wedge scanner's Enter must not pick an option, and the next scan simply
   // replaces it.
-  let pick: { title: string; code: string; rows: any[] } | null = null;
+  let pick: { title: string; regionCode: string; code: string; rows: any[] } | null = null;
   function takeHit(rows: any[], code: string): boolean {
     if (!rows.length) return false;
     if (rows.length === 1) { pick = null; addVariant(rows[0].variantId); }
-    else pick = { title: rows[0].title + (rows[0].platform ? ` (${rows[0].platform})` : ""), code, rows };
+    else pick = { title: rows[0].title + (rows[0].platform ? ` (${rows[0].platform})` : ""), regionCode: rows[0].regionCode, code, rows };
     return true;
   }
   const looksScanned = (code: string) => /^[A-Za-z0-9-]{8,}$/.test(code);
@@ -530,9 +591,10 @@ const posData = { catalog, categories: categories ?? [], customer };
       const rows = resolveCode(code);
       if (!rows.length) return null;
       const v = rows[0];
-      if (rows.length > 1) return `${v.title}${v.platform ? ` (${v.platform})` : ""} · ${rows.length} conditions — choose on the register`;
+      const title = displayTitle(v.title, v.regionCode, regions);
+      if (rows.length > 1) return `${title}${v.platform ? ` (${v.platform})` : ""} · ${rows.length} conditions — choose on the register`;
       const cond = [v.completeness, v.condition].filter(Boolean).join(" ");
-      return `${v.title}${v.platform ? ` (${v.platform})` : ""}${cond ? ` · ${cond}` : ""} · ${money(v.priceCents)}${v.qty <= 0 ? " · OUT OF STOCK" : ""}`;
+      return `${title}${v.platform ? ` (${v.platform})` : ""}${cond ? ` · ${cond}` : ""} · ${money(v.priceCents)}${v.qty <= 0 ? " · OUT OF STOCK" : ""}`;
     },
   };
   initScanReceiver(scanTarget);
@@ -588,7 +650,7 @@ const posData = { catalog, categories: categories ?? [], customer };
       return {
         key: crypto.randomUUID(), variantId: it.variant_id, categoryId: it.category_id, kind: it.kind,
         title: it.description, meta: cv ? `${cv.platform} · ${cv.condition}` : (cat?.name || ""),
-        unitPriceCents: it.unit_price_cents, qty: it.qty, discountCents: it.discount_cents,
+        unitPriceCents: it.unit_price_cents, qty: it.qty, discountCents: it.discount_cents, regionCode: cv?.regionCode,
       };
     });
     heldId = h.id;
@@ -658,6 +720,7 @@ const posData = { catalog, categories: categories ?? [], customer };
   $("clear-btn").addEventListener("click", () => { cart = []; heldId = null; renderResumeBanner(null); renderCart(); $("receipt").hidden = true; loadHeld(); });
 
   // initial paint
+  renderRegionChips();
   renderProducts();
   renderCart();
   // Deep link from Inventory's "🛒 Sell" — drop that variant straight in the cart.

@@ -1,7 +1,7 @@
 import type { APIRoute } from "astro";
 import { createSupabaseAdminClient } from "../../../lib/supabase";
 import { fetchAll } from "../../../lib/fetchAll";
-import { fillListingUpcs, attachUpcs, upcTablesReady, needingUpc, identifyUpc } from "../../../lib/upcFinder";
+import { fillListingUpcs, attachUpcs, upcTablesReady, needingUpc, identifyUpc, regionColumnReady } from "../../../lib/upcFinder";
 import { canonicalUpc } from "../../../lib/upcMatch";
 
 export const prerender = false;
@@ -42,8 +42,10 @@ export const POST: APIRoute = async ({ locals, request }) => {
 
     if (b.action === "missing") {
       if (!manager) return json({ error: "Managers only" }, 403);
+      // region_code (once the regions migration ran): imports never take eBay's US code.
+      const rg = (await regionColumnReady(admin)) ? ", region_code" : "";
       const { data, error } = await fetchAll((from, to) => admin.from("products")
-        .select("id, title, platform, upc_status, upc_checked_at, category:categories(name), product_upcs(id)")
+        .select(`id, title, platform${rg}, upc_status, upc_checked_at, category:categories(name), product_upcs(id)`)
         .is("deleted_at", null).order("id").range(from, to));
       if (error) return json({ error: error.message }, 500);
       // A run started by hand re-tries anything not looked at in the last day
