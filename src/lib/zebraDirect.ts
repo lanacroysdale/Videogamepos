@@ -39,6 +39,10 @@ async function labelToZplBitmap(tpl: LabelTemplate, item: LabelItem, tune?: Zebr
   let svg = renderLabelSvg(tpl, item);
   if (deps?.styleTag) svg = svg.replace(/(<svg[^>]*>)/, `$1${deps.styleTag}`);
   if (tpl.logoUrl && deps?.logoData) svg = svg.split(escAttr(tpl.logoUrl)).join(deps.logoData).split(tpl.logoUrl).join(deps.logoData);
+  return svgToZplBitmap(svg, { widthMm: tpl.widthMm, heightMm: tpl.heightMm }, tune);
+}
+// Any ready-made label SVG (fonts / images inlined) → the same 1-bit field.
+async function svgToZplBitmap(svg: string, size: { widthMm: number; heightMm: number }, tune?: ZebraTune): Promise<{ hex: string; rowBytes: number; rows: number; pw: number }> {
 
   const img = new Image();
   await new Promise<void>((res, rej) => {
@@ -48,8 +52,8 @@ async function labelToZplBitmap(tpl: LabelTemplate, item: LabelItem, tune?: Zebr
   });
 
   // Canvas = the physical label at 8 dots/mm (inch-exact size).
-  const pw = Math.round(snapToInchGrid(tpl.widthMm) * DOTS_PER_MM);
-  const rows = Math.round(snapToInchGrid(tpl.heightMm) * DOTS_PER_MM);
+  const pw = Math.round(snapToInchGrid(size.widthMm) * DOTS_PER_MM);
+  const rows = Math.round(snapToInchGrid(size.heightMm) * DOTS_PER_MM);
   const canvas = document.createElement("canvas");
   canvas.width = pw;
   canvas.height = rows;
@@ -59,7 +63,7 @@ async function labelToZplBitmap(tpl: LabelTemplate, item: LabelItem, tune?: Zebr
   const s = Math.min(100, Math.max(60, Math.round(Number(tune?.scalePct) || 100))) / 100;
   const nx = Math.min(30, Math.max(-30, Number(tune?.nudgeXMm) || 0)) * DOTS_PER_MM;
   const ny = Math.min(30, Math.max(-30, Number(tune?.nudgeYMm) || 0)) * DOTS_PER_MM;
-  const dw = tpl.widthMm * DOTS_PER_MM * s, dh = tpl.heightMm * DOTS_PER_MM * s;
+  const dw = size.widthMm * DOTS_PER_MM * s, dh = size.heightMm * DOTS_PER_MM * s;
   ctx.drawImage(img, (pw - dw) / 2 + nx, (rows - dh) / 2 + ny, dw, dh);
 
   // 1 bit per dot, MSB first, rows byte-aligned. In ZPL ^GFA a 1 is BLACK.
@@ -143,6 +147,33 @@ export async function printDirect(device: any, jobs: ZebraJob[], tpl: LabelTempl
     zpl += one;
     inBatch += Math.min(500, j.copies);
     queued += Math.min(500, j.copies);
+  }
+  await flush();
+  return queued;
+}
+
+/** Ready-made label SVGs (Label maker) straight to the Zebra — same batching. */
+export async function printSvgsDirect(device: any, labels: { svg: string; copies: number }[], size: { widthMm: number; heightMm: number }, tune?: ZebraTune): Promise<number> {
+  const real = labels.filter((l) => l.copies > 0);
+  if (!real.length) return 0;
+  const BATCH_BYTES = 48_000;
+  let zpl = "", inBatch = 0, sent = 0, queued = 0;
+  const flush = async () => {
+    if (!zpl) return;
+    const r = await fetch(`${AGENT}/write`, { method: "POST", body: JSON.stringify({ device, data: zpl }), signal: AbortSignal.timeout(30000) })
+      .catch((e) => { throw new ZebraError(`Couldn't reach Zebra Browser Print (${e?.message || e}).`, sent); });
+    if (!r.ok) {
+      const why = (await r.text().catch(() => "")).trim().slice(0, 200);
+      throw new ZebraError(`Zebra Browser Print couldn't send to the printer (${r.status}${why ? `: ${why}` : ""}).`, sent);
+    }
+    sent += inBatch; zpl = ""; inBatch = 0;
+  };
+  for (const l of real) {
+    const one = buildZpl(await svgToZplBitmap(l.svg, size, tune), l.copies);
+    if (zpl && zpl.length + one.length > BATCH_BYTES) await flush();
+    zpl += one;
+    inBatch += Math.min(500, l.copies);
+    queued += Math.min(500, l.copies);
   }
   await flush();
   return queued;
