@@ -32,7 +32,7 @@ const regions = rgProbeErr ? [] : await loadRegions(admin);
 let shopQ = admin
   .from("product_variants")
   .select(
-    `id, condition, completeness, price_cents, online_price_cents, quantity, product:products(id, title, slug, platform, franchise, image_url, description${rgProbeErr ? "" : ", region_code"}, category:categories(name))`,
+    `id, condition, completeness, price_cents, online_price_cents, quantity, product:products(id, title, slug, platform, franchise, image_url, description, tags${rgProbeErr ? "" : ", region_code"}, category:categories(name))`,
   )
   .eq("online_visible", true)
   .gt("quantity", 0);
@@ -55,6 +55,8 @@ const listings = (rows ?? []).map((v: any) => {
     quantity: v.quantity,
     lowStock: showLowStock(v.quantity, v.online_price_cents ?? v.price_cents, ls),
     regionCode: (v.product?.region_code ?? "") as string,
+    // Only to classify (a "plush" tag → Plushies); never rendered.
+    tags: (Array.isArray(v.product?.tags) ? v.product.tags : []) as string[],
   };
   // Keyword-derived department + facets (ignores the unreliable import category);
   // region comes from the listing's field.
@@ -87,7 +89,9 @@ const present = (rules: Rule[], counts: Map<string, number>) =>
 
 // Virtual categories ("🇯🇵 Japanese Imports" = every Japan-region listing,
 // games and merch alike) come after the departments, when the shop has any.
+// (Tag / title ones like 🧸 Plush are already a department tab.)
 const virtualTabs = activeVirtualCategories(regions)
+  .filter((v): v is typeof v & { region: string } => !!v.region)
   .map((v) => ({ key: v.key, label: v.label, icon: v.icon, n: regionCounts.get(v.region.toLowerCase()) ?? 0, vregion: v.region.toLowerCase() }))
   .filter((v) => v.n > 0);
 const deptTabs: { key: string; label: string; icon?: string; n: number; vregion?: string }[] = [
