@@ -33,15 +33,30 @@ const strList = (v: unknown, maxItems: number, maxLen: number) =>
 
 /** An http(s) URL we'd consider fetching / linking: a public host name, no credentials. */
 export function publicUrl(raw: unknown): string {
+  const s = String(raw ?? "");
+  if (s.length > 2048) return "";
   let u: URL;
-  try { u = new URL(String(raw ?? "")); } catch { return ""; }
+  try { u = new URL(s); } catch { return ""; }
   if (u.protocol !== "https:" && u.protocol !== "http:") return "";
   if (u.username || u.password) return "";
-  const h = u.hostname.toLowerCase();
-  // No IP literals, no local / internal names (the server fetches images).
+  if (u.port && u.port !== "80" && u.port !== "443") return "";
+  const h = u.hostname.toLowerCase().replace(/\.+$/, ""); // "localhost." = localhost
+  // No IP literals (or names that embed one, like 10.0.0.1.nip.io), no local /
+  // internal names — the server fetches images. (It also checks DNS.)
   if (!h.includes(".") || /^[\d.]+$/.test(h) || h.includes(":") || h.startsWith("[")) return "";
-  if (/(^|\.)(localhost|local|internal|localdomain|lan|home|corp|intranet)$/.test(h)) return "";
+  if (/(^|[.-])\d{1,3}([.-]\d{1,3}){3}([.-]|$)/.test(h) || /(^|\.)(nip|sslip|xip)\.io$/.test(h)) return "";
+  if (/(^|\.)(localhost|local|internal|localdomain|lan|home|corp|intranet|arpa)$/.test(h)) return "";
   return u.href;
+}
+
+/** The address without what doesn't name the item (#fragment, tracking parameters). */
+export function canonicalUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    u.hash = "";
+    for (const k of [...u.searchParams.keys()]) if (/^(utm_|conversiontype$|ref$|ref_|fbclid$|gclid$|spm$|sc_|from$)/i.test(k)) u.searchParams.delete(k);
+    return u.href;
+  } catch { return url; }
 }
 
 /** Validate + trim what a bookmarklet sent (it's untrusted page data). */
@@ -110,14 +125,17 @@ export function sourceOf(url: string): { host: string; label: string; japan: boo
 /** A shop's own item number from its URL, when it has one (for "already imported?"). */
 export function sourceItemId(url: string): string {
   try {
-    const path = decodeURIComponent(new URL(url).pathname);
-    const m = path.match(/\/(?:product(?:\/detail)?|detail|item(?:\/[a-z]+)*?|auction|items?|dp|gp\/product)\/(?:[a-z]+\/)*([A-Za-z0-9_:.-]{5,60})/i);
-    return m ? m[1] : "";
+    // Linear: the first item-number-looking segment after a keyword segment.
+    const segs = decodeURIComponent(new URL(url).pathname).split("/").filter(Boolean).slice(0, 12);
+    const at = segs.findIndex((x) => /^(product|detail|item|items|auction|dp)$/i.test(x));
+    if (at < 0) return "";
+    return segs.slice(at + 1).find((x) => /^[A-Za-z0-9_:.-]{5,60}$/.test(x) && /\d/.test(x)) ?? "";
   } catch { return ""; }
 }
 
 // ---- facts straight from the page (no AI) -------------------------------
 export interface PageFacts {
+  priceGuess: boolean;      // the price came from loose page text
   name: string;
   nameAlt: string;          // e.g. the Japanese title on suruga-ya.com
   price: number | null;     // in `currency` units
@@ -128,6 +146,17 @@ export interface PageFacts {
   brand: string;
   releaseDate: string;
   description: string;
+}
+
+/** A page / og title without the shop's name around it ("駿河屋 -…", "…｜Buyee", "【楽天市場】…"). */
+export function stripShopBrand(t: string): string {
+  return t
+    .replace(/^\s*駿河屋\s*[-－|｜]\s*/, "")
+    .replace(/^\s*【楽天市場】\s*/, "")
+    .replace(/\s*[/／]?\s*【Buyee】.*$/i, "")
+    .replace(/\s*[|｜]\s*(Shop at|Buyee|Mercari|駿河屋|Amazon|楽天).*$/i, "")
+    .replace(/\s+-\s+(Buyee|駿河屋|Suruga-ya).*$/i, "")
+    .trim();
 }
 
 function* walkLd(x: unknown, depth = 0): Generator<any> {
@@ -152,6 +181,8 @@ const firstStr = (...vals: unknown[]) => {
 const imgOf = (v: unknown): string[] =>
   Array.isArray(v) ? v.flatMap(imgOf) : typeof v === "string" ? [v] : v && typeof v === "object" ? imgOf((v as any).url ?? (v as any).contentUrl) : [];
 const num = (v: unknown): number | null => {
+  // One number only: "1,980 - 2,980" is a range, not 19802980.
+  if (typeof v === "string" && (v.match(/\d[\d,]*(\.\d+)?/g) ?? []).length > 1) return null;
   const n = Number(String(v ?? "").replace(/[^\d.]/g, ""));
   return Number.isFinite(n) && n > 0 ? n : null;
 };
@@ -178,10 +209,17 @@ export function pageFacts(p: CapturedPage): PageFacts {
   let price = pick?.price ?? best?.n ?? vPrice ?? num(m["product:price:amount"] ?? m["og:price:amount"] ?? m["price"]);
   let currency = firstStr(best?.o?.priceCurrency, offers[0]?.priceCurrency, m["product:price:currency"], m["og:price:currency"], m["pricecurrency"]).toUpperCase()
     || (pick || vPrice != null ? "JPY" : "");
-  // Last resort: a yen price in the page text ("¥1,980" / "1,980円").
+  // Last resort: a yen price in the page text next to a price word —
+  // never shipping, buyback or "free over ¥…" amounts. A guess (flagged).
+  let priceGuess = false;
   if (price == null) {
-    const y = p.text.match(/[¥￥]\s?([\d,]{2,9})|([\d,]{2,9})\s?円/);
-    if (y) { price = num(y[1] ?? y[2]); currency = currency || "JPY"; }
+    for (const y of p.text.matchAll(/(.{0,12})(?:[¥￥]\s?([\d,]{2,9})|([\d,]{2,9})\s?円)(.{0,6})/g)) {
+      const ctx = `${y[1]} ${y[4]}`;
+      if (/送料|買取|以上|ポイント|pt|shipping|buyback|over/i.test(ctx)) continue;
+      if (!/価格|税込|現在|即決|販売|price|本体/i.test(ctx)) continue;
+      price = num(y[2] ?? y[3]); currency = currency || "JPY"; priceGuess = true;
+      break;
+    }
   }
   const condRaw = (pick ? pick.label : firstStr(best?.o?.itemCondition, offers[0]?.itemCondition, prod.itemCondition, m["product:condition"], m["og:condition"])).toLowerCase();
   const condition = /新品|未開封|new|unopened|sealed/.test(condRaw) ? "new" : /中古|used|refurb|damaged|junk|ジャンク/.test(condRaw) ? "used" : "";
@@ -190,7 +228,7 @@ export function pageFacts(p: CapturedPage): PageFacts {
   if (!gtin) { const j = p.text.match(/(?:JAN|EAN|ＪＡＮ)[^\d]{0,12}(\d{13})/i); if (j) gtin = j[1]; }
   const ldImages = imgOf(prod.image).map(publicUrl).filter(Boolean);
   const images = [...new Set([...ldImages, ...(m["og:image"] ? [publicUrl(m["og:image"])] : []).filter(Boolean), ...p.images])].slice(0, 12);
-  const name = firstStr(prod.name, v.name, v.item_name, m["og:title"], p.heads[0], p.title).replace(/^\s*[<＜](中古|新品)[>＞]\s*/, "");
+  const name = stripShopBrand(firstStr(prod.name, v.name, v.item_name, p.heads[0], m["og:title"], p.title)).replace(/^\s*[<＜](中古|新品)[>＞]\s*/, "");
   // suruga-ya.com shows "Japanese title: …" under the English one.
   // The original (Japanese) title: an explicit "Japanese title:", else the
   // name itself when it's Japanese (Buyee, suruga-ya.jp), else the first
@@ -202,6 +240,7 @@ export function pageFacts(p: CapturedPage): PageFacts {
   // Shop prefixes off the original title: "PS3ソフト …", "<中古>…".
   const cleanAlt = alt.replace(/^\s*[<＜【\[](中古|新品|未使用|ジャンク)[>＞】\]]\s*/, "").replace(/^[A-Za-z0-9０-９Ａ-Ｚａ-ｚ .・ー-]{0,20}ソフト\s+/, "").trim();
   return {
+    priceGuess,
     name: name.slice(0, 300),
     nameAlt: cleanAlt.slice(0, 300),
     price,
@@ -270,7 +309,7 @@ var L=function(o){var r=[];(function w(x,n){if(!x||n>5||r.length>2)return;if(Arr
 var c={v:1,url:p.url,title:p.title,meta:p.meta,ld:L(ld),heads:p.heads,crumbs:p.crumbs,images:imgs.slice(0,6),text:text.slice(0,1500),lang:p.lang,offers:p.offers,vars:vars};try{if(JSON.stringify(c).length>14000)c.ld=[]}catch(x){c.ld=[]}
 var u=P+"/inventory?import=page#tl="+encodeURIComponent(JSON.stringify(c));
 var w=window.open(u,"_blank");if(!w){location.href=u;return}
-var done=false,on=function(e){if(e.origin!==P||!e.data||e.data.type!=="tl-ready"||done)return;done=true;try{e.source.postMessage({type:"tl-page",page:p},P)}catch(x){}window.removeEventListener("message",on)};window.addEventListener("message",on);
+var done=false,on=function(e){if(e.origin!==P||e.source!==w||!e.data||e.data.type!=="tl-ready"||done)return;done=true;try{e.source.postMessage({type:"tl-page",page:p},P)}catch(x){}window.removeEventListener("message",on)};window.addEventListener("message",on);
 })();`;
 
 /** The bookmark's address (javascript:…) for this POS. */

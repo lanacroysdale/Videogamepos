@@ -1365,7 +1365,7 @@ const posData = {
   /* ---------- Edit modal ---------- */
   // Manager-only restock links shown in the modal (staff never receive the data).
   function supRowHtml(l: any) {
-    return `<div class="sup-row" data-supid="${l.id}">${l.url ? `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)} ↗</a>` : `<span>${esc(l.label)}</span>`}<button class="link-btn" data-supdel="${l.id}" type="button">✕</button></div>`;
+    return `<div class="sup-row" data-supid="${l.id}">${l.url ? `<a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(l.label)} ↗</a>` : `<span>${esc(l.label)}</span>`}<button class="link-btn" data-supdel="${l.id}" type="button">✕</button></div>`;
   }
   const modal = $("edit-modal");
   function closeModal() { modal.hidden = true; }
@@ -2672,6 +2672,7 @@ const posData = {
      labels. Not listed yet → ＋ New product fills in the form below. */
   type RecvRow = { key: number; p: any; v: any; comp: string; grade: string; qty: number; cost: string; price: string; priceTouched: boolean };
   let recvRows: RecvRow[] = [];
+  let pendingRecvCost = ""; // a 🔖 import's cost, for the row "add copies to it instead" picks
   let recvKey = 0;
   const npFind = $("np-find") as HTMLInputElement;
   const sameType = (a: any, b: any) => (a.inventoryTypeId || retailTypeId) === (b.inventoryTypeId || retailTypeId);
@@ -2686,7 +2687,7 @@ const posData = {
     // The same stock row scanned again = one more copy.
     const same = recvRows.find((r) => recvTarget(r) === v);
     if (same) same.qty += 1;
-    else recvRows.push({ key: ++recvKey, p, v, comp: v.completenessCode || "", grade: v.gradeCode || "", qty: 1, cost: "", price: (v.priceCents / 100).toFixed(2), priceTouched: false });
+    else { recvRows.push({ key: ++recvKey, p, v, comp: v.completenessCode || "", grade: v.gradeCode || "", qty: 1, cost: pendingRecvCost, price: (v.priceCents / 100).toFixed(2), priceTouched: false }); pendingRecvCost = ""; }
     renderRecv();
     npFind.focus(); // the next scan lands here too
   }
@@ -3384,9 +3385,9 @@ const posData = {
         }
       } else {
         if (ps) {
-          // 🔖 From another shop: its photo (copied to our storage, renamed),
-          // the page as a supplier link (managers only), the original title
-          // as a search name. Before the game database fills the rest.
+          // 🔖 From another shop: its photo (copied to our storage, renamed) and
+          // the page as a supplier link with the shop's title (managers only).
+          // Before the game database fills the rest.
           toast(`✓ Added${where} — copying the photo…`);
           try {
             const r = await fetch("/api/pos/source-import", { method: "POST", headers: { "content-type": "application/json" },
@@ -3394,7 +3395,6 @@ const posData = {
             const e = await r.json();
             if (r.ok && e.ok) {
               if (e.imageUrl) newItem.imageUrl = e.imageUrl;
-              if (e.altName) newItem.altNames = [...(newItem.altNames || []), e.altName];
               if (e.supplier) newItem.supplierLinks = [...(newItem.supplierLinks || []), e.supplier];
               render();
             }
@@ -3484,6 +3484,8 @@ const posData = {
       };
       const on = (e: MessageEvent) => {
         if (e.source !== opener || (from && e.origin !== from) || e.data?.type !== "tl-page" || !e.data.page) return;
+        // The page this tab was opened for (not one an older click still holds).
+        if (compact?.url && e.data.page.url !== compact.url) return;
         finish(e.data.page);
       };
       window.addEventListener("message", on);
@@ -3538,6 +3540,8 @@ const posData = {
       ${j.openEntry && !entryMode ? `<br><button type="button" class="link-btn" id="src-entry">📥 Put it on your open Entry #${esc(j.openEntry.human_id)} instead</button>` : ""}</div>`;
     document.getElementById("src-existing")?.addEventListener("click", () => {
       const t = j.existing.title;
+      // What this copy cost goes onto the row you pick.
+      pendingRecvCost = f.costCents != null ? (f.costCents / 100).toFixed(2) : "";
       clearProductFields();
       npFind.value = t;
       findSuggest(quickFind);

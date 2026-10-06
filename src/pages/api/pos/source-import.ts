@@ -1,11 +1,12 @@
 import type { APIRoute } from "astro";
+import { lookup } from "node:dns/promises";
 import { createSupabaseAdminClient } from "../../../lib/supabase";
 import { aiSettings, aiStatus, callAI } from "../../../lib/ai";
 import { PLATFORM_ALIASES, resolveStaticPlatform } from "../../../lib/smartSearch";
 import { lbPlatform } from "../../../lib/launchbox";
 import { regionsOn, loadRegions, regionByCode } from "../../../lib/regions";
 import {
-  sanitizeCaptured, pageFacts, sourceOf, sourceItemId, publicUrl, sourceImportSettings, costCentsFor, priceText, parseJsonObject,
+  sanitizeCaptured, pageFacts, sourceOf, sourceItemId, publicUrl, canonicalUrl, sourceImportSettings, costCentsFor, priceText, parseJsonObject,
   type CapturedPage, type PageFacts,
 } from "../../../lib/sourceImport";
 
@@ -15,8 +16,8 @@ const json = (d: unknown, s = 200) => new Response(JSON.stringify(d), { status: 
 // 🔖 Send to TimeLag — a product page captured by the bookmarklet → a listing.
 //   { mode: "parse", page }   → suggested Add-form fields (AI-cleaned title…)
 //   { mode: "attach", productId, source } → after Save: the photo (copied to
-//       our own storage, renamed), the page as a supplier link (managers see
-//       those only; never on the website), the original title as an alt name.
+//       our own storage, renamed) and the page as a supplier link with the
+//       shop's own title (managers see those only; never on the website).
 //   { mode: "rate" }          → today's yen rate, for Settings.
 // Where things come from stays internal: nothing here reaches the shop.
 export const POST: APIRoute = async ({ locals, request }) => {
@@ -70,9 +71,19 @@ export const POST: APIRoute = async ({ locals, request }) => {
     const regionCode = regionsOn(regions) && japan && regionByCode("JP", regions) ? "JP" : "";
     const cat = (cats ?? []).find((c: any) => c.name.toLowerCase() === String(out?.category ?? "").toLowerCase()) as any;
     const comp = (comps ?? []).find((c: any) => c.code === out?.completeness) as any;
-    // Already imported from this page? (Its supplier link.)
-    const { data: have } = await admin.from("product_suppliers").select("product_id, product:products(title)").eq("url", page.url).limit(1);
-    const existing = have?.[0] ? { productId: (have[0] as any).product_id, title: (have[0] as any).product?.title ?? "" } : null;
+    // Already imported from this page? Its src: marker (any staff), or — for
+    // managers, who can see supplier links — the same page address.
+    const pageUrl = canonicalUrl(page.url);
+    const itemId = sourceItemId(page.url);
+    let existing: { productId: string; title: string } | null = null;
+    if (itemId) {
+      const { data: tagged } = await sb.from("products").select("id, title").contains("tags", [`src:${src.host}:${itemId}`]).is("deleted_at", null).limit(1);
+      if (tagged?.[0]) existing = { productId: (tagged[0] as any).id, title: (tagged[0] as any).title ?? "" };
+    }
+    if (!existing && locals.can("inventory.manage")) {
+      const { data: have } = await admin.from("product_suppliers").select("product_id, product:products(title)").in("url", [...new Set([pageUrl, page.url])]).limit(1);
+      if (have?.[0]) existing = { productId: (have[0] as any).product_id, title: (have[0] as any).product?.title ?? "" };
+    }
     // The person's open draft (not a reopened one), so they can put it there instead.
     let oq = sb.from("inventory_entries").select("id, human_id").eq("employee_id", locals.user.id).eq("status", "open");
     if (!(await sb.from("inventory_entries").select("reopened_at").limit(1)).error) oq = oq.is("reopened_at", null);
@@ -95,7 +106,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
         note: out?.note ?? "",
       },
       source: {
-        url: page.url,
+        url: pageUrl,
         label: src.label,
         host: src.host,
         itemId: sourceItemId(page.url),
@@ -117,40 +128,49 @@ export const POST: APIRoute = async ({ locals, request }) => {
     // Fills only what the new listing doesn't have; never touches its title / price.
     const productId = String(b.productId ?? "");
     const s = b.source ?? {};
-    const url = publicUrl(s.url);
+    const url = publicUrl(s.url) ? canonicalUrl(publicUrl(s.url)) : "";
     if (!productId || !url) return json({ error: "productId and source.url required" }, 400);
-    const { data: prod } = await admin.from("products").select("id, image_url, alternative_names, tags").eq("id", productId).maybeSingle() as { data: any };
+    const { data: prod } = await admin.from("products").select("id, image_url, tags, created_at").eq("id", productId).maybeSingle() as { data: any };
     if (!prod) return json({ error: "Listing not found" }, 404);
-    const patch: Record<string, unknown> = {};
-    let imageUrl: string | null = prod.image_url || null;
-    if (!imageUrl) {
-      for (const img of (Array.isArray(s.images) ? s.images : [s.image]).map(publicUrl).filter(Boolean).slice(0, 3)) {
-        imageUrl = await copyExternalImage(admin, img);
-        if (imageUrl) { patch.image_url = imageUrl; break; }
-      }
-    }
-    // The original (e.g. Japanese) title → an alternative name, so a search finds it.
-    const alt = String(s.titleOriginal ?? "").trim().slice(0, 200);
-    const alts: string[] = Array.isArray(prod.alternative_names) ? prod.alternative_names : [];
-    if (alt && !alts.includes(alt)) patch.alternative_names = [...alts, alt];
-    // An internal marker (kind:value tags never show on the website).
+    // Supplier links are managers' — staff may only add one to a listing they
+    // just created with this import.
+    const fresh = Date.now() - Date.parse(prod.created_at ?? "") < 30 * 60_000;
+    if (!fresh && !locals.can("inventory.manage")) return json({ error: "Only a listing you just added can take its source page." }, 403);
     const src = sourceOf(url);
-    const marker = `src:${src.host}${sourceItemId(url) ? ":" + sourceItemId(url) : ""}`.slice(0, 120);
+    // An internal marker ("kind:value" tags never show on the website) — and
+    // what "Already in the POS from this page" looks for.
+    const itemId = sourceItemId(url);
+    const marker = `src:${src.host}${itemId ? ":" + itemId : ""}`.slice(0, 120);
     const tags: string[] = Array.isArray(prod.tags) ? prod.tags : [];
-    if (!tags.includes(marker)) patch.tags = [...tags, marker];
-    if (Object.keys(patch).length) {
-      const { error } = await admin.from("products").update(patch).eq("id", productId);
+    if (!tags.includes(marker)) {
+      const { error } = await admin.from("products").update({ tags: [...tags, marker] }).eq("id", productId);
       if (error) return json({ error: error.message }, 500);
     }
-    // The page as a supplier link: where it was bought / can be found again.
+    // The page as a supplier link: where it was bought / can be found again,
+    // with the shop's own title (kept internal: never an alt name, which the
+    // website shows — a seller's exact title leads straight back to them).
     let supplier: any = null;
     const { data: haveSup, error: supErr } = await admin.from("product_suppliers").select("id").eq("product_id", productId).eq("url", url).limit(1);
     if (!supErr && !haveSup?.length) {
-      const label = `${src.label}${s.priceText ? ` (${String(s.priceText).slice(0, 30)})` : ""}`.slice(0, 120);
+      const orig = String(s.titleOriginal ?? "").trim();
+      const label = `${src.label}${s.priceText ? ` (${String(s.priceText).slice(0, 30)})` : ""}${orig ? ` · ${orig}` : ""}`.slice(0, 120);
       const { data } = await admin.from("product_suppliers").insert({ product_id: productId, label, url }).select("id, label, url").single();
       supplier = data ?? null;
     }
-    return json({ ok: true, imageUrl, supplier, altName: patch.alternative_names ? alt : "" });
+    // Last: the photo, when the listing has none (its own deadline).
+    let imageUrl: string | null = prod.image_url || null;
+    if (!imageUrl) {
+      const deadline = Date.now() + 20_000;
+      for (const img of (Array.isArray(s.images) ? s.images : [s.image]).map(publicUrl).filter(Boolean).slice(0, 3)) {
+        if (Date.now() > deadline) break;
+        imageUrl = await copyExternalImage(admin, img);
+        if (imageUrl) {
+          await admin.from("products").update({ image_url: imageUrl }).eq("id", productId).is("image_url", null);
+          break;
+        }
+      }
+    }
+    return json({ ok: true, imageUrl, supplier });
   }
 
   return json({ error: "Unknown mode" }, 400);
@@ -184,11 +204,11 @@ Rules:
 - note: ONLY problems with this particular copy that the page mentions (scratches, missing manual / inner box / parts, damage, writing), as a short note IN ENGLISH (translate it). Not the edition or contents. Else "".`;
   const user = JSON.stringify({
     shop: sourceLabel,
-    url: page.url,
+    url: page.url.slice(0, 300),
     pageTitle: page.title,
     headings: page.heads,
     breadcrumbs: page.crumbs,
-    structured: { name: f.name, altName: f.nameAlt, price: f.price, currency: f.currency, condition: f.condition, jan: f.gtin, brand: f.brand, releaseDate: f.releaseDate },
+    structured: { name: f.name, altName: f.nameAlt, price: f.priceGuess ? null : f.price, currency: f.priceGuess ? "" : f.currency, condition: f.condition, jan: f.gtin, brand: f.brand, releaseDate: f.releaseDate },
     description: f.description.slice(0, 800),
     pageText: page.text.slice(0, 4000),
   });
@@ -223,30 +243,54 @@ async function officialName(sb: any, title: string, platform: string): Promise<s
 
 // ---- images: copied into our storage under a neutral name -----------------
 async function copyExternalImage(admin: any, url: string): Promise<string | null> {
-  let target = publicUrl(url);
-  for (let hop = 0; hop < 3 && target; hop++) {
-    let res: Response;
-    try { res = await fetch(target, { redirect: "manual", headers: { accept: "image/*" }, signal: AbortSignal.timeout(12_000) }); }
-    catch { return null; }
-    if (res.status >= 300 && res.status < 400) {
-      const loc = res.headers.get("location");
-      target = loc ? publicUrl(new URL(loc, target).href) : "";
-      continue;
+  try {
+    let target = publicUrl(url);
+    for (let hop = 0; hop < 3 && target; hop++) {
+      // The name must not lead to a private / local address.
+      if (!(await resolvesPublic(new URL(target).hostname))) return null;
+      const res = await fetch(target, { redirect: "manual", headers: { accept: "image/*" }, signal: AbortSignal.timeout(12_000) });
+      if (res.status >= 300 && res.status < 400) {
+        const loc = res.headers.get("location");
+        target = loc ? publicUrl(new URL(loc, target).href) : "";
+        continue;
+      }
+      if (!res.ok) return null;
+      const ct = (res.headers.get("content-type") || "").split(/[;,]/)[0].trim().toLowerCase();
+      const ext = ({ "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif" } as Record<string, string>)[ct];
+      if (!ext) return null;
+      if (Number(res.headers.get("content-length") || 0) > 8_000_000) return null;
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      if (!bytes.length || bytes.length > 8_000_000) return null;
+      const type = ext === "jpg" ? "image/jpeg" : ct;
+      const path = `products/cover-${crypto.randomUUID()}.${ext}`;
+      const { error } = await admin.storage.from("product-images").upload(path, bytes, { contentType: type });
+      if (error) return null;
+      return admin.storage.from("product-images").getPublicUrl(path).data.publicUrl;
     }
-    if (!res.ok) return null;
-    const ct = (res.headers.get("content-type") || "").toLowerCase();
-    if (!/^image\/(jpeg|jpg|png|webp|gif)/.test(ct)) return null;
-    const len = Number(res.headers.get("content-length") || 0);
-    if (len > 8_000_000) return null;
-    const bytes = new Uint8Array(await res.arrayBuffer());
-    if (!bytes.length || bytes.length > 8_000_000) return null;
-    const ext = ct.includes("png") ? "png" : ct.includes("webp") ? "webp" : ct.includes("gif") ? "gif" : "jpg";
-    const path = `products/cover-${crypto.randomUUID()}.${ext}`;
-    const { error } = await admin.storage.from("product-images").upload(path, bytes, { contentType: ct });
-    if (error) return null;
-    return admin.storage.from("product-images").getPublicUrl(path).data.publicUrl;
-  }
-  return null;
+    return null;
+  } catch { return null; }
+}
+
+// Every address the name resolves to is a public one (not private, loopback,
+// link-local, CGNAT or unique-local).
+async function resolvesPublic(host: string): Promise<boolean> {
+  try {
+    const addrs = await lookup(host.replace(/\.+$/, ""), { all: true, verbatim: true });
+    return addrs.length > 0 && addrs.every(({ address: a, family }) => (family === 6 ? publicV6(a) : publicV4(a)));
+  } catch { return false; }
+}
+function publicV4(a: string): boolean {
+  const [x, y] = a.split(".").map(Number);
+  if ([x, y].some((n) => !Number.isFinite(n))) return false;
+  return !(x === 0 || x === 10 || x === 127 || (x === 100 && y >= 64 && y <= 127) || (x === 169 && y === 254)
+    || (x === 172 && y >= 16 && y <= 31) || (x === 192 && y === 168) || (x === 192 && y === 0) || (x === 198 && (y === 18 || y === 19)) || x >= 224);
+}
+function publicV6(a: string): boolean {
+  const s = a.toLowerCase();
+  if (s === "::" || s === "::1") return false;
+  const mapped = s.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mapped) return publicV4(mapped[1]);
+  return !/^(fe[89ab]|fc|fd|ff)/.test(s);
 }
 
 // ---- today's yen rate (for Settings) ---------------------------------------
