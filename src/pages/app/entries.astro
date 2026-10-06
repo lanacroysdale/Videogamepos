@@ -127,6 +127,7 @@ const pageData = {
     return j;
   }
 
+  const QUICK_NOTE = "⚡ Quick adds"; // = the inventory API's note for these
   let selId = "";
   function renderList() {
     const el = $("entry-list");
@@ -134,7 +135,7 @@ const pageData = {
     el.innerHTML = entries.length ? entries.map((e) => `
       <div class="ent-row${e.id === selId ? " on" : ""}" data-ent="${e.id}">
         <span class="ent-id">#${e.humanId}</span>
-        <span><span>${when(e.createdAt)} · ${esc(e.employee)}</span><span class="ent-meta" style="display:block;">${e.lineCount} line${e.lineCount === 1 ? "" : "s"} · ${e.unitCount} unit${e.unitCount === 1 ? "" : "s"} · ${esc(e.source)}${e.note ? " · " + esc(e.note) : ""}</span></span>
+        <span><span>${when(e.createdAt)} · ${esc(e.employee)}</span><span class="ent-meta" style="display:block;">${e.lineCount} line${e.lineCount === 1 ? "" : "s"} · ${e.unitCount} unit${e.unitCount === 1 ? "" : "s"} · ${e.note === QUICK_NOTE ? "<strong>⚡ Quick adds</strong>" : esc(e.source) + (e.note ? " · " + esc(e.note) : "")}</span></span>
         <span class="pill ${e.status === "open" ? "cyan" : "muted"}">${e.status === "open" ? "draft" : e.status}</span>
       </div>`).join("") : `<p class="empty">No entries yet — use “▶ Start entry” on the Inventory page.</p>`;
     el.querySelectorAll("[data-ent]").forEach((row: any) => row.addEventListener("click", () => openEntry(row.dataset.ent)));
@@ -147,7 +148,16 @@ const pageData = {
     try {
       const j = await api({ action: "getEntry", entryId: id });
       const e = j.entry;
-      $("ed-title").textContent = `Entry #${e.human_id}`;
+      // The day's quick adds (＋ Add product / ＋ Receive outside an entry).
+      $("ed-title").textContent = `Entry #${e.human_id}${e.note === QUICK_NOTE ? " · ⚡ Quick adds" : ""}`;
+      // A draft's typed prices: Finish gives each stock row the one typed LAST
+      // on its lines — show that on every line of the row.
+      const typed = new Map<string, { c: number; at: string }>();
+      if (e.status === "open") for (const it of j.items || []) {
+        if (it.price_set_cents == null || !it.variant?.id) continue;
+        const cur = typed.get(it.variant.id), at = it.price_set_at || "";
+        if (!cur || at >= cur.at) typed.set(it.variant.id, { c: it.price_set_cents, at });
+      }
       const lines = (j.items || []).map((it: any) => {
         if (it.kind === "non_inventory") return `
           <div class="ed-line">
@@ -158,14 +168,16 @@ const pageData = {
           </div>`;
         const v = it.variant || {};
         const p = v.product || {};
-        const changed = v.price_cents !== it.price_cents_at_entry;
+        // A draft line's typed price waits on the line until Finish.
+        const shown = typed.get(v.id)?.c ?? v.price_cents;
+        const changed = shown !== it.price_cents_at_entry;
         return `
           <div class="ed-line">
             <span class="ed-qty">${it.qty_added}×</span>
             <span>${esc(p.title ?? "?")}${rgBadge(p)} <span class="muted-2" style="font-size:0.78rem;">${esc(condShort(v))}${it.was_new_variant ? " · new" : ""}</span>
               ${it.supplier ? `<span class="ed-src">from ${esc(it.supplier)}</span>` : ""}
-              ${changed ? `<span class="ed-changed">price ${money(it.price_cents_at_entry)} → ${money(v.price_cents)}</span>` : ""}</span>
-            <span class="ed-price">${money(v.price_cents ?? 0)}</span>
+              ${changed ? `<span class="ed-changed">price ${money(it.price_cents_at_entry)} → ${money(shown)}</span>` : ""}</span>
+            <span class="ed-price">${money(shown ?? 0)}</span>
             ${e.status !== "open" && v.id ? `<button class="link-btn" data-editline="${it.id}" title="Fix condition / price on this item">✎</button>` : `<span></span>`}
           </div>`;
       }).join("");

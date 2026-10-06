@@ -187,7 +187,6 @@ const posData = {
     <button id="phone-scan-btn" class="btn btn-ghost btn-sm" title="Pair your phone as a wireless scanner">📱 Phone</button>
     <a href="/entries" class="btn btn-ghost btn-sm" title="Past receiving entries + label reprints">📥 Entries</a>
     <button id="inv-import" class="btn btn-ghost btn-sm" title="Import a collection .csv (PriceCharting export or any Title / Platform / Condition sheet) as staged lines on an entry">📄 Import CSV</button>
-    <button id="inv-similar" class="btn btn-ghost btn-sm" title="Quick-add an item from any eBay listing of the same thing: paste the link and the Add form fills in (title, platform, region, condition, category, price, UPC/EAN). Saves 1 photo + details. Never synced with eBay.">🛒 Sell similar</button>
     </div>
     <!-- The two main actions, on the right: Start entry (outlined) + Add product. -->
     <div class="inv-head-r">
@@ -215,7 +214,7 @@ const posData = {
           <input id="ent-search" placeholder="Scan a barcode or type to add — e.g. mario kart 64 cib" autocomplete="off" />
           <div class="ti-suggest" id="ent-suggest" hidden></div>
         </div>
-        <button id="ent-new" class="btn btn-ghost btn-sm" type="button">＋ New product</button>
+        <button id="ent-new" class="btn btn-ghost btn-sm" type="button" title="Add a product to this entry (pre-filled from what's typed in the search)">＋ Add product</button>
         <button id="ent-noninv" class="btn btn-ghost btn-sm" type="button" title="Something you paid for that isn't sold as stock — a bulk lot, parts, supplies. Recorded on the entry for the books; no stock, no label.">＋ Non-inventory</button>
         <button id="ent-import" class="btn btn-ghost btn-sm" type="button" title="Import a collection .csv — each row becomes a staged line (matched to existing listings when possible)">📄 Import CSV</button>
       </div>
@@ -264,6 +263,27 @@ const posData = {
       <button id="ni-save" class="btn btn-primary btn-sm" style="margin-top:0.7rem;">Record non-inventory item</button>
     </div>
     <div id="np-stock">
+    <!-- Quick add: find it first (same search + scan as the entry). -->
+    <div class="np-find" id="np-find-wrap">
+      <div class="ti-desc-cell">
+        <input id="np-find" placeholder="Scan a barcode or search — e.g. mario kart 64 cib" autocomplete="off" />
+        <div class="ti-suggest" id="np-find-suggest" hidden></div>
+      </div>
+      <p class="muted np-find-hint">Already have it? Pick it to add copies. Not listed yet → <strong>＋ New product</strong> fills in the form below.</p>
+      <div id="np-recv" class="np-recv" hidden>
+        <div class="cond-scroll">
+          <table class="tbl np-recv-tbl">
+            <thead><tr><th>Item</th><th>Completeness</th><th>Grade</th><th class="num">Qty</th><th class="num">Paid $ each</th><th class="num" title="That condition's price — changing it re-prices every copy of that condition">Price $</th><th></th></tr></thead>
+            <tbody id="np-recv-body"></tbody>
+          </table>
+        </div>
+        <div class="np-recv-foot">
+          <button type="button" id="np-recv-go" class="btn btn-primary btn-sm">＋ Add to stock &amp; print labels</button>
+          <span id="np-recv-sum" class="muted"></span>
+          <button type="button" id="np-recv-clear" class="link-btn">Clear</button>
+        </div>
+      </div>
+    </div>
     <div class="ebay-import">
       <div class="ebay-row">
         <span class="ebay-tag" title="Fill this form from any eBay listing of the same item — title, platform, region, condition, category, price, UPC/EAN. On Save: its cover photo + details (brand, year, series, character). Never synced with eBay.">🛒 Sell similar</span>
@@ -283,11 +303,13 @@ const posData = {
       <label>Grade<select id="np-grade"><option value="">—</option>{grades?.map((g) => <option value={g.code}>{g.label}</option>)}</select></label>
       <label>Price $<input id="np-price" type="number" min="0" step="0.01" value="0" /></label>
       <label>Qty<input id="np-qty" type="number" min="0" value="1" /></label>
+      <label title="Purchase price — what you paid per copy (optional)">Paid $ each<input id="np-cost" type="number" min="0" step="0.01" placeholder="optional" /></label>
       <label>Barcode (optional)<input id="np-barcode" /></label>
       {(invTypesSrv?.length ?? 0) > 0 && (
         <label>Inventory type<select id="np-invtype">{invTypesSrv!.map((t: any) => <option value={t.id} selected={t.key === "retail"}>{t.icon} {t.name}</option>)}</select></label>
       )}
     </div>
+    <p class="muted" id="np-note" style="margin:0.6rem 0 0;font-size:0.82rem;"></p>
     <button id="np-save" class="btn btn-primary btn-sm" style="margin-top:0.7rem;">Save product</button>
     </div>
   </div>
@@ -612,6 +634,16 @@ const posData = {
   .sup-row a { color:var(--cyan); }
   .sup-row .link-btn { margin-left:auto; }
   .ent-add { display:flex; gap:0.6rem; align-items:center; margin-bottom:0.9rem; }
+  /* Quick add: find it first. */
+  .np-find { margin-bottom:0.85rem; padding-bottom:0.85rem; border-bottom:1px solid var(--border); }
+  .np-find .ti-desc-cell { position:relative; }
+  .np-find .ti-desc-cell input { width:100%; }
+  .np-find-hint { margin:0.35rem 0 0; font-size:0.78rem; }
+  .np-recv { margin-top:0.7rem; }
+  .np-recv-tbl input, .np-recv-tbl select { width:100%; min-width:4.5rem; }
+  .np-recv-foot { display:flex; align-items:center; gap:0.7rem; margin-top:0.5rem; flex-wrap:wrap; }
+  /* In an entry the Add form sits right under the search row. */
+  .ent-panel #add-panel { margin:0 0 0.9rem !important; }
   .ent-add .ti-desc-cell { position:relative; }
   .ent-add input { width:100%; }
   #ent-table input { padding:0.35rem 0.45rem; text-align:right; }
@@ -839,28 +871,34 @@ const posData = {
   // one. Platform, region, category, condition and type stay (handy for a
   // stack of games for one console).
   function clearProductFields() {
-    for (const id of ["np-title", "np-price", "np-barcode", "np-ebay", "ni-desc", "ni-total"]) { const el = document.getElementById(id) as HTMLInputElement | null; if (el) el.value = ""; }
+    for (const id of ["np-title", "np-price", "np-cost", "np-barcode", "np-ebay", "ni-desc", "ni-total"]) { const el = document.getElementById(id) as HTMLInputElement | null; if (el) el.value = ""; }
     const q = document.getElementById("np-qty") as HTMLInputElement | null; if (q) q.value = "1";
     const note = document.getElementById("np-ebay-note") as HTMLElement | null; if (note) { note.hidden = true; note.innerHTML = ""; }
     pendingEbay = null;
   }
   // The Add panel: open = the "＋ Add product" button turns into "✕ Cancel".
   // Closing with something typed asks first (also when Start entry closes it).
+  // After a save it stays open for the next one, and the button reads
+  // "✓ Done" (what's saved is saved; only a half-typed one would be lost).
+  let addSaved = false;
   function setAddOpen(open: boolean) {
     ($("add-panel") as HTMLElement).hidden = !open;
+    if (!open) addSaved = false;
     const b = $("toggle-add");
-    b.textContent = open ? "✕ Cancel" : "＋ Add product";
+    b.textContent = open ? (addSaved ? "✓ Done" : "✕ Cancel") : "＋ Add product";
     b.classList.toggle("btn-primary", !open);
     b.classList.toggle("btn-ghost", open);
-    b.title = open ? "Close without saving" : "";
+    b.title = open ? (addSaved ? "Close the Add form" : "Close without saving") : "";
   }
-  const addDirty = () => ["np-title", "np-barcode", "np-ebay", "ni-desc", "ni-total"].some((id) => ((document.getElementById(id) as HTMLInputElement | null)?.value ?? "").trim() !== "")
-    || (parseFloat((document.getElementById("np-price") as HTMLInputElement | null)?.value || "0") || 0) > 0;
+  const addDirty = () => ["np-title", "np-cost", "np-barcode", "np-ebay", "ni-desc", "ni-total"].some((id) => ((document.getElementById(id) as HTMLInputElement | null)?.value ?? "").trim() !== "")
+    || (parseFloat((document.getElementById("np-price") as HTMLInputElement | null)?.value || "0") || 0) > 0
+    || recvRows.length > 0;
   function closeAddPanel(): boolean {
     if (($("add-panel") as HTMLElement).hidden) return true;
     const kind = npKind === "noninv" ? "non-inventory item" : "product";
     if (addDirty() && !confirm(`Discard this ${kind}? What you've typed will be cleared.`)) return false;
     clearProductFields();
+    clearRecv();
     setNpKind("stock");
     setAddOpen(false);
     return true;
@@ -874,9 +912,19 @@ const posData = {
     ($("np-noninv") as HTMLElement).hidden = k !== "noninv";
     document.querySelectorAll<HTMLElement>(".np-kind-btn").forEach((b) => { const on = b.dataset.kind === k; b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); });
     $("np-heading").textContent = k === "stock" ? "Add a product" : "Add a non-inventory item";
-    $("ni-note").textContent = entryMode && entryId
+    refreshAddNotes();
+  }
+  // Where a save goes NOW: the open entry, or today's ⚡ Quick adds entry.
+  function refreshAddNotes() {
+    const onEntry = entryMode && entryId;
+    $("ni-note").textContent = onEntry
       ? `Goes on this entry (#${entryHuman}) — counted in what you paid, no stock or label.`
-      : "Recorded right away as its own finished entry (see 📥 Entries) — counted in what you paid, no stock or label.";
+      : "Recorded right away on today's ⚡ Quick adds entry (see 📥 Entries) — counted in what you paid, no stock or label.";
+    // In an entry its own search (right above) does this.
+    ($("np-find-wrap") as HTMLElement).hidden = !!onEntry;
+    $("np-note").textContent = onEntry
+      ? `Goes on Entry #${entryHuman} as a line — in stock and labeled when you Finish. The form stays open for the next one.`
+      : "Goes into stock now, onto today's ⚡ Quick adds entry (see 📥 Entries), and its labels pop up. The form stays open for the next one.";
   }
   document.querySelectorAll<HTMLElement>(".np-kind-btn").forEach((b) => b.addEventListener("click", () => {
     setNpKind(b.dataset.kind === "noninv" ? "noninv" : "stock");
@@ -1313,7 +1361,7 @@ const posData = {
         <div class="m-label">Pricing &amp; web — per condition${conditionPricing ? ` <span class="cp-on">↻ condition pricing on</span>` : ""}</div>
         <div class="cond-scroll">
           <table class="cond-table"${invTypes.length ? "" : ` style="min-width:660px;"`}>
-            <thead><tr><th>Completeness</th><th>Grade</th><th>SKU</th><th>In‑store $</th><th>Online $</th><th>Qty</th><th>Web</th>${invTypes.length ? "<th>Type</th><th>Loc</th>" : ""}</tr></thead>
+            <thead><tr><th>Completeness</th><th>Grade</th><th>SKU</th><th>In‑store $</th><th>Online $</th><th>Qty</th>${data.isManager ? `<th title="Purchase price — what you paid per copy">Paid $</th>` : ""}<th>Web</th>${invTypes.length ? "<th>Type</th><th>Loc</th>" : ""}</tr></thead>
             <tbody id="cond-body">${condRows}</tbody>
           </table>
         </div>
@@ -1410,8 +1458,8 @@ const posData = {
       if (!v.internalCode) { alert("This condition has no label code yet — reload the page and try again."); return; }
       openPrintDialog([{ item: labelItemOf(p, v), defaultCopies: 1, allCopies: v.quantity }], lblTemplates, { title: `Print · ${rgTitle(p)}` });
     }));
-    // Quick stock adjust — IMMEDIATE (quantity + ledger, no draft). Batch
-    // receiving with costs/labels lives in ▶ Start entry.
+    // Quick stock adjust — IMMEDIATE (quantity + ledger, no draft), recorded
+    // on the day's ⚡ Quick adds entry. Batch receiving lives in ▶ Start entry.
     document.querySelectorAll<HTMLButtonElement>("[data-recvstock]").forEach((b) => b.addEventListener("click", async () => {
       const v = p.variants.find((x: any) => x.id === b.dataset.recvstock);
       if (!v) return;
@@ -1420,12 +1468,13 @@ const posData = {
       const costRaw = prompt("Cost per unit $ (optional — what you paid):", "");
       const unitCostCents = costRaw && costRaw.trim() !== "" ? Math.round(parseFloat(costRaw) * 100) || 0 : null;
       try {
-        const j = await api({ action: "receiveStock", variantId: v.id, qtyAdded: qty, unitCostCents });
+        const j = await api({ action: "receiveStock", variantId: v.id, qtyAdded: qty, unitCostCents, receivedOn: localDate() });
         v.quantity = j.newQuantity;
         const qi = $("cond-body")?.querySelector<HTMLInputElement>(`[data-vrow="${v.id}"] [data-vf="qty"]`);
         if (qi) { qi.value = String(j.newQuantity); qi.dataset.orig = qi.value; }
         render();
-        toast(`✓ Received ${qty} — now ${j.newQuantity} in stock`);
+        toast(`✓ Received ${qty} — now ${j.newQuantity} in stock${j.quickEntry ? ` · ⚡ Quick adds (Entry #${j.quickEntry.humanId})` : ""}`);
+        if (j.quickError) alert(`Received, but it couldn't be recorded on today's ⚡ Quick adds entry:\n${j.quickError}`);
       } catch (e: any) { alert(e.message); }
     }));
 
@@ -1530,6 +1579,7 @@ const posData = {
         <td class="c-num"><div class="price-cell"><input data-vf="instore" type="number" min="0" step="0.01" value="${(v.priceCents / 100).toFixed(2)}">${repriceBtn}</div></td>
         <td class="c-num"><input data-vf="online" type="number" min="0" step="0.01" value="${v.onlinePriceCents != null ? (v.onlinePriceCents / 100).toFixed(2) : ""}" placeholder="${(v.priceCents / 100).toFixed(2)}"></td>
         <td class="c-num"><input data-vf="qty" type="number" min="0" value="${v.quantity}" data-orig="${v.quantity}"></td>
+        ${data.isManager ? `<td class="c-num"><input data-vf="cost" type="number" min="0" step="0.01" value="${v.costCents ? (v.costCents / 100).toFixed(2) : ""}" placeholder="—" title="What you paid per copy (purchase price) — used for margins in Reports"></td>` : ""}
         <td class="c-web"><input data-vf="web" type="checkbox"${v.onlineVisible ? " checked" : ""}></td>
         ${invTypes.length ? `<td><select data-vf="invtype">${typeOpts(v.inventoryTypeId)}</select></td><td><select data-vf="loc">${locOpts(v.locationId)}</select></td>` : ""}
       </tr>`;
@@ -1539,7 +1589,7 @@ const posData = {
     return `
       <div class="bc-block" data-bcv="${v.id}">
         <div class="bc-head" style="display:flex;align-items:center;gap:0.5rem;">${esc(condLabel(v))}${v.sku ? " · " + esc(v.sku) : ""}
-          <button type="button" class="btn btn-ghost btn-sm" data-recvstock="${v.id}" style="margin-left:auto;" title="Receive stock onto the current entry (logs the receipt for label printing)">＋ Receive</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-recvstock="${v.id}" style="margin-left:auto;" title="Add copies to stock now (recorded on today's ⚡ Quick adds entry in 📥 Entries)">＋ Receive</button>
           <button type="button" class="btn btn-ghost btn-sm" data-printlabel="${v.id}" title="Print price labels for this condition">🏷 Print</button>
         </div>
         <div data-bclist>${v.barcodes.map(bcChip).join("") || `<span style="color:var(--muted-2);font-size:0.76rem;">No barcodes</span>`}</div>
@@ -1834,6 +1884,8 @@ const posData = {
           // Only a count the user changed: the page's numbers can be stale
           // (sales on other stations) and must not overwrite live stock.
           ...(f("qty").value !== f("qty").dataset.orig ? { quantity: Math.max(0, Math.round(parseInt(f("qty").value)) || 0) } : {}),
+          // Purchase price per copy (managers see the column).
+          ...(row.querySelector('[data-vf="cost"]') ? { costCents: f("cost").value.trim() === "" ? null : toCents(f("cost").value) } : {}),
           onlineVisible: f("web").checked,
           ...(invTypes.length ? { inventoryTypeId: f("invtype").value, locationId: f("loc").value || null } : {}),
         };
@@ -1842,6 +1894,7 @@ const posData = {
           condition: derived, completenessCode: comp, gradeCode: grade,
           sku: f("sku").value.trim() || null, priceCents: payload.priceCents,
           onlinePriceCents: payload.onlinePriceCents, quantity: payload.quantity ?? v.quantity, onlineVisible: payload.onlineVisible,
+          ...("costCents" in payload ? { costCents: payload.costCents } : {}),
         });
         if (invTypes.length) Object.assign(v, { inventoryTypeId: f("invtype").value, locationId: f("loc").value || "" });
       }
@@ -1895,7 +1948,7 @@ const posData = {
   const entBusyStep = (d: number) => {
     entBusy = Math.max(0, entBusy + d);
     const f = $("ent-finish") as HTMLButtonElement | null;
-    if (f) { f.disabled = entBusy > 0; f.title = entBusy > 0 ? "Wait — condition changes are still saving" : ""; }
+    if (f) { f.disabled = entBusy > 0; f.title = entBusy > 0 ? "Wait — changes are still saving" : ""; }
   };
   const entCompOpts = (sel: string) =>
     `<option value="">—</option>` + completeness.map((c) => `<option value="${c.code}"${c.code === sel ? " selected" : ""}>${esc(c.label)}</option>`).join("");
@@ -1952,6 +2005,7 @@ const posData = {
   const recvWrap = document.querySelector<HTMLElement>(".ent-recv");
   if (recvWrap) recvWrap.style.display = receivedOnReady ? "" : "none";
   try { const s = JSON.parse(sessionStorage.getItem("tl-entry") || "null"); if (s?.id) { entryId = s.id; entryHuman = s.h; } } catch {}
+  refreshAddNotes();
 
   function setEntryMode(on: boolean) {
     entryMode = on && !!entryId;
@@ -1963,9 +2017,14 @@ const posData = {
     const t = $("recv-toggle");
     if (t) t.textContent = entryMode ? `📥 Entry #${entryHuman} (open)` : "▶ Start entry";
     if (entryMode) { $("ent-num").textContent = `#${entryHuman}`; renderEnt(); }
-    // Any other way in / out of an entry: the Add form's note must say where
-    // a non-inventory item will go NOW.
-    if (!($("add-panel") as HTMLElement).hidden && npKind === "noninv") setNpKind("noninv");
+    // The Add form sits where it's used: in the entry, right under its search
+    // row (what you add shows up in the lines below); else above the list.
+    const addPanel = $("add-panel");
+    if (entryMode) document.querySelector("#entry-screen .ent-add")?.after(addPanel);
+    else $("inv-shell").before(addPanel);
+    // Any other way in / out of an entry: the Add form's notes must say where
+    // a save will go NOW.
+    refreshAddNotes();
   }
   function clearEntry() {
     entryId = ""; entryHuman = 0; entRows = []; entOrderTotal = null; entSel.clear();
@@ -2056,21 +2115,44 @@ const posData = {
         r.qty = Math.max(1, parseInt((e.target as HTMLInputElement).value) || 1);
         (e.target as HTMLInputElement).value = String(r.qty);
         entTotals();
+        entBusyStep(1); // Finish waits for line edits still saving
         try { await api({ action: "updateEntryItem", itemId: r.itemId, qty: r.qty }); } catch (err: any) { alert(err.message); }
+        finally { entBusyStep(-1); }
       });
       tr.querySelector<HTMLInputElement>('[data-ef="cost"]')!.addEventListener("change", async (e) => {
         const raw = (e.target as HTMLInputElement).value.trim();
         r.costCents = raw === "" ? null : toCents(raw);
         entTotals();
+        entBusyStep(1);
         try { await api({ action: "updateEntryItem", itemId: r.itemId, unitCostCents: r.costCents }); } catch (err: any) { alert(err.message); }
+        finally { entBusyStep(-1); }
       });
       tr.querySelector<HTMLInputElement>('[data-ef="price"]')?.addEventListener("change", async (e) => {
-        r.priceCents = toCents((e.target as HTMLInputElement).value);
+        // Emptied = un-typed: the row's own price again.
+        const raw = (e.target as HTMLInputElement).value.trim();
+        const rowPrice = items.flatMap(everyVariant).find((x: any) => x.id === r.variantId)?.priceCents ?? r.priceCents;
+        r.priceCents = raw === "" ? rowPrice : toCents(raw);
+        if (raw === "") (e.target as HTMLInputElement).value = (r.priceCents / 100).toFixed(2);
+        // The LINE's price: it travels with the line, and Finish gives the
+        // stock row the price typed last on its lines — so changing the
+        // condition afterwards (Great → Fair) never re-prices the other
+        // copies. (Before the migration the server applies it right away —
+        // "live".) The row's other lines show the new price too.
+        if (raw !== "") entRows.forEach((x) => { if (x !== r && x.variantId && x.variantId === r.variantId) x.priceCents = r.priceCents; });
         entTotals();
-        // Price edits are LIVE variant edits (labels print this price).
-        const lv = items.flatMap(everyVariant).find((x: any) => x.id === r.variantId);
-        if (lv) lv.priceCents = r.priceCents;
-        try { await api({ action: "updateVariant", id: r.variantId, priceCents: r.priceCents }); } catch (err: any) { alert(err.message); }
+        if (raw !== "") body.querySelectorAll<HTMLElement>("tr[data-item]").forEach((row) => {
+          const o = entRows.find((x) => x.itemId === row.dataset.item);
+          const pi = row.querySelector<HTMLInputElement>('[data-ef="price"]');
+          if (o && o !== r && pi && o.variantId === r.variantId) pi.value = (o.priceCents / 100).toFixed(2);
+        });
+        entBusyStep(1);
+        try {
+          const j = await api({ action: "updateEntryItem", itemId: r.itemId, priceCents: raw === "" ? null : r.priceCents });
+          if (j.live && raw !== "") { const lv = items.flatMap(everyVariant).find((x: any) => x.id === r.variantId); if (lv) lv.priceCents = r.priceCents; }
+          // Un-typed: another line of the row may still carry a typed price — reload what Finish will apply.
+          if (raw === "") { await loadEntry(entryId); renderEnt(); }
+        } catch (err: any) { alert(err.message); }
+        finally { entBusyStep(-1); }
       });
       tr.querySelector<HTMLInputElement>("[data-esel]")!.addEventListener("change", (e) => {
         if ((e.target as HTMLInputElement).checked) entSel.add(r.itemId); else entSel.delete(r.itemId);
@@ -2137,7 +2219,8 @@ const posData = {
         return {
           kind: "stock",
           itemId: it.id, variantId: v.id, qty: it.qty_added, costCents: it.unit_cost_cents,
-          priceCents: v.price_cents ?? 0, wasNew: it.was_new_variant, supplier: it.supplier ?? null,
+          // A price typed on the line waits there until Finish.
+          priceCents: it.price_set_cents ?? v.price_cents ?? 0, wasNew: it.was_new_variant, supplier: it.supplier ?? null,
           title: pr.title ?? "?", platform: pr.platform || pr.category?.name || "", regionCode: pr.region_code ?? "",
           cond: condLabel({ completenessCode: v.completeness_code, gradeCode: v.grade_code, condition: v.condition }),
           completenessCode: v.completeness_code || "", gradeCode: v.grade_code || "", inventoryTypeId: v.inventory_type_id || "",
@@ -2146,6 +2229,14 @@ const posData = {
           stockedQty: it.stocked_qty || 0, stockedVariantId: it.stocked_variant_id || "", stockedOnHand: it.stocked_on_hand ?? 0,
         };
       });
+      // Finish gives a stock row the price typed LAST on its lines — show that on each of them.
+      const typed = new Map<string, { c: number; at: string }>();
+      for (const it of j.items || []) {
+        if (it.price_set_cents == null || !it.variant?.id) continue;
+        const cur = typed.get(it.variant.id), at = it.price_set_at || "";
+        if (!cur || at >= cur.at) typed.set(it.variant.id, { c: it.price_set_cents, at });
+      }
+      entRows.forEach((r) => { const t = r.variantId ? typed.get(r.variantId) : null; if (t) r.priceCents = t.c; });
       try { sessionStorage.setItem("tl-entry", JSON.stringify({ id: entryId, h: entryHuman })); } catch {}
       return true;
     } catch { return false; }
@@ -2169,7 +2260,8 @@ const posData = {
   // Phone-as-scanner: in entry mode scans stage lines (ent-search auto-adds on
   // exact code hits); otherwise they land in the grid search.
   const scanTarget = {
-    target: () => (entryMode ? $("ent-search") : $("inv-search")) as HTMLInputElement,
+    target: () => (entryMode ? $("ent-search")
+      : !($("add-panel") as HTMLElement).hidden && npKind === "stock" ? $("np-find") : $("inv-search")) as HTMLInputElement,
     page: "Inventory",
     // Same exact-identifier rules as the entry typeahead / grid search, so the
     // phone shows exactly what the station just staged or filtered to.
@@ -2307,6 +2399,7 @@ const posData = {
 
   // Stage a variant onto the draft (scanning the same one again bumps qty).
   async function stageVariant(p: any, v: any) {
+    entBusyStep(1); // Finish waits for a scan still saving
     try {
       await ensureEntry();
       const existing = entRows.find((r) => r.variantId === v.id);
@@ -2320,27 +2413,37 @@ const posData = {
       entRows.push({ itemId: j.itemId, variantId: v.id, qty: 1, costCents: null, priceCents: v.priceCents, wasNew: false, supplier: null, title: p.title, platform: p.platform || p.categoryName || "", regionCode: p.regionCode || "", cond: condLabel(v), completenessCode: v.completenessCode || "", gradeCode: v.gradeCode || "", inventoryTypeId: v.inventoryTypeId || "" });
       renderEnt();
     } catch (e: any) { alert(e.message); }
+    finally { entBusyStep(-1); }
   }
 
-  // Typeahead: suggestions are individual VARIANTS (condition + price); an
-  // exact barcode / label-code match stages instantly (wedge scanners).
+  // Find-or-add typeahead — the entry's search, and the Add form's (a quick
+  // add). Suggestions are individual VARIANTS (condition + price); an exact
+  // barcode / label-code match picks instantly (wedge scanners).
+  type FindCtx = {
+    input: HTMLInputElement; box: HTMLElement;
+    items: () => any[]; variants: (p: any) => any[];
+    pick: (p: any, v: any) => void;                    // an existing condition
+    create: (q: string, official?: { title: string; platform: string; parsed?: any; region?: string }) => void;
+    nonInv: (q: string) => void;
+    verb: string;                                      // "stage" / "add"
+  };
   const entSearch = $("ent-search") as HTMLInputElement;
-  function entSuggest() {
-    const box = $("ent-suggest") as HTMLElement;
-    const q = entSearch.value.trim();
+  function findSuggest(c: FindCtx) {
+    const box = c.box;
+    const q = c.input.value.trim();
     if (q.length < 2) { box.hidden = true; return; }
-    const flat = draftItems().flatMap((p) => draftVariants(p).map((v: any) => ({ p, v })));
+    const flat = c.items().flatMap((p) => c.variants(p).map((v: any) => ({ p, v })));
     // Our printed label codes name one condition → stage it.
     const own = flat.find(({ v }: any) => (v.labelCode && v.labelCode === q) || (v.internalCode && v.internalCode === q.toUpperCase()));
-    if (own) { entSearch.value = ""; box.hidden = true; stageVariant(own.p, own.v); return; }
+    if (own) { c.input.value = ""; box.hidden = true; c.pick(own.p, own.v); return; }
     // The game's UPC fits every condition: one → stage it; several → ask
     // (the box stays open and unfocused, so the next scan simply replaces it).
-    const upcP = draftItems().find((p: any) => upcsOf(p).some((u) => barcodeEq(u, q)));
+    const upcP = c.items().find((p: any) => upcsOf(p).some((u) => barcodeEq(u, q)));
     if (upcP) {
-      const vs = draftVariants(upcP);
-      if (vs.length === 1) { entSearch.value = ""; box.hidden = true; stageVariant(upcP, vs[0]); return; }
+      const vs = c.variants(upcP);
+      if (vs.length === 1) { c.input.value = ""; box.hidden = true; c.pick(upcP, vs[0]); return; }
       if (vs.length > 1) {
-        entSearch.value = "";
+        c.input.value = "";
         box.innerHTML = `<div class="ti-sug-head">Which condition? — ${esc(upcP.title)}${badge(upcP.regionCode)}${upcP.platform ? ` (${esc(upcP.platform)})` : ""}</div>` + vs.map((v: any, i: number) => {
           const t = typeById.get(v.inventoryTypeId);
           return `<div class="ti-sug" data-cv="${i}">
@@ -2351,24 +2454,24 @@ const posData = {
         }).join("");
         box.hidden = false;
         box.querySelectorAll<HTMLElement>("[data-cv]").forEach((el) => el.addEventListener("mousedown", (e) => {
-          e.preventDefault(); box.hidden = true; stageVariant(upcP, vs[+el.dataset.cv!]);
+          e.preventDefault(); box.hidden = true; c.pick(upcP, vs[+el.dataset.cv!]);
         }));
         return;
       }
     }
     const hit = flat.find(({ v }: any) => (v.barcodes || []).some((b: any) => barcodeEq(b.barcode, q)));
-    if (hit) { entSearch.value = ""; box.hidden = true; stageVariant(hit.p, hit.v); return; }
+    if (hit) { c.input.value = ""; box.hidden = true; c.pick(hit.p, hit.v); return; }
     // A unique exact-SKU hit stages instantly too (wedge scanners send SKUs).
     const skuExact = flat.filter(({ v }: any) => v.sku && v.sku.toUpperCase() === q.toUpperCase());
-    if (skuExact.length === 1) { entSearch.value = ""; box.hidden = true; stageVariant(skuExact[0].p, skuExact[0].v); return; }
+    if (skuExact.length === 1) { c.input.value = ""; box.hidden = true; c.pick(skuExact[0].p, skuExact[0].v); return; }
     // A UPC we don't stock yet: look the game up and offer to add it.
-    if (upcLike(q) && !codeOnListing(q, draftItems())) {
+    if (upcLike(q) && !codeOnListing(q, c.items())) {
       box.innerHTML = `<div class="ti-sug-head">UPC ${esc(q)}</div><div class="ti-sug"><span class="ti-sug-meta">🔎 Looking it up…</span></div>`;
       box.hidden = false;
       identifyUpc(q).then((id) => {
-        if (entSearch.value.trim() !== q) return; // the employee moved on
-        box.innerHTML = `<div class="ti-sug-head">UPC ${esc(q)}</div><div class="ti-sug"${id.found && !id.inCatalog ? " data-upcadd" : ""}><span class="ti-sug-title">${upcFoundHtml(id)}</span>${id.found && !id.inCatalog ? `<span class="ti-sug-meta">＋ Add &amp; stage</span>` : ""}</div>`;
-        box.querySelector("[data-upcadd]")?.addEventListener("mousedown", (e) => { e.preventDefault(); box.hidden = true; entSearch.value = ""; addFromUpc(id); });
+        if (c.input.value.trim() !== q) return; // the employee moved on
+        box.innerHTML = `<div class="ti-sug-head">UPC ${esc(q)}</div><div class="ti-sug"${id.found && !id.inCatalog ? " data-upcadd" : ""}><span class="ti-sug-title">${upcFoundHtml(id)}</span>${id.found && !id.inCatalog ? `<span class="ti-sug-meta">＋ Add${c.verb === "stage" ? " &amp; stage" : ""}</span>` : ""}</div>`;
+        box.querySelector("[data-upcadd]")?.addEventListener("mousedown", (e) => { e.preventDefault(); box.hidden = true; c.input.value = ""; addFromUpc(id); });
       });
       return;
     }
@@ -2376,9 +2479,9 @@ const posData = {
     // A typed region ("okami jp") is a filter — the US and JP copies are
     // otherwise identical rows (matchScore applies it, and steps aside when
     // the words are part of a listing's name: "European Assault").
-    const matches = smartMatches(parsed, draftItems()).slice(0, 5);
+    const matches = smartMatches(parsed, c.items()).slice(0, 5);
     let opts = matches.flatMap((m: any) => {
-      const vs = draftVariants(m.p).sort((a: any, b: any) =>
+      const vs = c.variants(m.p).sort((a: any, b: any) =>
         (b.completenessCode === parsed.completenessCode ? 1 : 0) - (a.completenessCode === parsed.completenessCode ? 1 : 0));
       return vs.map((v: any) => ({ p: m.p, v }));
     }).slice(0, 8);
@@ -2393,7 +2496,7 @@ const posData = {
         <span class="ti-sug-meta">${esc(o.p.platform || "")} · ${esc(condLabel(o.v))}</span>
         <span class="ti-sug-price">${money(o.v.priceCents)}</span>
       </div>`).join("") + `
-      <div class="ti-sug" data-new><span class="ti-sug-title">＋ New product “${esc(q)}”</span><span class="ti-sug-meta">create &amp; stage</span></div>`;
+      <div class="ti-sug" data-new><span class="ti-sug-title">＋ New product “${esc(q)}”</span><span class="ti-sug-meta">${c.verb === "stage" ? "create &amp; stage" : "fill in the form below"}</span></div>`;
     // "bulk …" / "lot of …" reads as a non-inventory purchase: offer it first.
     if (/\b(bulk|lot)\b/i.test(q)) box.innerHTML = `
       <div class="ti-sug" data-noninv><span class="ti-sug-title">🧾 Add “${esc(q)}” as non-inventory</span><span class="ti-sug-meta">recorded for the books · no stock</span></div>` + box.innerHTML;
@@ -2401,18 +2504,18 @@ const posData = {
     box.querySelectorAll<HTMLElement>("[data-i]").forEach((el) => el.addEventListener("mousedown", (e) => {
       e.preventDefault();
       const o = opts[+el.dataset.i!];
-      box.hidden = true; entSearch.value = "";
-      stageVariant(o.p, o.v);
+      box.hidden = true; c.input.value = "";
+      c.pick(o.p, o.v);
     }));
-    box.querySelector("[data-new]")?.addEventListener("mousedown", (e) => { e.preventDefault(); box.hidden = true; entNewProduct(q); });
-    box.querySelector("[data-noninv]")?.addEventListener("mousedown", (e) => { e.preventDefault(); box.hidden = true; entSearch.value = ""; entAddNonInventory(q); });
-    entDbSuggest(q, parsed);
+    box.querySelector("[data-new]")?.addEventListener("mousedown", (e) => { e.preventDefault(); box.hidden = true; c.create(q); });
+    box.querySelector("[data-noninv]")?.addEventListener("mousedown", (e) => { e.preventDefault(); box.hidden = true; c.input.value = ""; c.nonInv(q); });
+    dbSuggest(c, q, parsed);
   }
   // "From the game database": official titles from our LaunchBox copy, so a
   // game the store has never stocked can be added under its real name (and
   // gets its box art). Debounced; stale answers are dropped.
   let dbSeq = 0;
-  function entDbSuggest(q: string, parsed: any) {
+  function dbSuggest(c: FindCtx, q: string, parsed: any) {
     const seq = ++dbSeq;
     const term = (parsed?.title || q).trim();
     if (term.length < 3) return;
@@ -2423,8 +2526,8 @@ const posData = {
         const r = await fetch("/api/pos/game-search", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ q: term, platform: parsed?.platform || "" }) });
         games = (await r.json()).games || [];
       } catch { return; }
-      const box = $("ent-suggest") as HTMLElement;
-      if (seq !== dbSeq || box.hidden || entSearch.value.trim() !== q) return;
+      const box = c.box;
+      if (seq !== dbSeq || box.hidden || c.input.value.trim() !== q) return;
       // Skip games the store already lists on that platform in that region
       // (they're above). A pick becomes a listing in the region the query
       // named, else the home one — a JP-only "Okami" must not hide the US one.
@@ -2432,7 +2535,7 @@ const posData = {
       // "Medal of Honor: European Assault": the region word is the game's NAME.
       const rgFor = (g: any) => (parsed?.regionText && nameHas({ title: g.name }, parsed.regionText) ? regionOf("", regions) : dbRegion);
       const key = (t: string, pl: string, rg: string) => `${normTitle(t)}|${(resolveStaticPlatform(pl) ?? pl ?? "").toLowerCase()}|${rg}`;
-      const have = new Set(draftItems().flatMap((p: any) => [p.title, ...(p.altNames || [])].map((t: string) => key(t, p.platform || "", regionOf(p.regionCode, regions)))));
+      const have = new Set(c.items().flatMap((p: any) => [p.title, ...(p.altNames || [])].map((t: string) => key(t, p.platform || "", regionOf(p.regionCode, regions)))));
       games = games.filter((g) => !have.has(key(g.name, g.platform || "", rgFor(g)))).slice(0, 6);
       if (!games.length) return;
       box.insertAdjacentHTML("beforeend", `<div class="ti-sug-head">From the game database</div>` + games.map((g, i) => `
@@ -2444,8 +2547,8 @@ const posData = {
       box.querySelectorAll<HTMLElement>("[data-db]").forEach((el) => el.addEventListener("mousedown", (e) => {
         e.preventDefault();
         const g = games[+el.dataset.db!];
-        box.hidden = true; entSearch.value = "";
-        entNewProduct("", { title: g.name, platform: g.platform, parsed, region: rgFor(g) });
+        box.hidden = true; c.input.value = "";
+        c.create("", { title: g.name, platform: g.platform, parsed, region: rgFor(g) });
       }));
     }, 250);
   }
@@ -2464,35 +2567,185 @@ const posData = {
   // One line at the exact total (a lot's count stays in its description) —
   // splitting $100 over 3 would record $99.99.
   async function stageNonInventory(desc: string, total: number | null) {
-    const j = await api({ action: "addNonInventoryLine", entryId, description: desc, qty: 1, unitCostCents: total });
+    entBusyStep(1);
+    let j: any;
+    try { j = await api({ action: "addNonInventoryLine", entryId, description: desc, qty: 1, unitCostCents: total }); }
+    finally { entBusyStep(-1); }
     entRows.push({ itemId: j.itemId, variantId: null, kind: "non_inventory", qty: 1, costCents: total, priceCents: 0, wasNew: false, supplier: null, title: desc, platform: "", cond: "", completenessCode: "", gradeCode: "" });
     renderEnt();
     toast(`🧾 Added “${desc}” (non-inventory)`);
   }
   // The Add panel's Non-inventory side: on the open entry, or — from the
-  // inventory screen — recorded right away as its own finished entry (the way
-  // a quick-added product goes straight into stock).
+  // inventory screen — recorded right away on the day's ⚡ Quick adds entry
+  // (with the quick-added products). Stays open for the next one.
   $("ni-save")?.addEventListener("click", async () => {
+    const btn = $("ni-save") as HTMLButtonElement;
+    if (btn.disabled) return;
     const desc = ($("ni-desc") as HTMLInputElement).value.trim();
     if (!desc) { alert("Describe the item (e.g. “DS bulk loose games, grade B”)."); ($("ni-desc") as HTMLInputElement).focus(); return; }
     const raw = ($("ni-total") as HTMLInputElement).value.trim();
     const total = raw === "" ? null : toCents(raw.replace(/[^0-9.]/g, ""));
-    const btn = $("ni-save") as HTMLButtonElement; btn.disabled = true;
+    btn.disabled = true;
     try {
       if (entryMode && entryId) await stageNonInventory(desc, total);
       else {
         const j = await api({ action: "quickNonInventory", description: desc, totalCents: total, receivedOn: localDate() });
-        toast(`🧾 Recorded “${desc}” on Entry #${j.humanId}`);
+        toast(`🧾 Recorded “${desc}” · ⚡ Quick adds (Entry #${j.humanId})`);
       }
       clearProductFields();
-      setNpKind("stock");
-      setAddOpen(false);
+      addSaved = true;
+      setAddOpen(true);
+      ($("ni-desc") as HTMLInputElement).focus();
     } catch (e: any) { alert(e.message); }
     finally { btn.disabled = false; }
   });
   $("ent-noninv")?.addEventListener("click", () => entAddNonInventory(entSearch.value.trim()));
-  entSearch?.addEventListener("input", entSuggest);
+  const entFind: FindCtx = {
+    input: entSearch, box: $("ent-suggest") as HTMLElement,
+    items: draftItems, variants: draftVariants,
+    pick: stageVariant, create: entNewProduct, nonInv: entAddNonInventory, verb: "stage",
+  };
+  entSearch?.addEventListener("input", () => findSuggest(entFind));
   entSearch?.addEventListener("blur", () => setTimeout(() => { ($("ent-suggest") as HTMLElement).hidden = true; }, 150));
+
+  /* ---------- Quick add: find it first ----------
+     The Add form's own search + scan (the entry's rules). A listing you have
+     → a row: how many, which condition, what you paid; "＋ Add to stock"
+     puts them in stock now (on today's ⚡ Quick adds entry) and prints their
+     labels. Not listed yet → ＋ New product fills in the form below. */
+  type RecvRow = { key: number; p: any; v: any; comp: string; grade: string; qty: number; cost: string; price: string; priceTouched: boolean };
+  let recvRows: RecvRow[] = [];
+  let recvKey = 0;
+  const npFind = $("np-find") as HTMLInputElement;
+  const sameType = (a: any, b: any) => (a.inventoryTypeId || retailTypeId) === (b.inventoryTypeId || retailTypeId);
+  // The stock row a row lands on: the one picked/scanned while its condition
+  // is unchanged; else that listing's row for the new condition + same type
+  // (none = a new condition).
+  const recvTarget = (r: RecvRow) => (r.comp === (r.v.completenessCode || "") && r.grade === (r.v.gradeCode || "") && r.p.variants.includes(r.v))
+    ? r.v
+    : r.p.variants.find((x: any) => (x.completenessCode || "") === r.comp && (x.gradeCode || "") === r.grade && sameType(x, r.v));
+  function clearRecv() { recvRows = []; renderRecv(); }
+  function recvPick(p: any, v: any) {
+    // The same stock row scanned again = one more copy.
+    const same = recvRows.find((r) => recvTarget(r) === v);
+    if (same) same.qty += 1;
+    else recvRows.push({ key: ++recvKey, p, v, comp: v.completenessCode || "", grade: v.gradeCode || "", qty: 1, cost: "", price: (v.priceCents / 100).toFixed(2), priceTouched: false });
+    renderRecv();
+    npFind.focus(); // the next scan lands here too
+  }
+  function recvSum() {
+    const n = recvRows.reduce((s, r) => s + r.qty, 0);
+    $("np-recv-sum").textContent = recvRows.length ? `${n} cop${n === 1 ? "y" : "ies"} of ${recvRows.length} item${recvRows.length === 1 ? "" : "s"}` : "";
+  }
+  function renderRecv() {
+    ($("np-recv") as HTMLElement).hidden = !recvRows.length;
+    const body = $("np-recv-body");
+    body.innerHTML = recvRows.map((r) => {
+      const t = recvTarget(r);
+      if (t && !r.priceTouched) r.price = (t.priceCents / 100).toFixed(2); // that condition's price now
+      const meta = t ? `${t.quantity} in stock` : "new condition for this listing";
+      return `<tr data-rk="${r.key}">
+        <td><strong>${esc(r.p.title)}</strong>${badge(r.p.regionCode)} <span class="ti-sug-meta">${esc(r.p.platform || r.p.categoryName || "")} · ${esc(meta)}</span></td>
+        <td><select data-rf="comp">${entCompOpts(r.comp)}</select></td>
+        <td><select data-rf="grade">${gradeOpts(r.grade)}</select></td>
+        <td class="num"><input data-rf="qty" type="number" min="1" value="${r.qty}"></td>
+        <td class="num"><input data-rf="cost" type="number" min="0" step="0.01" value="${esc(r.cost)}" placeholder="—"></td>
+        <td class="num"><input data-rf="price" type="number" min="0" step="0.01" value="${esc(r.price)}" title="${t ? "This condition's price — changing it re-prices every copy of it" : "The new condition's price"}"></td>
+        <td><button type="button" class="link-btn" data-rf="rm" title="Remove">✕</button></td>
+      </tr>`;
+    }).join("");
+    recvSum();
+    body.querySelectorAll<HTMLElement>("tr[data-rk]").forEach((tr) => {
+      const r = recvRows.find((x) => x.key === Number(tr.dataset.rk))!;
+      const f = (k: string) => tr.querySelector(`[data-rf="${k}"]`) as HTMLInputElement;
+      const onCond = () => {
+        r.comp = f("comp").value; r.grade = f("grade").value;
+        // The price follows the condition (that condition's own price) until you type one.
+        if (!r.priceTouched) { const t = recvTarget(r); if (t) r.price = (t.priceCents / 100).toFixed(2); }
+        renderRecv();
+      };
+      f("comp").addEventListener("change", onCond);
+      f("grade").addEventListener("change", onCond);
+      f("qty").addEventListener("input", () => { r.qty = Math.max(1, parseInt(f("qty").value) || 1); recvSum(); });
+      f("cost").addEventListener("input", () => { r.cost = f("cost").value; });
+      f("price").addEventListener("input", () => { r.price = f("price").value; r.priceTouched = true; });
+      f("rm").addEventListener("click", () => { recvRows = recvRows.filter((x) => x !== r); renderRecv(); });
+    });
+  }
+  $("np-recv-clear")?.addEventListener("click", () => { clearRecv(); npFind.focus(); });
+  $("np-recv-go")?.addEventListener("click", async () => {
+    if (!recvRows.length) return;
+    const btn = $("np-recv-go") as HTMLButtonElement;
+    btn.disabled = true;
+    // This batch, as it stands now: a scan while it saves starts a new row.
+    const batch = recvRows.map((r) => ({ ...r }));
+    recvRows = [];
+    renderRecv();
+    const failed: RecvRow[] = [];
+    const printLines: any[] = [];
+    const errors: string[] = [];
+    let quick: any = null, copies = 0;
+    try {
+      for (const r of batch) {
+        const cost = r.cost.trim() === "" ? null : toCents(r.cost);
+        const t = recvTarget(r);
+        // Only a price typed here re-prices that condition (the shown one may
+        // be stale — e.g. picked before another row's new price landed).
+        const priceCents = t && !r.priceTouched ? t.priceCents : toCents(r.price);
+        let v: any;
+        try {
+          if (t) {
+            // A new price first, so the copies (and their ⚡ Quick adds line) carry it.
+            if (priceCents !== t.priceCents) {
+              try { await api({ action: "updateVariant", id: t.id, priceCents }); t.priceCents = priceCents; }
+              catch (e: any) { errors.push(`${rgTitle(r.p)}: the price wasn't changed (${e.message})`); }
+            }
+            const j = await api({ action: "receiveStock", variantId: t.id, qtyAdded: r.qty, unitCostCents: cost, receivedOn: localDate() });
+            t.quantity = j.newQuantity;
+            quick ??= j.quickEntry ? j : null;
+            if (j.quickError) errors.push(`${rgTitle(r.p)}: in stock, but not on today's ⚡ Quick adds entry (${j.quickError})`);
+            v = t;
+          } else {
+            const condition = [completeness.find((c) => c.code === r.comp)?.label, grades.find((g) => g.code === r.grade)?.label].filter(Boolean).join(" ") || "Used";
+            const j = await api({ action: "addVariant", productId: r.p.id, completenessCode: r.comp, gradeCode: r.grade, condition, priceCents, quantity: r.qty,
+              unitCostCents: cost, inventoryTypeId: r.v.inventoryTypeId || undefined, locationId: r.v.locationId || undefined, receivedOn: localDate() });
+            quick ??= j.quickEntry ? j : null;
+            if (j.quickError) errors.push(`${rgTitle(r.p)}: in stock, but not on today's ⚡ Quick adds entry (${j.quickError})`);
+            v = { id: j.variant.id, condition, completeness: null, completenessCode: r.comp, gradeCode: r.grade, sku: null, internalCode: j.variant.internal_code || "", labelCode: j.variant.label_code || "",
+              priceCents, onlinePriceCents: null, costCents: cost ?? 0, quantity: r.qty, onlineVisible: false, inventoryTypeId: r.v.inventoryTypeId || retailTypeId, locationId: r.v.locationId || "", barcodes: [] };
+            r.p.variants.push(v);
+          }
+        } catch (e: any) { errors.push(`${rgTitle(r.p)}: ${e.message}`); failed.push(r); continue; } // not added — the row comes back
+        copies += r.qty;
+        printLines.push({ p: r.p, v, qty: r.qty });
+      }
+    } finally { btn.disabled = false; }
+    recvRows = [...failed, ...recvRows];
+    renderRecv();
+    render();
+    if (copies) toast(`✓ ${copies} cop${copies === 1 ? "y" : "ies"} added to stock${quick ? ` · ⚡ Quick adds (Entry #${quick.quickEntry.humanId})` : ""}`);
+    if (errors.length) alert(errors.join("\n"));
+    if (printLines.length) {
+      await fillLabelCodes(printLines.map((l) => l.v));
+      openPrintDialog(printLines.map((l) => ({ item: labelItemOf(l.p, l.v), defaultCopies: l.qty, allCopies: l.v.quantity })), lblTemplates,
+        { title: `Print · ${printLines.length === 1 ? rgTitle(printLines[0].p) : `${printLines.length} items`}`, onClose: () => npFind.focus() });
+    } else npFind.focus();
+  });
+  const quickFind: FindCtx = {
+    input: npFind, box: $("np-find-suggest") as HTMLElement,
+    items: liveItems, variants: (p: any) => p.variants,
+    pick: recvPick,
+    create: (q, official) => { npFind.value = ""; entNewProduct(q, official); },
+    nonInv: (q) => {
+      npFind.value = "";
+      setNpKind("noninv");
+      ($("ni-desc") as HTMLInputElement).value = q;
+      ($("ni-total") as HTMLInputElement).focus();
+    },
+    verb: "add",
+  };
+  npFind?.addEventListener("input", () => findSuggest(quickFind));
+  npFind?.addEventListener("blur", () => setTimeout(() => { quickFind.box.hidden = true; }, 150));
   $("ent-new")?.addEventListener("click", () => entNewProduct(entSearch.value.trim()));
   function entNewProduct(q: string, official?: { title: string; platform: string; parsed?: any; region?: string }) {
     const parsed = q ? parseQuery(q) : official?.parsed ?? null;
@@ -2823,7 +3076,7 @@ const posData = {
       moved.forEach(unstockLocal);
       (j.items || []).forEach((it: any) => {
         const lv = items.flatMap(everyVariant).find((x: any) => x.id === it.variant?.id);
-        if (lv && it.variant) lv.quantity = it.variant.quantity;
+        if (lv && it.variant) { lv.quantity = it.variant.quantity; lv.priceCents = it.variant.price_cents ?? lv.priceCents; }
       });
       // Finish published this draft's hidden listings / stock rows — show them.
       const done = entryId;
@@ -2872,9 +3125,11 @@ const posData = {
   $("toggle-add").addEventListener("click", () => {
     if (!($("add-panel") as HTMLElement).hidden) { closeAddPanel(); return; }
     clearProductFields(); // opening for a new product
+    clearRecv();
     setNpKind("stock");
     setAddOpen(true);
-    ($("np-title") as HTMLInputElement).focus();
+    // Search first (quick add); in an entry its own search is right above.
+    ($(entryMode ? "np-title" : "np-find") as HTMLInputElement).focus();
   });
 
   // Manager-only: fetch covers for items that have no image. Additive only —
@@ -2962,7 +3217,13 @@ const posData = {
     sel.value = jp.code;
     toast("🇯🇵 Japanese barcode (JAN) — region set to Japan");
   });
+  // Save: a quick add goes straight into stock (and onto the day's ⚡ Quick
+  // adds entry) and its labels pop up; on an open entry it's a staged line
+  // (labels print on Finish). Either way the form stays open for the next one.
+  let npBusy = false;
   $("np-save").addEventListener("click", async () => {
+    if (npBusy) return; // a double-click must not add it twice
+    const staged = !!(entryMode && entryId);
     const comp = compVal($("np-comp") as HTMLInputElement);
     const grade = ($("np-grade") as HTMLSelectElement).value;
     const condition = [completeness.find((c) => c.code === comp)?.label, grades.find((g) => g.code === grade)?.label].filter(Boolean).join(" ") || "Used";
@@ -2975,26 +3236,34 @@ const posData = {
       categoryId: ($("np-cat") as HTMLSelectElement).value,
       condition, completenessCode: comp, gradeCode: grade,
       priceCents: Math.round(parseFloat(($("np-price") as HTMLInputElement).value) * 100) || 0,
-      quantity: parseInt(($("np-qty") as HTMLInputElement).value) || (entryMode ? 1 : 0),
+      quantity: parseInt(($("np-qty") as HTMLInputElement).value) || (staged ? 1 : 0),
+      unitCostCents: (() => { const c = ($("np-cost") as HTMLInputElement).value.trim(); return c === "" ? null : toCents(c); })(),
       barcode: ($("np-barcode") as HTMLInputElement).value || null,
       inventoryTypeId: (document.getElementById("np-invtype") as HTMLSelectElement | null)?.value || undefined,
-      // In entry mode the qty is STAGED on the draft (variant starts at 0).
-      ...(entryMode && entryId ? { stageEntryId: entryId } : {}),
+      // In entry mode the qty is STAGED on the draft (variant starts at 0);
+      // a quick add is recorded on the ⚡ Quick adds entry of this local day.
+      ...(staged ? { stageEntryId: entryId } : { receivedOn: localDate() }),
     };
     if (!body.title || !body.categoryId) { alert("Title and category required"); return; }
+    const saveBtn = $("np-save") as HTMLButtonElement;
+    npBusy = true; saveBtn.disabled = true;
+    if (staged) entBusyStep(1); // Finish waits for a line still saving
+    let j: any;
+    try { j = await api(body); }
+    catch (e: any) { alert(e.message); return; }
+    finally { npBusy = false; saveBtn.disabled = false; if (staged) entBusyStep(-1); }
     try {
-      const j = await api(body);
       const cat = categories.find((c: any) => c.id === body.categoryId);
       // Title / platform / region as STORED (a "PAL …" platform prefix or a
       // typed "[JP]" tag becomes the region).
       const newItem: any = { id: j.productId, title: j.title ?? body.title, slug: j.slug || body.title.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""), platform: j.platform ?? body.platform, regionCode: j.regionCode ?? "", franchise: "", genre: "", description: "", imageUrl: "", altNames: [], categoryId: body.categoryId, categoryName: cat?.name ?? "", categoryColor: cat?.color ?? "#2ce6e0",
-        variants: [{ id: j.variantId, condition, completeness: null, completenessCode: comp, gradeCode: grade, sku: null, internalCode: j.internalCode || "", labelCode: j.labelCode || "", priceCents: body.priceCents, onlinePriceCents: null, costCents: null, quantity: body.quantity, onlineVisible: false, inventoryTypeId: body.inventoryTypeId || retailTypeId, locationId: "", barcodes: body.barcode ? [{ id: "primary:" + j.variantId, barcode: body.barcode, label: "Primary", primary: true }] : [] }] };
+        variants: [{ id: j.variantId, condition, completeness: null, completenessCode: comp, gradeCode: grade, sku: null, internalCode: j.internalCode || "", labelCode: j.labelCode || "", priceCents: body.priceCents, onlinePriceCents: null, costCents: body.unitCostCents, quantity: body.quantity, onlineVisible: false, inventoryTypeId: body.inventoryTypeId || retailTypeId, locationId: "", barcodes: body.barcode ? [{ id: "primary:" + j.variantId, barcode: body.barcode, label: "Primary", primary: true }] : [] }] };
       items.push(newItem);
-      if (entryMode && j.itemId) {
+      if (staged && j.itemId) {
         // Staged: server created the variant at qty 0; the qty lands on Finish.
         newItem.variants[0].quantity = 0;
         entRows.push({
-          itemId: j.itemId, variantId: j.variantId, qty: body.quantity || 1, costCents: null,
+          itemId: j.itemId, variantId: j.variantId, qty: body.quantity || 1, costCents: body.unitCostCents,
           priceCents: body.priceCents, wasNew: true, supplier: null, title: newItem.title,
           platform: newItem.platform || newItem.categoryName || "", regionCode: newItem.regionCode, cond: condLabel(newItem.variants[0]),
           completenessCode: comp || "", gradeCode: grade || "", kind: "stock",
@@ -3007,18 +3276,29 @@ const posData = {
         renderEnt();
         ($("ent-search") as HTMLInputElement).value = "";
       }
-      setAddOpen(false);
-      const ebayAfter = pendingEbay; // the eBay attach below still needs it
+      // Ready for the next one: title, price, barcode and the eBay paste
+      // clear; platform, region, category, condition and type stay.
+      const pe = pendingEbay; // this product's eBay listing (attached below)
       clearProductFields();
-      pendingEbay = ebayAfter;
+      addSaved = true;
+      setAddOpen(true);
       ($("inv-search") as HTMLInputElement).value = ""; state.q = ""; state.parsed = null; renderSmart();
       render();
-      if (pendingEbay) {
+      const focusNext = () => (document.getElementById("np-title") as HTMLInputElement | null)?.focus();
+      const where = staged ? ` to Entry #${entryHuman}` : j.quickEntry ? ` · ⚡ Quick adds (Entry #${j.quickEntry.humanId})` : "";
+      if (j.quickError) alert(`Added to stock, but it couldn't be recorded on today's ⚡ Quick adds entry:\n${j.quickError}`);
+      // A quick add is in stock now → print its labels right away.
+      const v0 = newItem.variants[0];
+      if (!staged && body.quantity > 0 && v0) {
+        await fillLabelCodes([v0]);
+        openPrintDialog([{ item: labelItemOf(newItem, v0), defaultCopies: body.quantity, allCopies: body.quantity }], lblTemplates,
+          { title: `Print · ${rgTitle(newItem)}`, onClose: focusNext });
+      } else focusNext();
+      if (pe) {
         // Sell Similar: the listing's cover photo + item specifics it doesn't
         // have (a reference tag — never synced). A game then also gets the
         // game database's description / trailer / names (empty fields only).
-        toast("✓ Product added — copying the eBay photo…");
-        const pe = pendingEbay;
+        toast(`✓ Added${where} — copying the eBay photo…`);
         try {
           const r = await fetch("/api/pos/ebay-import", { method: "POST", headers: { "content-type": "application/json" },
             body: JSON.stringify({ mode: "attach", productId: newItem.id, variantId: j.variantId, input: pe.input }) });
@@ -3030,9 +3310,9 @@ const posData = {
             else if (String(e.tag || "").startsWith("ebay-ref:")) newItem.ebayRefId = String(e.tag).slice(9);
             if (e.supplier) newItem.supplierLinks = [...(newItem.supplierLinks || []), e.supplier];
             render();
-            toast(e.imageUrl ? "🛒 Added with the eBay photo" : "✓ Added from eBay");
-          } else { toast("✓ Added (eBay photo failed: " + (e.error || "?") + ")"); }
-        } catch { toast("✓ Product added"); }
+            toast(`${e.imageUrl ? "🛒 Added with the eBay photo" : "✓ Added from eBay"}${where}`);
+          } else { toast(`✓ Added${where} (eBay photo failed: ${e.error || "?"})`); }
+        } catch { toast(`✓ Added${where}`); }
         if (pe.group === "games") {
           try {
             // The description is the full eBay title — the game's summary goes under it.
@@ -3044,11 +3324,8 @@ const posData = {
             }
           } catch { /* the eBay photo + details are already on */ }
         }
-        pendingEbay = null;
-        ($("np-ebay") as HTMLInputElement).value = "";
-        ($("np-ebay-note") as HTMLElement).hidden = true;
       } else {
-        toast("✓ Product added — fetching cover…");
+        toast(`✓ Added${where} — fetching cover…`);
         // Auto-enrich from IGDB: cover art, description, trailer, alt-names.
         try {
           const e = await enrich({ productId: newItem.id, title: newItem.title, platform: newItem.platform });
@@ -3057,9 +3334,9 @@ const posData = {
             if (e.altNames?.length) newItem.altNames = e.altNames;
             if (e.description) newItem.description = e.description;
             render();
-            toast(e.imageUrl ? "🎮 Cover added from IGDB" : "✓ Details added from IGDB");
-          } else { toast("✓ Product added"); }
-        } catch { toast("✓ Product added"); }
+            toast(`${e.imageUrl ? "🎮 Cover added from IGDB" : "✓ Details added from IGDB"}${where}`);
+          } else { toast(`✓ Added${where}`); }
+        } catch { toast(`✓ Added${where}`); }
       }
       // Its UPC (the one typed/scanned into Barcode counts; else eBay's catalog).
       upcFillInBackground([newItem.id]);
@@ -3069,14 +3346,6 @@ const posData = {
   /* ---------- eBay import ---------- */
   let pendingEbay: any = null;
 
-  // "🛒 Sell similar" in the header: the Add form, straight to the paste box.
-  $("inv-similar")?.addEventListener("click", () => {
-    const panel = $("add-panel") as HTMLElement;
-    if (panel.hidden) { clearProductFields(); setAddOpen(true); }
-    setNpKind("stock");
-    panel.scrollIntoView({ behavior: "smooth", block: "center" });
-    ($("np-ebay") as HTMLInputElement).focus();
-  });
   // Pasting a listing link (or pressing Enter) pulls it — no extra click.
   $("np-ebay")?.addEventListener("paste", () => setTimeout(() => {
     if (/\d{9,15}/.test(($("np-ebay") as HTMLInputElement).value)) ($("np-ebay-go") as HTMLButtonElement).click();
