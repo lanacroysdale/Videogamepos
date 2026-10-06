@@ -402,6 +402,17 @@ const posData = {
     </div>
   )}
 
+  <div id="pcu-modal" class="modal-wrap" hidden>
+    <div class="modal-backdrop" data-pcuclose></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="pcu-heading" style="width:min(640px,100%);">
+      <header class="modal-head">
+        <h2 id="pcu-heading">📈 Update from PriceCharting</h2>
+        <button class="modal-x" data-pcuclose aria-label="Close">✕</button>
+      </header>
+      <div id="pcu-body" style="padding:0.9rem 1.1rem;overflow:auto;font-size:0.9rem;"></div>
+    </div>
+  </div>
+
   <div id="desc-modal" class="modal-wrap" hidden>
     <div class="modal-backdrop" data-dclose></div>
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="desc-heading" style="width:min(880px,100%);">
@@ -684,6 +695,9 @@ const posData = {
   .ent-add { display:flex; gap:0.6rem; align-items:center; margin-bottom:0.9rem; }
   .m-market { margin:0.2rem 0 0.5rem; font-size:0.8rem; }
   .desc-opts { display:flex; gap:1.2rem; flex-wrap:wrap; margin:0 0 0.6rem; font-size:0.84rem; }
+  .pcu-row { display:flex; align-items:center; gap:0.6rem; padding:0.45rem 0; border-bottom:1px solid var(--border); }
+  .pcu-row > div { flex:1; min-width:0; }
+  .pcu-acts { display:flex; gap:0.6rem; justify-content:flex-end; margin-top:0.9rem; flex-wrap:wrap; }
   .desc-opts input { width:auto; }
   .desc-old { color:var(--muted-2); font-size:0.78rem; }
   .desc-new { margin-top:0.3rem; font-size:0.82rem; white-space:pre-wrap; }
@@ -3719,7 +3733,8 @@ const posData = {
       <h3>🔖 Send to TimeLag</h3>
       <p class="muted">Add products from <strong>PriceCharting</strong> (its UPC + Loose / Complete / New averages), <strong>Suruga-ya</strong>, <strong>Buyee</strong> (Yahoo! Auctions, Mercari…), Amazon JP or any shop. Dragged it in before? Drag it again — new sites need the new copy. The bookmark reads the page you're looking at, in your own browser, so nothing visits that shop from our server.</p>
       <ol class="bm-steps">
-        <li><strong>Drag this button</strong> onto your bookmarks bar: <a class="bm-link" id="bm-link" draggable="true">🔖 Send to TimeLag</a></li>
+        <li><strong>Drag this button</strong> onto your bookmarks bar: <a class="bm-link" id="bm-link" draggable="true">🔖 Send to TimeLag</a>
+          <br><span class="muted bm-small">And for PriceCharting: <a class="bm-link" id="bm-link-pc" draggable="true">📈 Update from PriceCharting</a> — on a PriceCharting game page it goes <em>straight into</em> the matching listing (today's averages, barcodes, photo), or creates it with 0 in stock.</span></li>
         <li>On a product page, <strong>click the bookmark</strong>. A POS tab opens with this form filled in: a clean English title, platform, region, condition, JAN and what you paid in dollars.</li>
         <li><strong>Check it, set your price, Save.</strong> The photo is copied into our own storage under a new name; the page is kept as the item's source (managers only, never on the website).</li>
       </ol>
@@ -3730,8 +3745,10 @@ const posData = {
     const href = bookmarkletHref(location.origin);
     const link = ov.querySelector<HTMLAnchorElement>("#bm-link")!;
     link.href = href;
-    // Clicked here (not dragged) it would just run on the POS.
-    link.addEventListener("click", (e) => { e.preventDefault(); toast("Drag it to your bookmarks bar — then click it on a shop's product page"); });
+    const linkPc = ov.querySelector<HTMLAnchorElement>("#bm-link-pc")!;
+    linkPc.href = bookmarkletHref(location.origin, "pc-update");
+    // Clicked here (not dragged) they would just run on the POS.
+    for (const a of [link, linkPc]) a.addEventListener("click", (e) => { e.preventDefault(); toast("Drag it to your bookmarks bar — then click it on a product page"); });
     ov.querySelector("#bm-copy")!.addEventListener("click", async () => {
       try { await navigator.clipboard.writeText(href); toast("📋 Copied — paste it as a new bookmark's URL"); }
       catch { prompt("Copy this, then paste it as a new bookmark's URL:", href); }
@@ -3775,6 +3792,92 @@ const posData = {
       const timer = setInterval(ping, 400);
       setTimeout(() => finish(compact), 3500);
     });
+  }
+
+  /* ---------- 📈 Update from PriceCharting (second bookmark) ----------
+     A PriceCharting page goes STRAIGHT into its listing — found by its
+     PriceCharting id, a barcode, else the same title on the same platform +
+     region: today's averages, every barcode, the photo (main if none, else an
+     extra gallery photo), blank details. Unsure → you pick. None → the
+     listing is created with 0 in stock (one stock row at the category's usual
+     condition, priced at its average). */
+  const pcuOpen = (html: string) => { $("pcu-body").innerHTML = html; ($("pcu-modal") as HTMLElement).hidden = false; };
+  document.querySelectorAll<HTMLElement>("[data-pcuclose]").forEach((el) => el.addEventListener("click", () => { ($("pcu-modal") as HTMLElement).hidden = true; }));
+  async function pcUpdateFromPage() {
+    pcuOpen(`<p>📈 Reading the PriceCharting page…</p>`);
+    const page = await receivePage();
+    if (!page?.url) { pcuOpen(`<p>⚠ The page didn't come through — click the 📈 bookmark again on the PriceCharting game page.</p>`); return; }
+    let j: any;
+    try {
+      const r = await fetch("/api/pos/source-import", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode: "pc-match", page }) });
+      j = await r.json();
+      if (!r.ok || !j.ok) throw new Error(j.error || "Couldn't read that page");
+    } catch (e: any) { pcuOpen(`<p>⚠ ${esc(e.message)}</p>`); return; }
+    const head = `<p style="margin:0 0 0.5rem;"><strong>${esc(j.fields.title)}</strong> <span class="muted">${esc(j.fields.platform)}${j.fields.regionCode && j.fields.regionCode !== "US" ? ` · ${esc(j.fields.regionCode)}` : ""}</span><br>${marketLine(j.market) || "no prices taken"} <span class="muted">(averages, ${esc(j.market.at)})</span>${j.priceNote ? `<br><span style="color:var(--magenta);">⚠ ${esc(j.priceNote)}</span>` : ""}${j.marketReady ? "" : `<br><span style="color:var(--magenta);">⚠ Averages can't be kept until the market-prices migration is run.</span>`}</p>`;
+    if (j.match) { await pcApply(j, j.match.id, head, false); return; }
+    const choices: any[] = j.choices || [];
+    if (!choices.length) { await pcCreate(j, head); return; }
+    pcuOpen(`${head}<p class="muted" style="margin:0.6rem 0 0.3rem;">Which listing is this?</p>${choices.map((c, i) => `
+      <div class="pcu-row"><div><strong>${esc(c.title)}</strong>${badge(c.regionCode)} <span class="muted">${esc(c.platform)} · ${c.stock} in stock · ${esc(c.by)}</span></div>
+        <button type="button" class="btn btn-ghost btn-sm" data-pcuse="${i}">Update this one</button></div>`).join("")}
+      <div class="pcu-acts"><button type="button" class="btn btn-ghost btn-sm" data-pcuclose2>Cancel</button><button type="button" class="btn btn-primary btn-sm" id="pcu-create">＋ Create a new listing (0 in stock)</button></div>`);
+    $("pcu-body").querySelectorAll<HTMLElement>("[data-pcuse]").forEach((b) => b.addEventListener("click", () => pcApply(j, choices[+b.dataset.pcuse!].id, head, false)));
+    document.getElementById("pcu-create")?.addEventListener("click", () => pcCreate(j, head));
+    $("pcu-body").querySelector("[data-pcuclose2]")?.addEventListener("click", () => { ($("pcu-modal") as HTMLElement).hidden = true; });
+  }
+  // Today's averages / barcodes / photo / blank details onto a listing.
+  async function pcApply(j: any, productId: string, head: string, created: boolean) {
+    pcuOpen(`${head}<p>Saving…</p>`);
+    let e: any;
+    try {
+      const r = await fetch("/api/pos/source-import", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ mode: "attach", productId, source: j.source, market: j.market, facts: j.fields }) });
+      e = await r.json();
+      if (!r.ok || !e.ok) throw new Error(e.error || "Couldn't update the listing");
+    } catch (err: any) { pcuOpen(`${head}<p>⚠ ${esc(err.message)}</p>`); return; }
+    const p = items.find((x: any) => x.id === productId);
+    if (p) {
+      if (e.market) p.marketPrices = e.market;
+      if (e.market?.id) p.pcId = e.market.id;
+      if (e.imageUrl && !p.imageUrl) p.imageUrl = e.imageUrl;
+      for (const a of e.codes?.added || []) if (!(p.upcs || []).some((u: any) => u.upc === a.upc)) p.upcs = [...(p.upcs || []), { ...a, evidence: "From PriceCharting" }];
+      render();
+    }
+    const did = [
+      e.market ? "today's averages" : "",
+      e.codes?.added?.length ? `${e.codes.added.length} barcode${e.codes.added.length === 1 ? "" : "s"} (${e.codes.added.map((a: any) => esc(a.upc)).join(", ")})` : "",
+      e.galleryAdded ? "its photo (extra, in the gallery)" : e.imageUrl && created ? "its photo" : "",
+      (e.filled || []).length ? `blank details (${(e.filled as string[]).map((f) => f === "brand" ? "publisher" : f === "release_year" ? "release year" : f).join(", ")})` : "",
+    ].filter(Boolean);
+    pcuOpen(`${head}<p style="margin:0.6rem 0 0;">${created ? "✓ <strong>Created</strong> with 0 in stock" : `✓ <strong>Updated</strong> ${esc(p?.title || "the listing")}`}${did.length ? ` — ${did.join(" · ")}` : ""}.</p>
+      ${e.marketError ? `<p style="color:var(--magenta);">⚠ ${esc(e.marketError)}</p>` : ""}
+      ${e.codes?.conflicts?.length ? `<p class="muted">Not added: ${e.codes.conflicts.map(esc).join("; ")}</p>` : ""}
+      <div class="pcu-acts"><button type="button" class="btn btn-ghost btn-sm" data-pcuclose2>Close</button>${p ? `<button type="button" class="btn btn-primary btn-sm" id="pcu-open">Open the listing</button>` : ""}</div>`);
+    $("pcu-body").querySelector("[data-pcuclose2]")?.addEventListener("click", () => { ($("pcu-modal") as HTMLElement).hidden = true; });
+    document.getElementById("pcu-open")?.addEventListener("click", () => { ($("pcu-modal") as HTMLElement).hidden = true; openModal(productId); });
+  }
+  // No listing yet: create it with 0 in stock — one stock row at the
+  // category's usual condition, priced at that condition's average.
+  async function pcCreate(j: any, head: string) {
+    const f = j.fields;
+    if (!f.categoryId) { pcuOpen(`${head}<p>⚠ No category to put it in — add one first.</p>`); return; }
+    const comp = f.defaultCompleteness || completeness.find((c: any) => /complete|cib/i.test(c.label))?.code || "";
+    const label = completeness.find((c: any) => c.code === comp)?.label || "Used";
+    const priceCents = marketPriceFor(j.market, comp) ?? 0;
+    pcuOpen(`${head}<p>Creating the listing…</p>`);
+    let a: any;
+    try {
+      a = await api({ action: "addProduct", title: f.title, platform: f.platform, regionCode: f.regionCode || undefined, categoryId: f.categoryId,
+        condition: label, completenessCode: comp, gradeCode: "", priceCents, quantity: 0, barcode: f.barcode || null });
+    } catch (err: any) { pcuOpen(`${head}<p>⚠ ${esc(err.message)}</p>`); return; }
+    const cat = categories.find((c: any) => c.id === f.categoryId);
+    items.push({ id: a.productId, title: a.title ?? f.title, slug: a.slug || "", platform: a.platform ?? f.platform, regionCode: a.regionCode ?? f.regionCode ?? "",
+      franchise: "", genre: "", description: "", imageUrl: "", altNames: [], categoryId: f.categoryId, categoryName: cat?.name ?? "", categoryColor: cat?.color ?? "#2ce6e0",
+      tags: [], upcs: [], marketPrices: null,
+      variants: [{ id: a.variantId, condition: label, completeness: null, completenessCode: comp, gradeCode: "", sku: null, internalCode: a.internalCode || "", labelCode: a.labelCode || "",
+        priceCents, onlinePriceCents: null, costCents: 0, quantity: 0, onlineVisible: false, inventoryTypeId: retailTypeId, locationId: "", barcodes: f.barcode ? [{ id: "primary:" + a.variantId, barcode: f.barcode, label: "Primary", primary: true }] : [] }] });
+    render();
+    await pcApply(j, a.productId, head, true);
   }
 
   async function importFromPage() {
@@ -4030,6 +4133,8 @@ const posData = {
   });
 
   render();
-  // Opened by the 🔖 Send to TimeLag bookmark.
-  if (new URLSearchParams(location.search).get("import") === "page") importFromPage();
+  // Opened by a bookmark: 🔖 Send to TimeLag (the Add form) or 📈 Update from PriceCharting (straight in).
+  const importMode = new URLSearchParams(location.search).get("import");
+  if (importMode === "page") importFromPage();
+  else if (importMode === "pc-update") pcUpdateFromPage();
 </script>

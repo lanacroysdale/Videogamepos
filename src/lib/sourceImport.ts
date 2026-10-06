@@ -356,8 +356,9 @@ export function parseJsonObject(raw: string): any | null {
 // ---- the bookmarklet ----------------------------------------------------
 // Plain ES5-ish so it runs on any shop page. __POS__ = this POS's origin.
 const BOOKMARKLET = `(function(){
-var P="__POS__";
+var P="__POS__",M="__MODE__";
 if(location.origin===P){alert("Open a product page on Suruga-ya, Buyee or another shop, then click this bookmark there.");return;}
+if(M==="pc-update"&&!/(^|\.)pricecharting\.com$/i.test(location.hostname)){alert("Open a PriceCharting game page, then click this bookmark there.");return;}
 var d=document,T=function(e){return((e&&(e.innerText||e.textContent))||"").replace(/\\s+/g," ").trim()},A=function(u){try{return new URL(u,location.href).href}catch(x){return""}},E=function(s){return[].slice.call(d.querySelectorAll(s))};
 var meta={};E("meta[content]").forEach(function(m){var k=(m.getAttribute("property")||m.getAttribute("name")||m.getAttribute("itemprop")||"").toLowerCase();if(k&&/^(og:|product:|twitter:(title|image)|description$|price|pricecurrency|gtin|sku|brand|availability|itemcondition)/.test(k)&&!(k in meta))meta[k]=String(m.content).slice(0,400)});
 var ld=[];E('script[type="application/ld+json"]').forEach(function(s){try{ld.push(JSON.parse(s.textContent))}catch(x){}});
@@ -375,15 +376,19 @@ var p={v:2,url:location.href,title:String(d.title||"").slice(0,300),meta:meta,ld
 try{if(JSON.stringify(p).length>400000){p.ld=[];p.text=text.slice(0,3000)}}catch(x){p.ld=[]}
 var L=function(o){var r=[];(function w(x,n){if(!x||n>5||r.length>2)return;if(Array.isArray(x)){x.forEach(function(y){w(y,n+1)});return}if(typeof x!=="object")return;if(/product|videogame/i.test(String(x["@type"]||""))){var f=x.offers;r.push({"@type":"Product",name:x.name,gtin13:x.gtin13,gtin:x.gtin,gtin12:x.gtin12,image:Array.isArray(x.image)?x.image.slice(0,3):x.image,brand:x.brand,releaseDate:x.releaseDate,itemCondition:x.itemCondition,offers:Array.isArray(f)?f.slice(0,5):f})}if(x["@graph"])w(x["@graph"],n+1)})(o,0);return r};
 var c={v:2,url:p.url,title:p.title,meta:p.meta,ld:L(ld),heads:p.heads,crumbs:p.crumbs,images:imgs.slice(0,6),text:text.slice(0,1500),lang:p.lang,offers:p.offers,vars:vars,pc:pc};try{if(JSON.stringify(c).length>14000)c.ld=[]}catch(x){c.ld=[]}
-var u=P+"/inventory?import=page#tl="+encodeURIComponent(JSON.stringify(c));
+var u=P+"/inventory?import="+M+"#tl="+encodeURIComponent(JSON.stringify(c));
 var w=window.open(u,"_blank");if(!w){location.href=u;return}
 var done=false,on=function(e){if(e.origin!==P||e.source!==w||!e.data||e.data.type!=="tl-ready"||done)return;done=true;try{e.source.postMessage({type:"tl-page",page:p},P)}catch(x){}window.removeEventListener("message",on)};window.addEventListener("message",on);
 })();`;
 
+/** What a bookmark does in the POS: "page" = fill the Add form (🔖 Send to
+ *  TimeLag); "pc-update" = straight into the matching listing (📈 Update from
+ *  PriceCharting — PriceCharting pages only). */
+export type BookmarkMode = "page" | "pc-update";
 /** The bookmark's address (javascript:…) for this POS. */
-export function bookmarkletHref(posOrigin: string): string {
-  const code = BOOKMARKLET.replace("__POS__", posOrigin.replace(/[^a-zA-Z0-9:/._-]/g, "")).replace(/\n/g, "");
-  return "javascript:" + encodeURIComponent(code);
+export function bookmarkletHref(posOrigin: string, mode: BookmarkMode = "page"): string {
+  return "javascript:" + encodeURIComponent(bookmarkletSource(posOrigin, mode).replace(/\n/g, ""));
 }
 /** The raw script (for tests / "copy the code"). */
-export const bookmarkletSource = (posOrigin: string) => BOOKMARKLET.replace("__POS__", posOrigin);
+export const bookmarkletSource = (posOrigin: string, mode: BookmarkMode = "page") =>
+  BOOKMARKLET.replace("__POS__", posOrigin.replace(/[^a-zA-Z0-9:/._-]/g, "")).replace("__MODE__", mode === "pc-update" ? "pc-update" : "page");
