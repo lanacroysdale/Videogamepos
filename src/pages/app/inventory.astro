@@ -193,6 +193,7 @@ const posData = {
           <button id="ebay-sync" class="btn btn-ghost btn-sm" role="menuitem" title="Check eBay for ended / out-of-stock listings and zero them on the website (never raises local stock)">🔁 Sync eBay stock</button>
           <button id="resync-img" class="btn btn-ghost btn-sm" role="menuitem" title="Fetch covers for items with no image (only fills empties)">🔄 Resync images</button>
           <button id="fix-titles" class="btn btn-ghost btn-sm" role="menuitem" title="Suggest official game titles (from the game database) for listings with typos — you approve each one">✎ Fix titles</button>
+          <button id="write-descs" class="btn btn-ghost btn-sm" role="menuitem" title="AI writes web descriptions for listings with none or only one short line — saved as they're written, each can be undone">✍ Write descriptions</button>
           {!upcProbeErr && <button id="fill-upcs" class="btn btn-ghost btn-sm" role="menuitem" title="Look up UPCs on eBay's product catalog for games that don't have one (attaches only sure matches)">🏷 Fill missing UPCs</button>}
         </div>
       </div>
@@ -400,6 +401,30 @@ const posData = {
       </ul>
     </div>
   )}
+
+  <div id="desc-modal" class="modal-wrap" hidden>
+    <div class="modal-backdrop" data-dclose></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="desc-heading" style="width:min(880px,100%);">
+      <header class="modal-head">
+        <h2 id="desc-heading">✍ Write descriptions</h2>
+        <button class="modal-x" data-dclose aria-label="Close">✕</button>
+      </header>
+      <div style="padding:0.8rem 1.1rem;overflow:auto;">
+        <p class="muted" style="margin:0 0 0.6rem;font-size:0.84rem;">The AI writes a short web description — in your voice from Settings → AI — for listings with <strong>no description</strong> or just <strong>one short line</strong>, using only the listing's own facts (title, platform, series, genre, publisher, year, region) — never one copy's condition, since it covers every copy. Each is saved as soon as it's written; ↩ puts the old one back. It goes a few seconds apart to stay within the AI's free limits.</p>
+        <div class="desc-opts">
+          <label><input type="checkbox" id="desc-instock" checked /> Only listings in stock</label>
+          <label><input type="checkbox" id="desc-thin" checked /> Include one-line descriptions</label>
+        </div>
+        <div id="desc-list"></div>
+      </div>
+      <footer style="display:flex;gap:0.6rem;justify-content:flex-end;align-items:center;padding:0.8rem 1.1rem;border-top:1px solid var(--border);">
+        <span class="muted" id="desc-count" style="margin-right:auto;font-size:0.84rem;"></span>
+        <button class="btn btn-ghost btn-sm" type="button" data-dclose>Close</button>
+        <button class="btn btn-ghost btn-sm" type="button" id="desc-stop" hidden>■ Stop</button>
+        <button class="btn btn-primary btn-sm" type="button" id="desc-go">✨ Write selected</button>
+      </footer>
+    </div>
+  </div>
 
   <div id="fix-modal" class="modal-wrap" hidden>
     <div class="modal-backdrop" data-fclose></div>
@@ -658,6 +683,11 @@ const posData = {
   .sup-row .link-btn { margin-left:auto; }
   .ent-add { display:flex; gap:0.6rem; align-items:center; margin-bottom:0.9rem; }
   .m-market { margin:0.2rem 0 0.5rem; font-size:0.8rem; }
+  .desc-opts { display:flex; gap:1.2rem; flex-wrap:wrap; margin:0 0 0.6rem; font-size:0.84rem; }
+  .desc-opts input { width:auto; }
+  .desc-old { color:var(--muted-2); font-size:0.78rem; }
+  .desc-new { margin-top:0.3rem; font-size:0.82rem; white-space:pre-wrap; }
+  .desc-st { white-space:nowrap; font-size:0.8rem; }
   /* 🔖 Send to TimeLag */
   .bm-card { max-width:560px; }
   .bm-steps { margin:0.6rem 0; padding-left:1.2rem; display:grid; gap:0.5rem; font-size:0.9rem; }
@@ -3302,6 +3332,113 @@ const posData = {
   });
   // ---- ✎ Fix titles (managers): official names for listings with typos ----
   let fixSuggestions: { p: any; to: string; sim: number }[] = [];
+  /* ---------- ✍ Write descriptions (bulk, AI) ----------
+     Listings with no description, or only one short line (an eBay title, a
+     note), get one written by the AI — the same writer as the edit window's
+     "✨ Write with AI", grounded on the listing's own facts. One at a time, a
+     few seconds apart (free-tier limits); saved as written; each undoable. */
+  const DESC_SHORT = 160;
+  const descNeed = (p: any): "" | "empty" | "short" => {
+    const t = String(p.description ?? "").trim();
+    if (!t) return "empty";
+    return !/\n/.test(t) && t.length < DESC_SHORT ? "short" : "";
+  };
+  let descRows: { p: any; old: string; done: boolean }[] = [];
+  let descRunning = false, descStop = false;
+  const descSleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  function descCandidates() {
+    const inStock = ($("desc-instock") as HTMLInputElement).checked, thin = ($("desc-thin") as HTMLInputElement).checked;
+    return liveItems().filter((p: any) => { const n = descNeed(p); return (n === "empty" || (thin && n === "short")) && (!inStock || totalQty(p) > 0); })
+      .sort(byTitle);
+  }
+  function renderDescList() {
+    descRows = descCandidates().map((p: any) => ({ p, old: String(p.description ?? ""), done: false }));
+    $("desc-list").innerHTML = descRows.length ? `<table class="tbl" style="width:100%;font-size:0.84rem;"><thead><tr><th><input type="checkbox" id="desc-all" checked title="Select all" /></th><th>Listing</th><th>Now</th><th></th></tr></thead><tbody>${
+      descRows.map((r, i) => `<tr data-drow="${i}"><td><input type="checkbox" data-desc="${i}" checked /></td>
+        <td><strong>${esc(r.p.title)}</strong>${badge(r.p.regionCode)} <span class="muted">${esc(r.p.platform || r.p.categoryName || "")}</span><div class="desc-new" data-dnew hidden></div></td>
+        <td class="desc-old">${r.old.trim() ? esc(r.old.trim().slice(0, 120)) : "— none —"}</td>
+        <td class="desc-st" data-dst></td></tr>`).join("")
+    }</tbody></table>` : `<p class="empty">Nothing to write — every ${($("desc-instock") as HTMLInputElement).checked ? "in-stock " : ""}listing has a description.</p>`;
+    document.getElementById("desc-all")?.addEventListener("change", (e) => {
+      document.querySelectorAll<HTMLInputElement>("[data-desc]").forEach((c) => (c.checked = (e.target as HTMLInputElement).checked));
+      descCount();
+    });
+    document.querySelectorAll<HTMLInputElement>("[data-desc]").forEach((c) => c.addEventListener("change", descCount));
+    descCount();
+  }
+  function descCount() {
+    const n = document.querySelectorAll<HTMLInputElement>("[data-desc]:checked").length;
+    const secs = n * 7;
+    $("desc-count").textContent = descRows.length ? `${n} of ${descRows.length} selected${n ? ` · about ${secs < 90 ? `${secs} s` : `${Math.ceil(secs / 60)} min`}` : ""}` : "";
+    ($("desc-go") as HTMLButtonElement).disabled = !n || descRunning;
+  }
+  document.getElementById("write-descs")?.addEventListener("click", () => {
+    if (!descRunning) renderDescList();
+    ($("desc-modal") as HTMLElement).hidden = false;
+  });
+  ["desc-instock", "desc-thin"].forEach((id) => document.getElementById(id)?.addEventListener("change", () => { if (!descRunning) renderDescList(); }));
+  document.querySelectorAll<HTMLElement>("[data-dclose]").forEach((el) => el.addEventListener("click", () => {
+    if (descRunning && !confirm("Still writing — close this window? It keeps going in the background until you Stop it or leave the page.")) return;
+    ($("desc-modal") as HTMLElement).hidden = true;
+  }));
+  document.getElementById("desc-stop")?.addEventListener("click", () => { descStop = true; ($("desc-stop") as HTMLButtonElement).textContent = "Stopping…"; });
+  window.addEventListener("beforeunload", (e) => { if (descRunning) { e.preventDefault(); e.returnValue = ""; } });
+  async function describeOne(p: any): Promise<string> {
+    const req = () => fetch("/api/pos/ai/describe", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ productId: p.id, title: p.title, platform: p.platform, regionCode: p.regionCode || "", omitCondition: true }) })
+      .then(async (r) => ({ ok: r.ok, j: await r.json().catch(() => ({})) }));
+    let { ok, j } = await req();
+    // The AI is busy / over its per-minute limit → wait and try once more.
+    if (!ok && !j.needsKey && /quota|rate|busy|overload|429|503|exhausted|try again/i.test(String(j.error))) { await descSleep(20_000); ({ ok, j } = await req()); }
+    if (!ok || !j.description) throw Object.assign(new Error(j.error || "The AI didn't answer"), { needsKey: !!j.needsKey });
+    return String(j.description).trim();
+  }
+  document.getElementById("desc-go")?.addEventListener("click", async () => {
+    const picked = [...document.querySelectorAll<HTMLInputElement>("[data-desc]:checked")].map((c) => +c.dataset.desc!).filter((i) => !descRows[i].done);
+    if (!picked.length) return;
+    descRunning = true; descStop = false;
+    const go = $("desc-go") as HTMLButtonElement, stop = $("desc-stop") as HTMLButtonElement;
+    go.disabled = true; stop.hidden = false; stop.textContent = "■ Stop";
+    let written = 0, failed = 0;
+    try {
+      for (let k = 0; k < picked.length; k++) {
+        if (descStop) break;
+        const i = picked[k], r = descRows[i];
+        const tr = document.querySelector<HTMLElement>(`tr[data-drow="${i}"]`)!;
+        const st = tr.querySelector<HTMLElement>("[data-dst]")!;
+        st.textContent = `✨ writing… (${k + 1}/${picked.length})`;
+        tr.scrollIntoView({ block: "nearest" });
+        const t0 = Date.now();
+        try {
+          const text = await describeOne(r.p);
+          await api({ action: "updateProduct", id: r.p.id, description: text });
+          r.p.description = text; r.done = true; written++;
+          const nw = tr.querySelector<HTMLElement>("[data-dnew]")!;
+          nw.textContent = text; nw.hidden = true;
+          st.innerHTML = `✓ <button type="button" class="link-btn" data-dshow>show</button> · <button type="button" class="link-btn" data-dundo title="Put the old description back">↩ undo</button>`;
+          st.querySelector("[data-dshow]")!.addEventListener("click", () => { nw.hidden = !nw.hidden; });
+          st.querySelector("[data-dundo]")!.addEventListener("click", async () => {
+            try { await api({ action: "updateProduct", id: r.p.id, description: r.old }); r.p.description = r.old; r.done = false; nw.hidden = true; st.textContent = "↩ undone"; }
+            catch (e: any) { alert(e.message); }
+          });
+          (tr.querySelector("[data-desc]") as HTMLInputElement).checked = false;
+        } catch (e: any) {
+          failed++;
+          st.textContent = `✗ ${String(e.message || e).slice(0, 80)}`;
+          if (e.needsKey) { alert(e.message); break; }
+          if (failed >= 3 && written === 0) { alert(`The AI keeps failing — stopped.\n\n${e.message}`); break; }
+        }
+        // Few seconds apart: stays within the AI's free per-minute limit.
+        if (k < picked.length - 1 && !descStop) await descSleep(Math.max(0, 6500 - (Date.now() - t0)));
+      }
+    } finally {
+      descRunning = false; stop.hidden = true;
+      descCount();
+      render();
+      toast(`✍ ${written} description${written === 1 ? "" : "s"} written${failed ? ` · ${failed} failed` : ""}${descStop ? " (stopped)" : ""}`);
+    }
+  });
+
   document.getElementById("fix-titles")?.addEventListener("click", async () => {
     const btn = document.getElementById("fix-titles") as HTMLButtonElement;
     // Games only — a console named after its platform ("Super Nintendo") has no game title to fix.

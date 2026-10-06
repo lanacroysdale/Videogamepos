@@ -40,7 +40,9 @@ export const POST: APIRoute = async ({ locals, request }) => {
         Genre: p.genre ?? "",
         Publisher: (p as any).brand ?? "",
         "Release year": (p as any).release_year ? String((p as any).release_year) : "",
-        Condition: [v.completeness, v.condition].filter(Boolean).join(" / "),
+        // A listing-wide text (bulk "Write descriptions") covers every copy, so
+        // no one copy's condition.
+        Condition: b.omitCondition ? "" : [v.completeness, v.condition].filter(Boolean).join(" / "),
         "Also known as": ((p as any).alternative_names ?? []).join(", "),
       });
       if (rgCol && !b.regionCode) regionCode = (p as any).region_code ?? "";
