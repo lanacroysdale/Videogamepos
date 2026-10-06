@@ -10,6 +10,7 @@ import { classify, DEPARTMENTS, PLATFORMS, CONDITIONS, FRANCHISES } from "../lib
 import type { Rule } from "../lib/shopFilters";
 import { syncableTypeIds } from "../lib/inventoryTypes";
 import { loadRegions, regionNorm, regionBadgeHtml, displayTitle, regionSortKey } from "../lib/regions";
+import { activeVirtualCategories } from "../lib/virtualCategories";
 
 // HIDDEN, BROWSE-ONLY shop. Reads the SHARED inventory pool so anything sold in
 // store disappears here automatically. Server-side service-role read selecting
@@ -84,7 +85,14 @@ const franchiseCounts = countBy((l) => l.facets.franchise);
 const present = (rules: Rule[], counts: Map<string, number>) =>
   rules.filter((r) => (counts.get(r.key) ?? 0) > 0).map((r) => ({ ...r, n: counts.get(r.key) ?? 0 }));
 
-const deptTabs = [{ key: "all", label: "All", icon: "🛒", n: listings.length }, ...present(DEPARTMENTS, deptCounts)];
+// Virtual categories ("🇯🇵 Japanese Imports" = every Japan-region listing,
+// games and merch alike) come after the departments, when the shop has any.
+const virtualTabs = activeVirtualCategories(regions)
+  .map((v) => ({ key: v.key, label: v.label, icon: v.icon, n: regionCounts.get(v.region.toLowerCase()) ?? 0, vregion: v.region.toLowerCase() }))
+  .filter((v) => v.n > 0);
+const deptTabs: { key: string; label: string; icon?: string; n: number; vregion?: string }[] = [
+  { key: "all", label: "All", icon: "🛒", n: listings.length }, ...present(DEPARTMENTS, deptCounts), ...virtualTabs,
+];
 const platFacets = present(PLATFORMS, platCounts);
 const condFacets = present(CONDITIONS, condCounts);
 // Region chips come from the store's region list (home region included, in its
@@ -137,7 +145,7 @@ const hasFilters = platFacets.length + condFacets.length + regionFacets.length +
       {listings.length > 0 && (
         <nav class="shop-cats" aria-label="Shop categories">
           {deptTabs.map((c) => (
-            <button class="shop-cat" data-shopcat={c.key} aria-pressed={c.key === "all" ? "true" : "false"}>
+            <button class="shop-cat" data-shopcat={c.key} data-vregion={c.vregion} aria-pressed={c.key === "all" ? "true" : "false"}>
               <span class="shop-cat-ico" aria-hidden="true">{c.icon}</span>{c.label}<span class="shop-cat-n">{c.n}</span>
             </button>
           ))}
@@ -382,8 +390,11 @@ const hasFilters = platFacets.length + condFacets.length + regionFacets.length +
   }
 
   function applyView() {
+    // A virtual tab ("Japanese Imports") filters by region, not department.
+    const vregion = tabs.find((t) => t.dataset.shopcat === cat)?.dataset.vregion || "";
     const matching = cards.filter((c) => {
-      if (cat !== "all" && (c.dataset.dept || "") !== cat) return false;
+      if (vregion) { if ((c.dataset.region || "") !== vregion) return false; }
+      else if (cat !== "all" && (c.dataset.dept || "") !== cat) return false;
       for (const k of ["platform", "cond", "region", "franchise"]) {
         if (facet[k] && (c.dataset[k] || "") !== facet[k]) return false;
       }
