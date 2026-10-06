@@ -26,6 +26,9 @@ export type UpcStatus = "found" | "not_found" | "ambiguous" | "conflict" | "erro
  *  attached automatically; the per-listing lookup asks staff to confirm. */
 export interface UpcCandidate { epid: string; title: string; upcs: string[]; image: string; platform: string; listings: number; why: string; owner?: string | null }
 export interface UpcLookup { status: UpcStatus; upcs: string[]; evidence: string; candidates?: UpcCandidate[] }
+/** Evidence on a UPC staff confirmed from the lookup's possible matches — a
+ *  manager removing one rejects it for the listing, like an automatic one. */
+export const CONFIRMED_EVIDENCE = "Confirmed by staff — eBay catalog";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // eBay throttles bursts (~30 fast calls → empty results), so calls are spaced.
@@ -75,8 +78,7 @@ export async function findCatalogUpcs(title: string, platform: string, ebay = EB
     matches.push({ epid, title: ptitle, upcs, listings: ids.length, image, platform: platforms[0] || platform });
   }
   if (!matches.length) {
-    const evidence = rejected.slice(0, 3).join("; ") || "eBay had no catalog details";
-    return { status: "not_found", upcs: [], evidence: candidates.length ? `${evidence} — ${candidates.length} possible match${candidates.length === 1 ? "" : "es"} to confirm` : evidence, candidates };
+    return { status: "not_found", upcs: [], evidence: rejected.slice(0, 3).join("; ") || "eBay had no catalog details", candidates };
   }
   const first = matches[0];
   // A second matching product with a DIFFERENT code = two releases look alike
@@ -201,8 +203,13 @@ export async function fillListingUpcs(admin: any, opts: { productIds?: string[];
       const nm = await naming(admin);
       for (const c of look.candidates) {
         const codes = c.upcs.filter((u) => !rejected.some((r) => barcodeEq(r, u)) && !have.some((h: any) => barcodeEq(h.upc, u)));
-        if (codes.length) candidates.push({ ...c, upcs: codes, owner: await upcOwner(admin, codes[0], p.id, nm) });
+        if (!codes.length) continue;
+        let owner: string | null = null; // any of its codes on another listing = probably that game
+        for (const u of codes) { owner = await upcOwner(admin, u, p.id, nm); if (owner) break; }
+        candidates.push({ ...c, upcs: codes, owner });
       }
+      // Counted after filtering, so the message never mentions one that isn't shown.
+      if (candidates.length) evidence += ` — ${candidates.length} possible match${candidates.length === 1 ? "" : "es"} to confirm`;
     }
     results.push({ id: p.id, status, upcs, evidence, ...(candidates.length ? { candidates } : {}) });
     // Several failures in a row = eBay is down or throttling: stop, resume later.

@@ -1559,23 +1559,41 @@ const posData = {
         </div>`).join("")}
         <div class="upc-pick-foot"><button class="btn btn-ghost btn-sm" type="button" data-none>None of these</button></div>
       </div>`;
-      const close = () => { ov.remove(); document.removeEventListener("keydown", onKey, true); done(); };
-      const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); close(); } };
+      let saving = false; // a pick being saved: the dialog can't close under it
+      const close = () => { if (saving) return; ov.remove(); document.removeEventListener("keydown", onKey, true); done(); };
+      const onKey = (e: KeyboardEvent) => {
+        if (e.key === "Escape") { e.stopPropagation(); close(); }
+        // Only a deliberate click picks one — a scanner's trailing Enter must not.
+        else if ((e.key === "Enter" || e.key === " ") && (e.target as HTMLElement)?.matches?.("[data-pick]")) { e.preventDefault(); e.stopPropagation(); }
+      };
       document.addEventListener("keydown", onKey, true);
       ov.addEventListener("click", (e) => { if (e.target === ov) close(); });
       ov.querySelector("[data-none]")!.addEventListener("click", close);
       ov.querySelectorAll<HTMLButtonElement>("[data-pick]").forEach((b) => b.addEventListener("click", async () => {
+        if (saving) return;
         const c = cands[Number(b.dataset.pick)];
-        b.disabled = true; b.textContent = "Saving…";
+        saving = true;
+        const btns = [...ov.querySelectorAll<HTMLButtonElement>("button")];
+        const was = btns.map((x) => x.disabled);
+        btns.forEach((x) => (x.disabled = true));
+        b.textContent = "Saving…";
         try {
           const j = await upcApi({ action: "confirm", productId: p.id, upcs: c.upcs, title: c.title });
           p.upcs = j.upcs; p.upcStatus = "found";
-          toast(`🏷 UPC ${c.upcs.join(", ")} added to ${rgTitle(p)}`);
-          close();
-        } catch (e: any) { alert(e.message); b.disabled = false; b.textContent = "✓ Use this"; }
+          const skipped: string[] = j.skipped || [];
+          const added = (j.upcs || []).map((u: any) => u.upc).filter((u: string) => c.upcs.includes(u));
+          toast(`🏷 UPC ${added.join(", ") || "—"} added to ${rgTitle(p)}${skipped.length ? ` — skipped ${skipped.join("; ")}` : ""}`);
+          saving = false; close();
+        } catch (e: any) {
+          saving = false;
+          btns.forEach((x, k) => (x.disabled = was[k]));
+          b.textContent = "✓ Use this";
+          alert(e.message);
+        }
       }));
       document.body.appendChild(ov);
-      (ov.querySelector("[data-pick]:not([disabled])") as HTMLElement | null)?.focus();
+      // Focus the safe choice: a stray Enter closes it, never attaches anything.
+      (ov.querySelector("[data-none]") as HTMLElement | null)?.focus();
     });
   }
   function applyUpcResult(res: any) {
