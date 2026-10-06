@@ -17,10 +17,44 @@ export type PrintJob = { item: LabelItem; copies: number };
 export type RotateDeg = 0 | 90 | 180 | 270;
 export type PrintTune = { rotateDeg?: RotateDeg; scalePct?: number; nudgeXMm?: number; nudgeYMm?: number; dpi?: number };
 
+/** This station's saved label rotation ("0" / "90" / "180" / "270"), reading
+ *  the older on/off setting forward; null = never chosen. */
+export function storedRotDeg(): string | null {
+  try {
+    const deg = localStorage.getItem("tl-print-rotdeg");
+    if (deg != null) return deg;
+    const oldRot = localStorage.getItem("tl-print-rot-v2");
+    return oldRot != null ? (oldRot === "1" ? "90" : "0") : null;
+  } catch { return null; } // private mode
+}
+
 export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: PrintTune): Promise<void> {
   const real = jobs.filter((j) => j.copies > 0);
   if (!real.length) return;
   await ensureLabelFont(tpl); // warms the font cache the iframe will hit
+  // This path prints from Chrome (the dialog labels it so): the label goes in
+  // as INLINE VECTOR SVG — shapes and text, no bitmap anywhere — so the print
+  // chain draws it at whatever resolution the device has. Nothing to
+  // pixelate, nothing to rescale. (Safari mangles inline-SVG pagination; its
+  // path is the PDF button.) Fonts and the logo inline as data: URLs so the
+  // isolated iframe needs no network.
+  const styleTag = await fontStyleTag(tpl);
+  const logoData = tpl.logoUrl ? await inlineLogo(tpl.logoUrl) : "";
+  const labels = real.map((j) => {
+    let svg = renderLabelSvg(tpl, j.item);
+    if (styleTag) svg = svg.replace(/(<svg[^>]*>)/, `$1${styleTag}`);
+    if (tpl.logoUrl && logoData) svg = svg.split(escAttr(tpl.logoUrl)).join(logoData).split(tpl.logoUrl).join(logoData);
+    return { svg, copies: j.copies };
+  });
+  await printSvgLabels(labels, { widthMm: tpl.widthMm, heightMm: tpl.heightMm }, opts);
+}
+
+/** Print ready-made label SVGs (fonts / images already inlined) through the
+ *  browser's print dialog, one label per page at the label's physical size —
+ *  price labels and the Label maker share this. */
+export async function printSvgLabels(labels: { svg: string; copies: number }[], size: { widthMm: number; heightMm: number }, opts?: PrintTune): Promise<void> {
+  const real = labels.filter((l) => l.copies > 0);
+  if (!real.length) return;
 
   // Orientation: 90/270 compose the label sideways onto a PORTRAIT page —
   // roll-native for thermal drivers, which feed narrow-edge first. Which of
@@ -30,8 +64,8 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: P
   const sideways = deg === 90 || deg === 270;
   // Page = the driver's inch-defined paper exactly (see snapToInchGrid in
   // labelPdf) so nothing gets shrink-to-fitted; the label centers inside.
-  const pw = snapToInchGrid(sideways ? tpl.heightMm : tpl.widthMm);  // page width
-  const ph = snapToInchGrid(sideways ? tpl.widthMm : tpl.heightMm);  // page height
+  const pw = snapToInchGrid(sideways ? size.heightMm : size.widthMm);  // page width
+  const ph = snapToInchGrid(sideways ? size.widthMm : size.heightMm);  // page height
   const scale = Math.min(100, Math.max(60, Math.round(Number(opts?.scalePct) || 100)));
   const nx = Math.min(30, Math.max(-30, Number(opts?.nudgeXMm) || 0));
   const ny = Math.min(30, Math.max(-30, Number(opts?.nudgeYMm) || 0));
@@ -40,7 +74,7 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: P
   // label ships as an <img> — an ATOMIC replaced element that print
   // pagination can move or scale but never split. Safari fragmented both
   // CSS-transformed and inline-SVG labels across two pages.
-  const W = tpl.widthMm, H = tpl.heightMm;
+  const W = size.widthMm, H = size.heightMm;
   const rotateSvg = (svg: string) => {
     if (!deg) return svg;
     const inner = svg.replace(/^<svg[^>]*>/, "").replace(/<\/svg>\s*$/, "");
@@ -51,28 +85,17 @@ export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: P
     const ow = sideways ? H : W, oh = sideways ? W : H;
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${ow}mm" height="${oh}mm" viewBox="0 0 ${ow} ${oh}"><g transform="${g}">${inner}</g></svg>`;
   };
-  // This path prints from Chrome (the dialog labels it so): the label goes in
-  // as INLINE VECTOR SVG — shapes and text, no bitmap anywhere — so the print
-  // chain draws it at whatever resolution the device has. Nothing to
-  // pixelate, nothing to rescale. (Safari mangles inline-SVG pagination; its
-  // path is the PDF button.) Fonts and the logo inline as data: URLs so the
-  // isolated iframe needs no network.
-  const styleTag = await fontStyleTag(tpl);
-  const logoData = tpl.logoUrl ? await inlineLogo(tpl.logoUrl) : "";
-  const lw = sideways ? tpl.heightMm : tpl.widthMm;  // label width on the page
-  const lh = sideways ? tpl.widthMm : tpl.heightMm;
+  const lw = sideways ? size.heightMm : size.widthMm;  // label width on the page
+  const lh = sideways ? size.widthMm : size.heightMm;
   // Alignment math in plain mm — no grid/object-fit/percent CSS for the print
   // engine to resolve: the svg gets explicit size and margins. The label
   // keeps its true size, centered on the (inch-exact) page.
   const imgW = (lw * scale) / 100, imgH = (lh * scale) / 100;
   const offX = (pw - imgW) / 2 + nx, offY = (ph - imgH) / 2 + ny;
   const pages: string[] = [];
-  for (const j of real) {
-    let svg = renderLabelSvg(tpl, j.item);
-    if (styleTag) svg = svg.replace(/(<svg[^>]*>)/, `$1${styleTag}`);
-    if (tpl.logoUrl && logoData) svg = svg.split(escAttr(tpl.logoUrl)).join(logoData).split(tpl.logoUrl).join(logoData);
-    svg = rotateSvg(svg);
-    for (let i = 0; i < Math.min(500, j.copies); i++) {
+  for (const l of real) {
+    const svg = rotateSvg(l.svg);
+    for (let i = 0; i < Math.min(500, l.copies); i++) {
       pages.push(`<div class="label-page">${svg}</div>`);
     }
   }
@@ -212,14 +235,7 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
   // Which of the four orientations is correct is a per-station driver trait;
   // migrate the old boolean keys forward, then remember the choice.
   const rotSel = overlay.querySelector<HTMLSelectElement>("#lp-rotdeg")!;
-  let storedDeg: string | null = null;
-  try {
-    storedDeg = localStorage.getItem("tl-print-rotdeg");
-    if (storedDeg == null) {
-      const oldRot = localStorage.getItem("tl-print-rot-v2");
-      if (oldRot != null) storedDeg = oldRot === "1" ? "90" : "0";
-    }
-  } catch { /* private mode */ }
+  const storedDeg = storedRotDeg();
   rotSel.value = ["0", "90", "180", "270"].includes(storedDeg ?? "")
     ? storedDeg!
     : chosenTpl().widthMm > chosenTpl().heightMm ? "90" : "0";
