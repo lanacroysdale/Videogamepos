@@ -217,12 +217,12 @@ export const POST: APIRoute = async ({ locals, request }) => {
     }
     // A price guide's barcodes (UPC + EAN / GTIN…): all of them onto the
     // listing's UPCs — any already on another listing are skipped.
-    let codes: { added: string[]; conflicts: string[] } = { added: [], conflicts: [] };
+    let codes: { added: { id: string; upc: string; source: string }[]; conflicts: string[] } = { added: [], conflicts: [] };
     if (reference && Array.isArray(s.codes) && s.codes.length && (await upcTablesReady(admin))) {
       const list = [...new Set((s.codes as unknown[]).map((c) => canonicalUpc(String(c ?? ""))).filter(Boolean) as string[])].slice(0, 10);
       try {
         const r = await attachUpcs(admin, productId, list, "import", "From PriceCharting");
-        codes = { added: r.added.map((a: any) => a.upc), conflicts: r.conflicts };
+        codes = { added: r.added, conflicts: r.conflicts };
       } catch (e: any) { codes.conflicts.push(String(e?.message || e)); }
     }
     // Last: the photo, when the listing has none (its own deadline).

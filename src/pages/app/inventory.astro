@@ -1505,7 +1505,7 @@ const posData = {
         </div>
         ${rgOn ? `<div id="m-region-warn" class="upc-note m-region-warn" hidden></div>` : ""}
         <div id="m-imgprev" class="img-prev"${p.imageUrl ? "" : " hidden"}>${p.imageUrl ? `<img src="${esc(p.imageUrl)}" alt="">` : ""}</div>
-        <div class="m-field"><label style="display:flex;align-items:center;gap:0.5rem;justify-content:space-between;">Description (web) <button type="button" class="btn btn-ghost btn-sm" id="m-ai-desc" data-pid="${p.id}">✨ Write with AI</button></label><textarea id="m-desc" rows="3" placeholder="Shown on the website listing">${esc(p.description)}</textarea></div>
+        <div class="m-field"><label style="display:flex;align-items:center;gap:0.5rem;justify-content:space-between;">Description (web) <button type="button" class="btn btn-ghost btn-sm" id="m-ai-desc" data-pid="${p.id}">✨ Write with AI</button></label><textarea id="m-desc" rows="3" placeholder="Shown on the website listing" data-orig="${esc(String(p.description ?? "").trim())}">${esc(p.description)}</textarea></div>
       </div>
 
       <div class="m-section">
@@ -2010,13 +2010,17 @@ const posData = {
     btn.disabled = true; const orig = btn.textContent; btn.textContent = "Saving…";
     try {
       const regionSel = document.getElementById("m-region") as HTMLSelectElement | null;
+      const descEl = $("m-desc") as HTMLTextAreaElement;
+      const descChanged = descEl.value.trim() !== (descEl.dataset.orig ?? "");
       const pj = await api({
         action: "updateProduct", id: pid,
         title: get("m-title").trim(), genre: get("m-genre").trim(),
         // Platform only when it was changed (a save never re-spells it).
         ...(get("m-platform") !== ($("m-platform") as HTMLSelectElement).dataset.orig ? { platform: get("m-platform") } : {}),
         franchise: get("m-franchise").trim(), categoryId: get("m-category"), imageUrl: get("m-image").trim(),
-        description: ($("m-desc") as HTMLTextAreaElement).value.trim(),
+        // Description only when it was changed here — an edit window left open
+        // must not wipe one written meanwhile (e.g. by ✍ Write descriptions).
+        ...(descChanged ? { description: ($("m-desc") as HTMLTextAreaElement).value.trim() } : {}),
         ...(regionSel ? { regionCode: regionSel.value } : {}),
         // Tag categories (🧸 Plush): on / off per tag.
         ...(document.querySelector("[data-vtag]") ? { tags: Object.fromEntries([...document.querySelectorAll<HTMLInputElement>("[data-vtag]")].map((c) => [c.dataset.vtag!, c.checked])) } : {}),
@@ -2024,7 +2028,7 @@ const posData = {
       Object.assign(p, {
         title: get("m-title").trim(), platform: get("m-platform"), genre: get("m-genre").trim(),
         franchise: get("m-franchise").trim(), categoryId: get("m-category"), imageUrl: get("m-image").trim(),
-        description: ($("m-desc") as HTMLTextAreaElement).value.trim(),
+        ...(descChanged ? { description: ($("m-desc") as HTMLTextAreaElement).value.trim() } : {}),
         categoryName: categories.find((c) => c.id === get("m-category"))?.name ?? p.categoryName,
         categoryColor: categories.find((c) => c.id === get("m-category"))?.color ?? p.categoryColor,
       });
@@ -3343,7 +3347,7 @@ const posData = {
     if (!t) return "empty";
     return !/\n/.test(t) && t.length < DESC_SHORT ? "short" : "";
   };
-  let descRows: { p: any; old: string; done: boolean }[] = [];
+  let descRows: { p: any; old: string; done: boolean; ai?: string }[] = [];
   let descRunning = false, descStop = false;
   const descSleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   function descCandidates() {
@@ -3372,20 +3376,27 @@ const posData = {
     $("desc-count").textContent = descRows.length ? `${n} of ${descRows.length} selected${n ? ` · about ${secs < 90 ? `${secs} s` : `${Math.ceil(secs / 60)} min`}` : ""}` : "";
     ($("desc-go") as HTMLButtonElement).disabled = !n || descRunning;
   }
+  // Written rows keep their ↩ undo until the list is rebuilt on purpose.
+  const descUndoable = () => descRows.some((r) => r.done);
   document.getElementById("write-descs")?.addEventListener("click", () => {
-    if (!descRunning) renderDescList();
+    if (!descRunning && !descUndoable()) renderDescList();
     ($("desc-modal") as HTMLElement).hidden = false;
   });
-  ["desc-instock", "desc-thin"].forEach((id) => document.getElementById(id)?.addEventListener("change", () => { if (!descRunning) renderDescList(); }));
+  ["desc-instock", "desc-thin"].forEach((id) => document.getElementById(id)?.addEventListener("change", (e) => {
+    if (descRunning) { (e.target as HTMLInputElement).checked = !(e.target as HTMLInputElement).checked; return; }
+    if (descUndoable() && !confirm("Rebuild the list? ↩ undo for the descriptions already written goes away (they stay written).")) { (e.target as HTMLInputElement).checked = !(e.target as HTMLInputElement).checked; return; }
+    renderDescList();
+  }));
   document.querySelectorAll<HTMLElement>("[data-dclose]").forEach((el) => el.addEventListener("click", () => {
     if (descRunning && !confirm("Still writing — close this window? It keeps going in the background until you Stop it or leave the page.")) return;
     ($("desc-modal") as HTMLElement).hidden = true;
   }));
   document.getElementById("desc-stop")?.addEventListener("click", () => { descStop = true; ($("desc-stop") as HTMLButtonElement).textContent = "Stopping…"; });
   window.addEventListener("beforeunload", (e) => { if (descRunning) { e.preventDefault(); e.returnValue = ""; } });
-  async function describeOne(p: any): Promise<string> {
+  async function describeOne(p: any, currentText: string): Promise<string> {
     const req = () => fetch("/api/pos/ai/describe", { method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ productId: p.id, title: p.title, platform: p.platform, regionCode: p.regionCode || "", omitCondition: true }) })
+      // A one-liner is REWRITTEN (its edition / bundle facts kept), not thrown away.
+      body: JSON.stringify({ productId: p.id, title: p.title, platform: p.platform, regionCode: p.regionCode || "", omitCondition: true, currentText }) })
       .then(async (r) => ({ ok: r.ok, j: await r.json().catch(() => ({})) }));
     let { ok, j } = await req();
     // The AI is busy / over its per-minute limit → wait and try once more.
@@ -3399,34 +3410,46 @@ const posData = {
     descRunning = true; descStop = false;
     const go = $("desc-go") as HTMLButtonElement, stop = $("desc-stop") as HTMLButtonElement;
     go.disabled = true; stop.hidden = false; stop.textContent = "■ Stop";
-    let written = 0, failed = 0;
+    let written = 0, failed = 0, failedInRow = 0, skipped = 0;
     try {
       for (let k = 0; k < picked.length; k++) {
         if (descStop) break;
         const i = picked[k], r = descRows[i];
         const tr = document.querySelector<HTMLElement>(`tr[data-drow="${i}"]`)!;
         const st = tr.querySelector<HTMLElement>("[data-dst]")!;
+        const cb = tr.querySelector<HTMLInputElement>("[data-desc]")!;
+        // Unticked since, or its description changed here since the list was made → leave it.
+        const changed = () => String(r.p.description ?? "") !== r.old;
+        if (!cb.checked || changed()) { st.textContent = cb.checked ? "– skipped (edited since)" : "– skipped"; skipped++; continue; }
         st.textContent = `✨ writing… (${k + 1}/${picked.length})`;
         tr.scrollIntoView({ block: "nearest" });
         const t0 = Date.now();
         try {
-          const text = await describeOne(r.p);
-          await api({ action: "updateProduct", id: r.p.id, description: text });
-          r.p.description = text; r.done = true; written++;
+          const text = await describeOne(r.p, r.old.trim());
+          if (!cb.checked || changed()) { st.textContent = "– skipped (edited since)"; skipped++; continue; }
+          // Saved only if the listing still has the description it had (not a newer edit from anywhere).
+          const sv = await api({ action: "updateProduct", id: r.p.id, description: text, ifDescription: r.old });
+          if (sv.stale) { st.textContent = "– skipped (changed on another screen)"; skipped++; continue; }
+          r.p.description = text; r.ai = text; r.done = true; written++; failedInRow = 0;
           const nw = tr.querySelector<HTMLElement>("[data-dnew]")!;
           nw.textContent = text; nw.hidden = true;
           st.innerHTML = `✓ <button type="button" class="link-btn" data-dshow>show</button> · <button type="button" class="link-btn" data-dundo title="Put the old description back">↩ undo</button>`;
           st.querySelector("[data-dshow]")!.addEventListener("click", () => { nw.hidden = !nw.hidden; });
           st.querySelector("[data-dundo]")!.addEventListener("click", async () => {
-            try { await api({ action: "updateProduct", id: r.p.id, description: r.old }); r.p.description = r.old; r.done = false; nw.hidden = true; st.textContent = "↩ undone"; }
-            catch (e: any) { alert(e.message); }
+            if (String(r.p.description ?? "") !== r.ai && !confirm("This listing's description was edited since — put the old one back anyway?")) return;
+            try {
+              const u = await api({ action: "updateProduct", id: r.p.id, description: r.old, ifDescription: String(r.p.description ?? "") });
+              if (u.stale) { alert("It was changed on another screen meanwhile — left as it is."); return; }
+              r.p.description = r.old; r.done = false; nw.hidden = true; st.textContent = "↩ undone";
+            } catch (e: any) { alert(e.message); }
           });
           (tr.querySelector("[data-desc]") as HTMLInputElement).checked = false;
         } catch (e: any) {
-          failed++;
+          failed++; failedInRow++;
           st.textContent = `✗ ${String(e.message || e).slice(0, 80)}`;
           if (e.needsKey) { alert(e.message); break; }
-          if (failed >= 3 && written === 0) { alert(`The AI keeps failing — stopped.\n\n${e.message}`); break; }
+          // 3 in a row (after its own retry each): the AI is out for now (e.g. its daily limit).
+          if (failedInRow >= 3) { alert(`The AI keeps failing — stopped. Try the rest later.\n\n${e.message}`); break; }
         }
         // Few seconds apart: stays within the AI's free per-minute limit.
         if (k < picked.length - 1 && !descStop) await descSleep(Math.max(0, 6500 - (Date.now() - t0)));
@@ -3435,7 +3458,7 @@ const posData = {
       descRunning = false; stop.hidden = true;
       descCount();
       render();
-      toast(`✍ ${written} description${written === 1 ? "" : "s"} written${failed ? ` · ${failed} failed` : ""}${descStop ? " (stopped)" : ""}`);
+      toast(`✍ ${written} description${written === 1 ? "" : "s"} written${failed ? ` · ${failed} failed` : ""}${skipped ? ` · ${skipped} skipped` : ""}${descStop ? " (stopped)" : ""}`);
     }
   });
 
@@ -3613,6 +3636,8 @@ const posData = {
           // the page as a supplier link with the shop's title (managers only).
           // Before the game database fills the rest.
           toast(`✓ Added${where} — copying the photo…`);
+          // PriceCharting's codes only if its prefilled barcode was kept (cleared / changed = not this item's).
+          if ((body.barcode || "") !== (ps.codes?.[0] || "")) ps.codes = [];
           try {
             const r = await fetch("/api/pos/source-import", { method: "POST", headers: { "content-type": "application/json" },
               body: JSON.stringify({ mode: "attach", productId: newItem.id, source: ps, market: ps.market || undefined }) });
@@ -3622,7 +3647,7 @@ const posData = {
               if (e.supplier) newItem.supplierLinks = [...(newItem.supplierLinks || []), e.supplier];
               if (e.market) newItem.marketPrices = e.market;
               // Every code PriceCharting lists is the listing's now.
-              for (const c of e.codes?.added || []) if (!(newItem.upcs || []).some((u: any) => u.upc === c)) newItem.upcs = [...(newItem.upcs || []), { id: "pc:" + c, upc: c, source: "import", evidence: "From PriceCharting" }];
+              for (const a of e.codes?.added || []) if (!(newItem.upcs || []).some((u: any) => u.upc === a.upc)) newItem.upcs = [...(newItem.upcs || []), { ...a, evidence: "From PriceCharting" }];
               if (e.codes?.conflicts?.length) toast(`Some codes are already on other listings: ${e.codes.conflicts.slice(0, 2).join("; ")}`);
               if (e.marketError) alert(e.marketError);
               if (e.market?.id) newItem.pcId = e.market.id;
@@ -3793,7 +3818,7 @@ const posData = {
       // A price guide: its averages are what copies SELL for — the price
       // follows the condition you pick (until you type one); nothing is "paid".
       const codes: string[] = so.codes || (f.barcode ? [f.barcode] : []);
-      note.innerHTML = `${img}<div><strong>📈 From PriceCharting</strong>${codes.length ? ` · ${codes.length > 1 ? "UPC / EAN codes" : codes[0].length === 13 ? "EAN" : "UPC"} ${codes.map(esc).join(", ")}${codes.length > 1 ? " (all go on the listing)" : ""}` : " · no UPC / EAN on the page"}${f.regionCode && f.regionCode !== "US" ? ` · ${esc(f.regionCode)} release` : ""}
+      note.innerHTML = `${img}<div><strong>📈 From PriceCharting</strong>${codes.length ? ` · ${codes.length > 1 ? "UPC / EAN codes" : codes[0].length === 13 ? "EAN" : "UPC"} ${codes.map(esc).join(", ")}${codes.length > 1 ? " (all go on the listing)" : " (goes on the listing)"}` : " · no UPC / EAN on the page"}${f.regionCode && f.regionCode !== "US" ? ` · ${esc(f.regionCode)} release` : ""}
         <br>${marketLine(j.market, true) || "no prices taken"} <span style="color:var(--muted-2);">(averages, ${esc(j.market.at)})</span>
         ${j.priceNote ? `<br><span style="color:var(--magenta);">⚠ ${esc(j.priceNote)}</span>` : ""}
         <br><span style="color:var(--muted-2);">Pick the condition — the price follows it (or click one). On Save: ${j.marketReady ? "these averages are kept on the listing, plus" : "<span style='color:var(--magenta);'>(averages can't be kept until the market-prices migration is run)</span>"} its PriceCharting photo and link.</span>

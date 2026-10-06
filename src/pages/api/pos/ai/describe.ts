@@ -48,6 +48,10 @@ export const POST: APIRoute = async ({ locals, request }) => {
       if (rgCol && !b.regionCode) regionCode = (p as any).region_code ?? "";
     }
   }
+  // A one-line description being rewritten: its facts (edition, bundle,
+  // contents) are kept — not condition / testing / selling words.
+  const current = String(b.currentText ?? "").replace(/\s+/g, " ").trim().slice(0, 300);
+  if (current) ctx["Current short note (keep any edition / bundle / contents facts from it; ignore condition, testing, shipping or seller words)"] = current;
   // Only a badged region (not the home market): "Region: Japan (NTSC-J) — an import".
   if (regionTag(regionCode, regions)) ctx.Region = `${regionByCode(regionCode, regions)!.name} — an import release`;
 
