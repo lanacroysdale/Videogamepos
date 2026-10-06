@@ -1,0 +1,290 @@
+---
+export const prerender = false;
+import AppLayout from "../../layouts/AppLayout.astro";
+import { labelTemplates } from "../../lib/labels";
+import { sanitizeSaved, LM_FONTS, inches, SIZE_4X6 } from "../../lib/labelMaker";
+
+// LABEL MAKER — type a note ("Includes IPS SCREEN MOD"), print it on the
+// store's small stickers (Zebra) or a 4×6 shipping label (the separate 4×6
+// printer, through the print dialog). Text auto-fits; saved labels are shared.
+const supabase = Astro.locals.supabase;
+const { data: row } = await supabase.from("store_settings").select("settings").eq("id", 1).maybeSingle();
+// One "Sticker" size per distinct size the store's label templates use — the
+// stock that's loaded in the Zebra.
+const seen = new Set<string>();
+const stickers: { key: string; name: string; widthMm: number; heightMm: number; zebra: boolean }[] = [];
+for (const t of labelTemplates(row?.settings)) {
+  const k = `${t.widthMm}x${t.heightMm}`;
+  if (seen.has(k)) continue;
+  seen.add(k);
+  stickers.push({ key: `tpl:${k}`, name: `Sticker ${inches(t.widthMm)} × ${inches(t.heightMm)}″`, widthMm: t.widthMm, heightMm: t.heightMm, zebra: true });
+}
+const sizes = [
+  ...stickers,
+  { key: "4x6", name: "Shipping label 4 × 6″", ...SIZE_4X6, zebra: false },
+  { key: "custom", name: "Custom size…", widthMm: 50.8, heightMm: 25.4, zebra: true },
+];
+const blob = { sizes, saved: sanitizeSaved((row?.settings as any)?.labelMakerSaved) };
+---
+
+<AppLayout title="Label maker" active="labelmaker">
+  <div class="lm">
+    <section class="pos-panel lm-controls">
+      <label>Label size
+        <select id="lm-size">{sizes.map((s) => <option value={s.key}>{s.name}</option>)}</select>
+      </label>
+      <div id="lm-custom" class="lm-row" hidden>
+        <label class="lm-num">Width ″<input id="lm-cw" type="number" min="0.5" max="8" step="0.05" value="2" /></label>
+        <label class="lm-num">Height ″<input id="lm-ch" type="number" min="0.5" max="8" step="0.05" value="1" /></label>
+      </div>
+      <label id="lm-orient-wrap" class="lm-check" hidden><input type="checkbox" id="lm-landscape" /> Landscape — text runs along the long side (6 × 4″)</label>
+      <label>Text
+        <textarea id="lm-text" rows="4" maxlength="400" placeholder="Includes IPS SCREEN MOD"></textarea>
+      </label>
+      <div class="lm-row">
+        <label>Font<select id="lm-font">{LM_FONTS.map((f) => <option value={f.key}>{f.label}</option>)}</select></label>
+        <label>Text size
+          <select id="lm-tsize">
+            <option value="fill">Fill the label</option>
+            <option value="large">Large</option>
+            <option value="medium">Medium</option>
+            <option value="small">Small</option>
+          </select>
+        </label>
+      </div>
+      <div class="lm-row lm-opts">
+        <label class="lm-check"><input type="checkbox" id="lm-bold" checked /> Bold</label>
+        <span class="lm-seg" role="group" aria-label="Alignment">
+          <button type="button" data-align="center" class="on" aria-pressed="true">Center</button>
+          <button type="button" data-align="left" aria-pressed="false">Left</button>
+        </span>
+        <label class="lm-check"><input type="checkbox" id="lm-border" /> Border</label>
+      </div>
+      <div class="lm-row lm-print">
+        <label class="lm-num">Copies<input id="lm-copies" type="number" min="1" max="200" value="1" /></label>
+        <button id="lm-zebra" class="btn btn-primary btn-sm" type="button" hidden>⚡ Print to Zebra</button>
+        <button id="lm-print" class="btn btn-ghost btn-sm" type="button">🖨 Print…</button>
+      </div>
+      <p id="lm-hint" class="muted lm-hint"></p>
+    </section>
+
+    <section class="pos-panel lm-preview-wrap">
+      <div class="lm-head"><strong>Preview</strong><span id="lm-sizecap" class="muted"></span></div>
+      <div id="lm-preview" class="lm-preview"></div>
+      <p id="lm-overflow" class="lm-warn" hidden>⚠ Too much text for this label — it's at the smallest size and may be cut off. Shorten it or pick a bigger label.</p>
+    </section>
+
+    <section class="pos-panel lm-saved">
+      <div class="lm-head"><strong>Saved labels</strong><button id="lm-save" class="btn btn-ghost btn-sm" type="button">☆ Save this label</button></div>
+      <div id="lm-saved-list" class="lm-saved-list"></div>
+    </section>
+  </div>
+  <textarea id="lm-data" hidden set:text={JSON.stringify(blob)}></textarea>
+</AppLayout>
+
+<style>
+  /* "hidden" means hidden — the flex rows / buttons below would override it. */
+  .lm [hidden] { display:none !important; }
+  .lm { display:grid; grid-template-columns:minmax(0, 23rem) minmax(0, 1fr); gap:1rem; align-items:start; }
+  .lm-controls { display:flex; flex-direction:column; gap:0.75rem; }
+  .lm-controls label { display:flex; flex-direction:column; gap:0.3rem; font-size:0.82rem; font-weight:700; color:var(--muted); }
+  .lm-controls textarea { font:inherit; font-size:1rem; resize:vertical; min-height:5.5rem; }
+  .lm-row { display:flex; flex-wrap:wrap; gap:0.6rem; align-items:flex-end; }
+  .lm-row > label { flex:1 1 9rem; }
+  .lm-controls label.lm-check { flex-direction:row; align-items:center; gap:0.4rem; flex:0 0 auto; color:var(--text); font-weight:600; }
+  .lm-controls label.lm-check input { width:auto; flex:0 0 auto; margin:0; }
+  .lm-controls label.lm-num { flex:0 0 6.5rem; }
+  .lm-opts { align-items:center; }
+  .lm-seg { display:inline-flex; border:1px solid var(--border-strong); }
+  .lm-seg button { background:transparent; border:0; color:var(--muted); font:inherit; font-size:0.82rem; font-weight:700; padding:0.35rem 0.75rem; cursor:pointer; }
+  .lm-seg button + button { border-left:1px solid var(--border-strong); }
+  .lm-seg button.on { background:color-mix(in srgb, var(--cyan) 16%, transparent); color:var(--cyan); }
+  .lm-print { align-items:flex-end; }
+  .lm-hint { margin:0; font-size:0.8rem; }
+  .lm-head { display:flex; align-items:center; justify-content:space-between; gap:0.6rem; margin-bottom:0.7rem; }
+  .lm-preview-wrap { grid-column:2; grid-row:1 / span 2; }
+  .lm-preview { display:flex; justify-content:center; align-items:center; min-height:14rem; padding:1rem; background:repeating-linear-gradient(45deg, rgba(127,127,127,.08) 0 10px, transparent 10px 20px); }
+  .lm-preview :global(svg) { display:block; width:100%; height:auto; max-height:62vh; background:#fff; box-shadow:0 2px 10px rgba(0,0,0,.35); }
+  .lm-warn { margin:0.6rem 0 0; font-size:0.82rem; color:var(--magenta); }
+  .lm-saved { grid-column:1; }
+  .lm-saved-list { display:flex; flex-wrap:wrap; gap:0.4rem; }
+  .lm-saved-list :global(.lm-chip) { display:inline-flex; align-items:center; border:1px solid var(--border-strong); background:rgba(127,127,127,.08); }
+  .lm-saved-list :global(.lm-chip button) { background:transparent; border:0; color:var(--text); font:inherit; font-size:0.82rem; padding:0.35rem 0.6rem; cursor:pointer; max-width:16rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:left; }
+  .lm-saved-list :global(.lm-chip .lm-del) { color:var(--muted); border-left:1px solid var(--border-strong); padding:0.35rem 0.5rem; }
+  @media (max-width: 860px) {
+    .lm { grid-template-columns:1fr; }
+    .lm-preview-wrap, .lm-saved { grid-column:auto; grid-row:auto; }
+  }
+</style>
+
+<script>
+  import { renderTextLabelSvg, layoutTextLabel, inches, type TextLabelSpec, type SavedLabel, type TextSize } from "../../lib/labelMaker";
+  import { ensureLabelFont, type LabelTemplate } from "../../lib/labels";
+  import { fontStyleTag } from "../../lib/labelPdf";
+  import { printSvgLabels, type RotateDeg } from "../../lib/labelPrint";
+  import { findZebraPrinter, printSvgsDirect, ZebraError } from "../../lib/zebraDirect";
+
+  const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+  let blob: any = {};
+  try { blob = JSON.parse($<HTMLTextAreaElement>("lm-data").value || "{}"); } catch {}
+  const sizes: { key: string; name: string; widthMm: number; heightMm: number; zebra: boolean }[] = blob.sizes || [];
+  let saved: SavedLabel[] = blob.saved || [];
+  const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
+
+  // Real text widths (the font actually used), so the auto-fit is exact.
+  const ctx = document.createElement("canvas").getContext("2d")!;
+  const measure = (text: string, cssFont: string) => { ctx.font = cssFont; return ctx.measureText(text).width; };
+  const fontTpl = (key: string) => ({ fontKey: key, fontUrl: "" }) as unknown as LabelTemplate; // the font helpers read only these
+
+  let align: "left" | "center" = "center";
+  const sizeSel = $<HTMLSelectElement>("lm-size");
+  const sizeOf = () => sizes.find((s) => s.key === sizeSel.value) ?? sizes[0];
+  const is4x6 = () => sizeOf()?.key === "4x6";
+  // The label's dimensions as DESIGNED (landscape 4×6 = 152.4 wide).
+  const dims = () => {
+    const s = sizeOf();
+    if (s.key === "custom") {
+      const w = Math.min(8, Math.max(0.5, Number($<HTMLInputElement>("lm-cw").value) || 2)) * 25.4;
+      const h = Math.min(8, Math.max(0.5, Number($<HTMLInputElement>("lm-ch").value) || 1)) * 25.4;
+      return { widthMm: w, heightMm: h };
+    }
+    if (s.key === "4x6" && $<HTMLInputElement>("lm-landscape").checked) return { widthMm: s.heightMm, heightMm: s.widthMm };
+    return { widthMm: s.widthMm, heightMm: s.heightMm };
+  };
+  const spec = (): TextLabelSpec => ({
+    ...dims(),
+    text: $<HTMLTextAreaElement>("lm-text").value,
+    fontKey: $<HTMLSelectElement>("lm-font").value,
+    bold: $<HTMLInputElement>("lm-bold").checked,
+    align,
+    textSize: $<HTMLSelectElement>("lm-tsize").value as TextSize,
+    border: $<HTMLInputElement>("lm-border").checked,
+  });
+
+  let zebra: { device: any; name: string } | null = null;
+  function render() {
+    const s = spec();
+    $("lm-custom").hidden = sizeOf()?.key !== "custom";
+    $("lm-orient-wrap").hidden = !is4x6();
+    $("lm-preview").innerHTML = renderTextLabelSvg(s, measure);
+    $("lm-overflow").hidden = !s.text.trim() || layoutTextLabel(s, measure).fits;
+    $("lm-sizecap").textContent = `${inches(s.widthMm)} × ${inches(s.heightMm)}″`;
+    const canZebra = !!zebra && sizeOf()?.zebra;
+    $("lm-zebra").hidden = !canZebra;
+    if (canZebra) $("lm-zebra").title = `Straight to ${zebra!.name} — the sticker roll`;
+    $("lm-hint").textContent = is4x6()
+      ? "4 × 6 prints through the print dialog — pick your shipping-label printer and a 4 × 6 paper size."
+      : canZebra ? "⚡ sends straight to the Zebra; 🖨 opens the print dialog." : "🖨 opens the print dialog — pick the label printer and this label's paper size.";
+    remember();
+  }
+
+  // ---- printing ----
+  const copies = () => Math.min(200, Math.max(1, Math.round(Number($<HTMLInputElement>("lm-copies").value)) || 1));
+  async function printableSvg(s: TextLabelSpec) {
+    await ensureLabelFont(fontTpl(s.fontKey));
+    let svg = renderTextLabelSvg(s, measure);
+    const style = await fontStyleTag(fontTpl(s.fontKey)); // web fonts travel inside the label
+    if (style) svg = svg.replace(/(<svg[^>]*>)/, `$1${style}`);
+    return svg;
+  }
+  // The sticker printer's per-station settings, the same ones the price-label
+  // print dialog saves (rotation, scale, nudge).
+  const ls = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
+  const stickerTune = (s: TextLabelSpec) => {
+    const deg = ls("tl-print-rotdeg");
+    return {
+      rotateDeg: (["0", "90", "180", "270"].includes(deg ?? "") ? Number(deg) : s.widthMm > s.heightMm ? 90 : 0) as RotateDeg,
+      scalePct: Number(ls("tl-print-scale")) || 100,
+      nudgeXMm: Number(ls("tl-print-nx")) || 0,
+      nudgeYMm: Number(ls("tl-print-ny")) || 0,
+    };
+  };
+  $("lm-print").addEventListener("click", async () => {
+    const s = spec();
+    if (!s.text.trim()) { alert("Type the label's text first."); $("lm-text").focus(); return; }
+    const svg = await printableSvg(s);
+    // 4×6: its own printer, portrait paper — landscape text turns onto it.
+    const opts = is4x6() ? { rotateDeg: ($<HTMLInputElement>("lm-landscape").checked ? 90 : 0) as RotateDeg } : stickerTune(s);
+    await printSvgLabels([{ svg, copies: copies() }], { widthMm: s.widthMm, heightMm: s.heightMm }, opts);
+  });
+  $("lm-zebra").addEventListener("click", async () => {
+    const s = spec();
+    if (!s.text.trim()) { alert("Type the label's text first."); $("lm-text").focus(); return; }
+    if (!zebra) return;
+    const btn = $<HTMLButtonElement>("lm-zebra"); btn.disabled = true;
+    try {
+      const svg = await printableSvg(s);
+      const t = stickerTune(s);
+      const n = await printSvgsDirect(zebra.device, [{ svg, copies: copies() }], { widthMm: s.widthMm, heightMm: s.heightMm }, { scalePct: t.scalePct, nudgeXMm: t.nudgeXMm, nudgeYMm: t.nudgeYMm });
+      btn.textContent = `✓ Sent ${n}`;
+      setTimeout(() => { btn.textContent = "⚡ Print to Zebra"; }, 2000);
+    } catch (e: any) {
+      alert(e instanceof ZebraError ? `${e.message}${e.sent ? ` (${e.sent} already printed)` : ""}\n\nCheck that the Zebra is on and ready, and that it's the default printer in Zebra Browser Print.` : e.message);
+    } finally { btn.disabled = false; }
+  });
+
+  // ---- saved labels (shared by every station) ----
+  const current = (): Omit<SavedLabel, "id" | "name"> => {
+    const s = spec();
+    return {
+      text: s.text, sizeKey: sizeOf()?.key ?? "", landscape: $<HTMLInputElement>("lm-landscape").checked,
+      customW: Number($<HTMLInputElement>("lm-cw").value) * 25.4, customH: Number($<HTMLInputElement>("lm-ch").value) * 25.4,
+      fontKey: s.fontKey, bold: s.bold, align: s.align, textSize: s.textSize, border: s.border,
+    };
+  };
+  function load(l: Partial<SavedLabel>) {
+    if (l.sizeKey && sizes.some((s) => s.key === l.sizeKey)) sizeSel.value = l.sizeKey;
+    if (l.customW) $<HTMLInputElement>("lm-cw").value = (l.customW / 25.4).toFixed(2);
+    if (l.customH) $<HTMLInputElement>("lm-ch").value = (l.customH / 25.4).toFixed(2);
+    $<HTMLInputElement>("lm-landscape").checked = !!l.landscape;
+    if (l.text != null) $<HTMLTextAreaElement>("lm-text").value = l.text;
+    if (l.fontKey) $<HTMLSelectElement>("lm-font").value = l.fontKey;
+    if (l.textSize) $<HTMLSelectElement>("lm-tsize").value = l.textSize;
+    if (l.bold != null) $<HTMLInputElement>("lm-bold").checked = l.bold;
+    if (l.border != null) $<HTMLInputElement>("lm-border").checked = l.border;
+    if (l.align) setAlign(l.align);
+    ensureLabelFont(fontTpl($<HTMLSelectElement>("lm-font").value)).then(render);
+    render();
+  }
+  function renderSaved() {
+    const list = $("lm-saved-list");
+    list.innerHTML = saved.length
+      ? saved.map((l) => `<span class="lm-chip"><button type="button" data-load="${esc(l.id)}" title="${esc(l.text)}">${esc(l.name)}</button><button type="button" class="lm-del" data-del="${esc(l.id)}" aria-label="Remove ${esc(l.name)}">✕</button></span>`).join("")
+      : `<p class="muted" style="margin:0;font-size:0.82rem;">Nothing saved yet — type a label and press ☆ Save this label.</p>`;
+    list.querySelectorAll<HTMLElement>("[data-load]").forEach((b) => b.addEventListener("click", () => { const l = saved.find((x) => x.id === b.dataset.load); if (l) load(l); }));
+    list.querySelectorAll<HTMLElement>("[data-del]").forEach((b) => b.addEventListener("click", async () => {
+      const l = saved.find((x) => x.id === b.dataset.del);
+      if (!l || !confirm(`Remove the saved label “${l.name}”? (For every station.)`)) return;
+      try { saved = await post({ action: "delete", id: l.id }); renderSaved(); } catch (e: any) { alert(e.message); }
+    }));
+  }
+  async function post(body: any): Promise<SavedLabel[]> {
+    const r = await fetch("/api/pos/label-maker", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || "Couldn't save");
+    return j.saved || [];
+  }
+  $("lm-save").addEventListener("click", async () => {
+    const c = current();
+    if (!c.text.trim()) { alert("Type the label's text first."); return; }
+    const name = prompt("Name this label (shown on its button):", c.text.split("\n")[0].trim().slice(0, 40));
+    if (name === null) return;
+    try { saved = await post({ action: "save", label: { ...c, name } }); renderSaved(); } catch (e: any) { alert(e.message); }
+  });
+
+  // ---- controls ----
+  function setAlign(a: "left" | "center") {
+    align = a;
+    document.querySelectorAll<HTMLElement>(".lm-seg [data-align]").forEach((b) => { const on = b.dataset.align === a; b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); });
+  }
+  document.querySelectorAll<HTMLElement>(".lm-seg [data-align]").forEach((b) => b.addEventListener("click", () => { setAlign(b.dataset.align === "left" ? "left" : "center"); render(); }));
+  for (const id of ["lm-size", "lm-cw", "lm-ch", "lm-landscape", "lm-text", "lm-tsize", "lm-bold", "lm-border"]) $(id).addEventListener("input", render);
+  $("lm-font").addEventListener("change", () => { render(); ensureLabelFont(fontTpl($<HTMLSelectElement>("lm-font").value)).then(render); });
+
+  // This station's last label comes back (handy when printing a run).
+  function remember() { try { localStorage.setItem("tl-lm-last", JSON.stringify(current())); } catch { /* private mode */ } }
+  try { const last = JSON.parse(ls("tl-lm-last") || "null"); if (last) load(last); } catch { /* fresh start */ }
+  renderSaved();
+  render();
+  findZebraPrinter().then((z) => { zebra = z; render(); });
+</script>
