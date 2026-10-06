@@ -18,6 +18,9 @@ const json = (d: unknown, s = 200) =>
 //       official title + box art), for a box that isn't in inventory yet.
 //   { action: "remove", id } → managers; an automatic UPC removed by hand is
 //       never auto-filled again for that listing ("rejected").
+//   { action: "rejectCandidates", productId, upcs } → "None of these": those
+//       suggested codes are wrong for the listing — never suggested or
+//       attached automatically again (a hand-typed UPC still works).
 //   { action: "confirm", productId, upcs, title } → staff picked one of the
 //       lookup's possible matches (a name that differs, or one of several
 //       releases): attach its UPC(s), noting the eBay catalog product.
@@ -68,6 +71,18 @@ export const POST: APIRoute = async ({ locals, request }) => {
       await admin.from("products").update({ upc_status: "found", upc_checked_at: new Date().toISOString() }).eq("id", b.productId);
       const { data: all } = await admin.from("product_upcs").select("id, upc, source").eq("product_id", b.productId).order("created_at");
       return json({ ok: true, added: added[0] ?? null, upcs: all || [] });
+    }
+
+    if (b.action === "rejectCandidates") {
+      if (!b.productId) return json({ error: "productId required" }, 400);
+      const codes = [...new Set((Array.isArray(b.upcs) ? b.upcs : []).slice(0, 10).map((u: unknown) => canonicalUpc(String(u))).filter(Boolean))] as string[];
+      if (!codes.length) return json({ ok: true });
+      const { data: prod } = await admin.from("products").select("upc_rejected").eq("id", b.productId).maybeSingle();
+      if (!prod) return json({ error: "Listing not found." }, 404);
+      const rejected = [...new Set([...((prod as any).upc_rejected || []), ...codes])];
+      const { error } = await admin.from("products").update({ upc_rejected: rejected }).eq("id", b.productId);
+      if (error) return json({ error: error.message }, 500);
+      return json({ ok: true });
     }
 
     if (b.action === "confirm") {
