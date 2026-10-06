@@ -86,6 +86,7 @@ export type LabelTemplate = {
     region: boolean;                     // "JP" / "PAL" after the platform in the meta line
     spineText: boolean;
     spineCondition: boolean;             // "CIB" / "NEW" on the spine, between logo and price
+    typeIcon: boolean;                   // the inventory type's icon, bottom-right of the face (types picked in Settings)
   };
   spineText: string;                     // tagline under the spine price, e.g. "Buy | Sell | Chill"
   barcodeHeightMm: number;               // 5–20
@@ -102,6 +103,10 @@ export type LabelTemplate = {
   titleMaxChars: number;                 // 10–60 — hard cut-off (… beyond this)
   titleDropThe: boolean;                 // print "Legend of Zelda: …" — a leading "The" spends room for nothing
   isDefault?: boolean;
+  // Not saved with the template: the inventory types whose icon prints on
+  // labels (Settings → Inventory types → "Label icon"), filled in by
+  // labelTemplates() from store_settings.settings.labelTypeIcons.
+  typeIconIds?: string[];
 };
 
 // What one label prints for one variant (built by the caller from live rows).
@@ -112,6 +117,8 @@ export type LabelItem = {
   condShort: string;      // e.g. "CIB · ★★★" (conditionDisplay compAbbrev style)
   priceCents: number;
   invTypeName: string;    // e.g. "Personal Collection" ("" hides)
+  invTypeId?: string;     // the variant's inventory type — its icon prints when that type is picked
+  invTypeIcon?: string;   // that type's icon (emoji), e.g. "🛍"
   locationKey: string;    // e.g. "PDX"
   internalCode: string;   // fallback barcode payload (TL…, wide)
   labelCode?: string;     // preferred payload: 10-digit numeric → compact Code 128C
@@ -127,7 +134,7 @@ export const DEFAULT_TEMPLATE: LabelTemplate = {
   spine: "left", // front-to-spine: face on the case FRONT, flap wraps the spine
   spineDir: "down",
   spineWidthMm: 13,
-  show: { logo: true, title: true, category: true, condition: true, price: true, invType: true, location: true, sku: false, barcode: true, region: true, spineText: true, spineCondition: false },
+  show: { logo: true, title: true, category: true, condition: true, price: true, invType: true, location: true, sku: false, barcode: true, region: true, spineText: true, spineCondition: false, typeIcon: true },
   spineText: "",
   barcodeHeightMm: 8,
   barcodeShowText: true,
@@ -178,6 +185,7 @@ export function sanitizeLabelTemplates(raw: any): LabelTemplate[] {
         location: t.show?.location !== false, sku: t.show?.sku === true, barcode: t.show?.barcode !== false,
         region: t.show?.region !== false,
         spineText: t.show?.spineText !== false, spineCondition: t.show?.spineCondition === true,
+        typeIcon: t.show?.typeIcon !== false,
       },
       spineText: String(t.spineText ?? "").slice(0, 30),
       barcodeHeightMm: clamp(t.barcodeHeightMm, 5, 20, d.barcodeHeightMm),
@@ -210,9 +218,19 @@ export function sanitizeLabelTemplates(raw: any): LabelTemplate[] {
 }
 
 // Reader for store_settings.settings.labelTemplates (settings-helper idiom).
+// Each template also carries the store-wide list of inventory types whose
+// icon prints on labels.
 export function labelTemplates(rawSettings: any): LabelTemplate[] {
-  return sanitizeLabelTemplates(rawSettings?.labelTemplates);
+  const typeIconIds = labelTypeIconIds(rawSettings);
+  return sanitizeLabelTemplates(rawSettings?.labelTemplates).map((t) => ({ ...t, typeIconIds }));
 }
+/** store_settings.settings.labelTypeIcons — inventory type ids (Settings →
+ *  Inventory types → "Label icon"). */
+export function labelTypeIconIds(rawSettings: any): string[] {
+  const raw = rawSettings?.labelTypeIcons;
+  return Array.isArray(raw) ? [...new Set(raw.filter((x: any) => typeof x === "string" && /^[0-9a-f-]{36}$/i.test(x)))].slice(0, 20) as string[] : [];
+}
+
 
 const esc = (s: any) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
@@ -547,6 +565,14 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
     const rx = fx + fw - 0.8;
     parts.push(`<text x="${rx.toFixed(2)}" y="${(H / 2).toFixed(2)}" transform="rotate(-90 ${rx.toFixed(2)} ${(H / 2).toFixed(2)})" text-anchor="middle" dominant-baseline="central" font-family="${fam}" font-size="${(2.0 * fs * fsc).toFixed(2)}" letter-spacing="0.15" fill="#000">${esc(tagBits.join(" · "))}</text>`);
   }
+  // The inventory type's icon (e.g. 🛍 on eBay stock) in the face's
+  // bottom-right corner — only for the types picked in Settings. Printed as a
+  // solid black silhouette: a thermal printer is black-or-white, and a colour
+  // emoji would print as specks.
+  const iconOn = tpl.show.typeIcon && !!item.invTypeIcon && !!item.invTypeId && (tpl.typeIconIds ?? []).includes(item.invTypeId);
+  const icS = iconOn ? Math.min(5.2 * fs, H * 0.22) : 0;          // icon box, mm
+  const icRight = fx + contentW;                                    // the content column's right edge
+  let icBottom = H - BOTTOM;
   // Barcode pinned to the bottom (face-width, or full label width — see above).
   // Never stretch to fill: modules cap at 0.30mm so a compact numeric code
   // STAYS compact and centered instead of smearing across the label.
@@ -554,11 +580,25 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
     // Centered on the same content column as the face text (cohesion).
     const areaX = bcFullWidth ? INSET : fx;
     const areaW = bcFullWidth ? W - INSET * 2 : contentW;
-    const modMm = Math.max(MIN_MODULE_MM, Math.min(0.3, areaW / bcModules));
-    const { svg } = code128SvgGroup(bcPayload, areaX + Math.max(0, (areaW - bcModules * modMm) / 2), bcY, {
+    let modMm = Math.max(MIN_MODULE_MM, Math.min(0.3, areaW / bcModules));
+    let bx = areaX + Math.max(0, (areaW - bcModules * modMm) / 2);
+    if (iconOn && bx + bcModules * modMm > icRight - icS - 0.6) {
+      // No room beside a centered barcode: center it in the space left of the
+      // icon instead (thinner bars if needed) — else the icon sits above it.
+      const room = icRight - icS - 0.6 - areaX;
+      if (room >= bcModules * MIN_MODULE_MM) {
+        modMm = Math.max(MIN_MODULE_MM, Math.min(modMm, room / bcModules));
+        bx = areaX + Math.max(0, (room - bcModules * modMm) / 2);
+      } else icBottom = bcY - 0.5;
+    }
+    const { svg } = code128SvgGroup(bcPayload, bx, bcY, {
       moduleMm: modMm, heightMm: tpl.barcodeHeightMm, showText: tpl.barcodeShowText, textMm: 2.2 * fs,
     });
     parts.push(svg);
+  }
+  if (iconOn) {
+    parts.push(`<defs><filter id="tl-sil" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0"/></filter></defs>`);
+    parts.push(`<text x="${(icRight - icS / 2).toFixed(2)}" y="${(icBottom - icS / 2).toFixed(2)}" text-anchor="middle" dominant-baseline="central" font-family="'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif" font-size="${(icS * 0.9).toFixed(2)}" filter="url(#tl-sil)">${esc(item.invTypeIcon)}</text>`);
   }
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}mm" height="${H}mm" viewBox="0 0 ${W} ${H}">${parts.join("")}</svg>`;

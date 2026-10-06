@@ -6,7 +6,7 @@ import { lowStockSettings, freeShipSettings } from "../../lib/lowStock";
 import { themeSettings, THEMES, SIDEBARS } from "../../lib/themeSettings";
 import { aiSettings, aiStatus, AI_PROVIDERS, AI_QUALITIES } from "../../lib/ai";
 import { barSettings } from "../../lib/barSettings";
-import { labelTemplates, LABEL_FONTS } from "../../lib/labels";
+import { labelTemplates, labelTypeIconIds, LABEL_FONTS } from "../../lib/labels";
 import type { StoreDepartment, StoreInventoryType, StoreLocation, StoreRegion } from "../../lib/types";
 import { createSupabaseAdminClient } from "../../lib/supabase";
 import { PERMISSIONS, PERMISSION_GROUPS, loadRoles, roleName } from "../../lib/permissions";
@@ -76,6 +76,14 @@ if (canInvConfig) {
   invTypes = (itRows as StoreInventoryType[]) ?? [];
   locations = (locRows as StoreLocation[]) ?? [];
 }
+// Inventory types whose icon prints on labels (store_settings.labelTypeIcons).
+const labelIconIds = labelTypeIconIds(row?.settings);
+// The label designer's sample shows the first of them (types are staff-readable
+// even without the inventory-config permission).
+const { data: lblTypeRows } = labelIconIds.length
+  ? await supabase.from("store_inventory_types").select("id, name, icon").in("id", labelIconIds)
+  : { data: [] as any[] };
+const sampleType = (lblTypeRows ?? []).find((t: any) => t.icon) ?? null;
 // Regions (US / PAL / Japan… tags). No table before migration 20261005000001
 // → [] → the Regions table shows a setup note and the label designer hides
 // its Region toggle (nothing prints one yet).
@@ -302,12 +310,13 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
         Separate stock pools — Retail, Online, <strong>Personal Collection</strong> — set per item in Inventory.
         <strong>Website</strong> = allowed on the shop/feeds. <strong>Blocked</strong> = can’t be sold at checkout
         (keep your collection blocked day-to-day; untoggle it at the expo).
+        <strong>Label icon</strong> = print the type's icon in the bottom-right corner of its labels (e.g. 🛍 on eBay stock).
       </p>
       {invTypes.length === 0 ? (
         <p class="muted">Run <code>supabase/migrations/20260731000001_inventory_types_locations.sql</code> in the Supabase SQL editor, then refresh.</p>
       ) : (
         <table class="tbl dept-tbl">
-          <thead><tr><th></th><th>Type</th><th title="Allowed on the website/feeds">Website</th><th title="Refuse selling at checkout">Blocked</th><th class="dept-act-col"></th></tr></thead>
+          <thead><tr><th></th><th>Type</th><th title="Allowed on the website/feeds">Website</th><th title="Refuse selling at checkout">Blocked</th><th title="Print this type's icon in the bottom-right corner of its labels">Label icon</th><th class="dept-act-col"></th></tr></thead>
           <tbody>
             {invTypes.map((t) => (
               <tr data-it-id={t.id} data-system={t.is_system ? "1" : "0"} data-name={t.name} data-icon={t.icon ?? ""} data-color={t.color ?? ""}>
@@ -315,6 +324,7 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
                 <td><strong>{t.name}</strong>{t.is_system && <span class="muted dept-core"> · core</span>}</td>
                 <td><input type="checkbox" class="dept-enabled it-sync" checked={t.allow_website_sync} /></td>
                 <td><input type="checkbox" class="dept-enabled it-block" checked={t.block_at_checkout} /></td>
+                <td><input type="checkbox" class="dept-enabled it-label" checked={labelIconIds.includes(t.id)} disabled={!t.icon} title={t.icon ? `Print ${t.icon} on ${t.name} labels` : "Give this type an icon first (edit)"} /></td>
                 <td class="dept-act-col">
                   <button class="link-btn it-edit" type="button">edit</button>
                   {!t.is_system && <button class="link-btn it-del" type="button">delete</button>}
@@ -457,8 +467,8 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
             <div class="lt-group">
               <div class="lt-group-h">👁 Show on label</div>
               <div class="lt-toggles" id="lt-shows">
-                {["logo","title","category","region","condition","price","invType","location","sku","barcode","spineText","spineCondition"].filter((k) => k !== "region" || regionsOn).map((k) => (
-                  <label><input type="checkbox" data-ltshow={k} /> {k === "invType" ? "Inv. type" : k === "sku" ? "SKU" : k === "spineText" ? "Tagline" : k === "spineCondition" ? "Condition on spine" : k[0].toUpperCase() + k.slice(1)}</label>
+                {["logo","title","category","region","condition","price","invType","location","sku","barcode","spineText","spineCondition","typeIcon"].filter((k) => k !== "region" || regionsOn).map((k) => (
+                  <label title={k === "typeIcon" ? "The inventory type's icon, bottom-right — for the types ticked under Inventory types → Label icon" : undefined}><input type="checkbox" data-ltshow={k} /> {k === "invType" ? "Inv. type" : k === "sku" ? "SKU" : k === "spineText" ? "Tagline" : k === "spineCondition" ? "Condition on spine" : k === "typeIcon" ? "Type icon" : k[0].toUpperCase() + k.slice(1)}</label>
                 ))}
               </div>
               <div class="lt-toggles" style="border-top:1px solid var(--border);padding-top:0.5rem;">
@@ -796,7 +806,7 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       </div>
     </div>
   )}
-  <textarea id="lt-data" hidden set:text={JSON.stringify({ templates: lblTemplates, storeName, regionsOn })}></textarea>
+  <textarea id="lt-data" hidden set:text={JSON.stringify({ templates: lblTemplates, storeName, regionsOn, sampleType })}></textarea>
 </AppLayout>
 
 <style>
@@ -1297,6 +1307,15 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     const itStatus = document.getElementById("it-status")!;
     const locStatus = document.getElementById("loc-status")!;
 
+    // Label icon: print this type's icon on its labels (store-wide list).
+    invPanel.querySelectorAll<HTMLInputElement>(".it-label").forEach((cb) => {
+      cb.addEventListener("change", async () => {
+        const tr = cb.closest("tr") as HTMLElement;
+        itStatus.textContent = "Saving…";
+        try { await icApi({ action: "setTypeLabelIcon", id: tr.dataset.itId, value: cb.checked }); itStatus.textContent = "✓ Saved — labels printed from now on show it"; }
+        catch (e: any) { cb.checked = !cb.checked; itStatus.textContent = ""; alert(e.message); }
+      });
+    });
     // Quick flag toggles (the expo switch lives here).
     invPanel.querySelectorAll<HTMLInputElement>(".it-sync, .it-block").forEach((cb) => {
       cb.addEventListener("change", async () => {
@@ -1473,7 +1492,9 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       title: "Mega Man X3", categoryName: "Super Nintendo", condShort: "CIB · ★★★",
       // Shows where a region tag lands (after the platform) once regions exist.
       region: blob.regionsOn ? "JP" : "",
-      priceCents: 26000, invTypeName: "Retail", locationKey: "PDX",
+      priceCents: 26000, invTypeName: blob.sampleType?.name || "Retail", locationKey: "PDX",
+      // A type whose icon prints on labels (e.g. eBay 🛍), so the corner shows.
+      invTypeId: blob.sampleType?.id || "", invTypeIcon: blob.sampleType?.icon || "",
       // Real code lengths: 10-digit numeric label code (compact Code 128C —
       // what actually prints) + the 12-char internal fallback.
       internalCode: "TL2C3F5A7B9D", labelCode: "1000000042", sku: "SNES-MMX3", storeName: blob.storeName || "TimeLag",

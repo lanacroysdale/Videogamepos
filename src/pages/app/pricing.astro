@@ -9,7 +9,7 @@ import { loadRegions, regionsOn, regionOf, regionTag, regionBadgeHtml, regionSor
 const supabase = Astro.locals.supabase;
 const [{ data: settingsRow }, { data: invTypes }, { data: locations }, { data: completeness }, { data: grades }] = await Promise.all([
   supabase.from("store_settings").select("store_name, settings").eq("id", 1).maybeSingle(),
-  supabase.from("store_inventory_types").select("id, name"),
+  supabase.from("store_inventory_types").select("id, name, icon"),
   supabase.from("store_locations").select("id, key, is_default"),
   supabase.from("completeness_levels").select("code, label").eq("is_active", true),
   supabase.from("condition_grades").select("code, label, icon").eq("is_active", true),
@@ -43,6 +43,7 @@ const pct = (oldC: number, newC: number) => (oldC ? Math.round(((newC - oldC) / 
 
 // Everything the label printer needs, per price-change row (keyed by change id).
 const typeName = new Map((invTypes ?? []).map((t: any) => [t.id, t.name]));
+const typeIcon = new Map((invTypes ?? []).map((t: any) => [t.id, t.icon ?? ""]));
 const locKey = new Map((locations ?? []).map((l: any) => [l.id, l.key]));
 const defaultLocKey = (locations ?? []).find((l: any) => l.is_default)?.key ?? "";
 const condShort = (v: any) => {
@@ -65,6 +66,7 @@ const rowInfo = (p: any) => ({
   labelCode: p.variant?.label_code ?? "",
   sku: p.variant?.sku ?? "",
   invTypeName: typeName.get(p.variant?.inventory_type_id) ?? "",
+  invTypeId: p.variant?.inventory_type_id ?? "", invTypeIcon: typeIcon.get(p.variant?.inventory_type_id) ?? "",
   locationKey: locKey.get(p.variant?.location_id) ?? defaultLocKey,
 });
 const lblRows: Record<string, any> = {};
@@ -183,7 +185,7 @@ const clientBlob = { rows: lblRows, templates: labelTemplates((settingsRow as an
     const r = rows[id];
     if (!r || !(r.labelCode || r.internalCode)) return null;
     return {
-      item: { title: r.title, categoryName: r.categoryName, region: r.region || "", condShort: r.condShort, priceCents: r.priceCents, invTypeName: r.invTypeName, locationKey: r.locationKey, internalCode: r.internalCode, labelCode: r.labelCode || "", sku: r.sku, storeName: blob.storeName },
+      item: { title: r.title, categoryName: r.categoryName, region: r.region || "", condShort: r.condShort, priceCents: r.priceCents, invTypeName: r.invTypeName, invTypeId: r.invTypeId || "", invTypeIcon: r.invTypeIcon || "", locationKey: r.locationKey, internalCode: r.internalCode, labelCode: r.labelCode || "", sku: r.sku, storeName: blob.storeName },
       defaultCopies: Math.max(1, r.quantity), // a price change re-tags every shelf copy
     };
   }
