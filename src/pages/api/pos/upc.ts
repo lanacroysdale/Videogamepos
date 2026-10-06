@@ -1,7 +1,7 @@
 import type { APIRoute } from "astro";
 import { createSupabaseAdminClient } from "../../../lib/supabase";
 import { fetchAll } from "../../../lib/fetchAll";
-import { fillListingUpcs, attachUpcs, upcTablesReady, needingUpc, identifyUpc, regionColumnReady } from "../../../lib/upcFinder";
+import { fillListingUpcs, attachUpcs, upcTablesReady, needingUpc, identifyUpc, regionColumnReady, CONFIRMED_EVIDENCE } from "../../../lib/upcFinder";
 import { canonicalUpc } from "../../../lib/upcMatch";
 
 export const prerender = false;
@@ -18,6 +18,9 @@ const json = (d: unknown, s = 200) =>
 //       official title + box art), for a box that isn't in inventory yet.
 //   { action: "remove", id } → managers; an automatic UPC removed by hand is
 //       never auto-filled again for that listing ("rejected").
+//   { action: "confirm", productId, upcs, title } → staff picked one of the
+//       lookup's possible matches (a name that differs, or one of several
+//       releases): attach its UPC(s), noting the eBay catalog product.
 export const POST: APIRoute = async ({ locals, request }) => {
   if (!locals.user || !locals.profile) return json({ error: "unauthorized" }, 401);
   const b = await request.json().catch(() => ({}));
@@ -67,16 +70,30 @@ export const POST: APIRoute = async ({ locals, request }) => {
       return json({ ok: true, added: added[0] ?? null, upcs: all || [] });
     }
 
+    if (b.action === "confirm") {
+      if (!b.productId) return json({ error: "productId required" }, 400);
+      const codes = [...new Set((Array.isArray(b.upcs) ? b.upcs : []).slice(0, 5).map((u: unknown) => canonicalUpc(String(u))).filter(Boolean))] as string[];
+      if (!codes.length) return json({ error: "No valid UPC to attach." }, 400);
+      const title = String(b.title ?? "").replace(/\s+/g, " ").trim().slice(0, 160);
+      const { added, conflicts } = await attachUpcs(admin, b.productId, codes, "manual", `${CONFIRMED_EVIDENCE}: ${title || "(no title)"}`);
+      if (!added.length && conflicts.length) return json({ error: `UPC ${conflicts[0]}.` }, 409);
+      await admin.from("products").update({ upc_status: "found", upc_checked_at: new Date().toISOString() }).eq("id", b.productId);
+      const { data: all } = await admin.from("product_upcs").select("id, upc, source").eq("product_id", b.productId).order("created_at");
+      return json({ ok: true, upcs: all || [], skipped: conflicts });
+    }
+
     if (b.action === "remove") {
       if (!manager) return json({ error: "Managers only" }, 403);
-      const { data: row } = await admin.from("product_upcs").select("id, product_id, upc, source").eq("id", b.id).maybeSingle();
+      const { data: row } = await admin.from("product_upcs").select("id, product_id, upc, source, evidence").eq("id", b.id).maybeSingle();
       if (!row) return json({ ok: true, upcs: [] });
       await admin.from("product_upcs").delete().eq("id", row.id);
       const { data: all } = await admin.from("product_upcs").select("id, upc, source").eq("product_id", row.product_id).order("created_at");
       // Removing an automatic match means it was wrong: remember the code so
       // no lookup ever attaches it to this listing again.
       let status: string | null = null;
-      if (row.source === "ebay") {
+      // An automatic match, or one staff confirmed from the lookup's suggestions:
+      // removing it means it was wrong — never suggest or attach it again.
+      if (row.source === "ebay" || String(row.evidence ?? "").startsWith(CONFIRMED_EVIDENCE)) {
         const { data: prod } = await admin.from("products").select("upc_rejected").eq("id", row.product_id).maybeSingle();
         const rejected = [...new Set([...(prod?.upc_rejected || []), row.upc])];
         status = (all || []).length ? null : "rejected";

@@ -20,7 +20,15 @@ import { barcodeEq } from "./gtin";
 import { type Region, loadRegions, regionsOn, displayTitle, regionFromEbayAspect, splitTitleRegion } from "./regions";
 
 export type UpcStatus = "found" | "not_found" | "ambiguous" | "conflict" | "error" | "rejected";
-export interface UpcLookup { status: UpcStatus; upcs: string[]; evidence: string }
+/** A catalog product that's ALMOST a sure match — same platform, US market,
+ *  has a UPC — but whose name differs ("Alien: Isolation" vs our "Alien
+ *  Isolation: The Collection"), or one of several releases that match. Never
+ *  attached automatically; the per-listing lookup asks staff to confirm. */
+export interface UpcCandidate { epid: string; title: string; upcs: string[]; image: string; platform: string; listings: number; why: string; owner?: string | null }
+export interface UpcLookup { status: UpcStatus; upcs: string[]; evidence: string; candidates?: UpcCandidate[] }
+/** Evidence on a UPC staff confirmed from the lookup's possible matches — a
+ *  manager removing one rejects it for the listing, like an automatic one. */
+export const CONFIRMED_EVIDENCE = "Confirmed by staff — eBay catalog";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // eBay throttles bursts (~30 fast calls → empty results), so calls are spaced.
@@ -41,8 +49,9 @@ export async function findCatalogUpcs(title: string, platform: string, ebay = EB
   const ranked = [...byProduct.entries()].filter(([, ids]) => ids.length >= 2).sort((a, b) => b[1].length - a[1].length).slice(0, 3);
   if (!ranked.length) return { status: "not_found", upcs: [], evidence: "No eBay catalog product that 2+ listings agree on" };
 
-  const matches: { epid: string; title: string; upcs: string[]; listings: number }[] = [];
+  const matches: { epid: string; title: string; upcs: string[]; listings: number; image: string; platform: string }[] = [];
   const rejected: string[] = [];
+  const candidates: UpcCandidate[] = [];
   for (const [epid, ids] of ranked) {
     let item: any = null;
     for (const id of ids.slice(0, 2)) {
@@ -54,19 +63,29 @@ export async function findCatalogUpcs(title: string, platform: string, ebay = EB
     if (!ptitle) continue;
     const aspects = aspectMap(prod.aspectGroups, item.localizedAspects);
     const platforms = aspects.get("platform") ?? [];
-    if (!sameRelease(title, ptitle, platform)) { rejected.push(`“${ptitle}” is a different release`); continue; }
-    if (!platformAgrees(platforms, platform)) { rejected.push(`“${ptitle}” is for ${platforms.join(" / ") || "an unknown platform"}`); continue; }
-    if (!regionAgrees(aspects.get("region code") ?? [])) { rejected.push(`“${ptitle}” isn't a US release`); continue; }
+    const image = String(prod.image?.imageUrl || item.image?.imageUrl || "");
     const upcs = usUpcs(prod.gtins);
+    const platformOk = platformAgrees(platforms, platform), regionOk = regionAgrees(aspects.get("region code") ?? []);
+    if (!sameRelease(title, ptitle, platform)) {
+      rejected.push(`“${ptitle}” is a different release`);
+      // Right platform + US market + a UPC, only the name differs: staff decide.
+      if (platformOk && regionOk && upcs.length) candidates.push({ epid, title: catalogTitleClean(ptitle, platform), upcs, image, platform: platforms[0] || platform, listings: ids.length, why: "The name differs" });
+      continue;
+    }
+    if (!platformOk) { rejected.push(`“${ptitle}” is for ${platforms.join(" / ") || "an unknown platform"}`); continue; }
+    if (!regionOk) { rejected.push(`“${ptitle}” isn't a US release`); continue; }
     if (!upcs.length) { rejected.push(`“${ptitle}” has no US UPC on eBay`); continue; }
-    matches.push({ epid, title: ptitle, upcs, listings: ids.length });
+    matches.push({ epid, title: ptitle, upcs, listings: ids.length, image, platform: platforms[0] || platform });
   }
-  if (!matches.length) return { status: "not_found", upcs: [], evidence: rejected.slice(0, 3).join("; ") || "eBay had no catalog details" };
+  if (!matches.length) {
+    return { status: "not_found", upcs: [], evidence: rejected.slice(0, 3).join("; ") || "eBay had no catalog details", candidates };
+  }
   const first = matches[0];
   // A second matching product with a DIFFERENT code = two releases look alike
-  // (an original and a reprint) — don't guess.
+  // (an original and a reprint) — don't guess; staff can pick one.
   if (matches.some((m) => !m.upcs.some((u) => first.upcs.includes(u))))
-    return { status: "ambiguous", upcs: [], evidence: `More than one eBay release matches: ${matches.map((m) => `${m.title} (${m.upcs.join(", ")})`).join(" · ")}` };
+    return { status: "ambiguous", upcs: [], evidence: `More than one eBay release matches: ${matches.map((m) => `${m.title} (${m.upcs.join(", ")})`).join(" · ")}`,
+      candidates: [...matches.map((m) => ({ epid: m.epid, title: catalogTitleClean(m.title, platform), upcs: m.upcs, image: m.image, platform: m.platform, listings: m.listings, why: "One of several releases" })), ...candidates] };
   const upcs = [...new Set(matches.flatMap((m) => m.upcs))];
   return { status: "found", upcs, evidence: `eBay catalog: ${first.title} (${first.listings} listings agree)` };
 }
@@ -122,7 +141,7 @@ export async function upcTablesReady(admin: any): Promise<boolean> {
   return !error;
 }
 
-export interface FillResult { id: string; status: UpcStatus | "has" | "ineligible" | "skipped"; upcs: { id: string; upc: string; source: string }[]; evidence: string }
+export interface FillResult { id: string; status: UpcStatus | "has" | "ineligible" | "skipped"; upcs: { id: string; upc: string; source: string }[]; evidence: string; candidates?: UpcCandidate[] }
 
 /**
  * Look up listings' UPCs and save what's found. Either the given listings, or
@@ -176,7 +195,23 @@ export async function fillListingUpcs(admin: any, opts: { productIds?: string[];
       else if (conflicts.length) evidence += ` — skipped ${conflicts.join("; ")}`;
     }
     await admin.from("products").update({ upc_status: status, upc_checked_at: new Date().toISOString() }).eq("id", p.id);
-    results.push({ id: p.id, status, upcs, evidence });
+    // Possible matches for staff to confirm: minus codes a manager removed or
+    // the listing already has; and say if another listing uses one.
+    const candidates: UpcCandidate[] = [];
+    if (look.candidates?.length) {
+      const rejected: string[] = p.upc_rejected || [];
+      const nm = await naming(admin);
+      for (const c of look.candidates) {
+        const codes = c.upcs.filter((u) => !rejected.some((r) => barcodeEq(r, u)) && !have.some((h: any) => barcodeEq(h.upc, u)));
+        if (!codes.length) continue;
+        let owner: string | null = null; // any of its codes on another listing = probably that game
+        for (const u of codes) { owner = await upcOwner(admin, u, p.id, nm); if (owner) break; }
+        candidates.push({ ...c, upcs: codes, owner });
+      }
+      // Counted after filtering, so the message never mentions one that isn't shown.
+      if (candidates.length) evidence += ` — ${candidates.length} possible match${candidates.length === 1 ? "" : "es"} to confirm`;
+    }
+    results.push({ id: p.id, status, upcs, evidence, ...(candidates.length ? { candidates } : {}) });
     // Several failures in a row = eBay is down or throttling: stop, resume later.
     errorsInARow = status === "error" ? errorsInARow + 1 : 0;
     if (errorsInARow >= 3) return { results, stopped: "eBay isn't answering — try again later" };
