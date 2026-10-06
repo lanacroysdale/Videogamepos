@@ -199,6 +199,30 @@ export interface StoreListingDetails {
   brand: string;
 }
 
+/** A full item record in the store-list shape (Sell Similar works from one
+ *  pasted listing, not a store search). */
+export function listingFromItem(item: any): StoreListing {
+  const images = [item.image?.imageUrl, ...(item.additionalImages || []).map((i: any) => i?.imageUrl)].filter(Boolean);
+  return {
+    id: String(item.legacyItemId || ""),
+    title: String(item.title || "").trim(),
+    priceCents: Math.round(parseFloat(item.price?.value || "0") * 100) || 0,
+    conditionId: String(item.conditionId || ""),
+    condition: String(item.condition || ""),
+    // categoryPath is top-level first ("Collectibles|…|Other Animation Merchandise").
+    categories: String(item.categoryPath || "").split("|").map((c) => c.trim()).filter(Boolean).reverse(),
+    image: images[0] || "",
+    imageCount: images.length,
+    url: ebayItemUrl(String(item.legacyItemId || "")),
+  };
+}
+
+/** Is this listing the store's own (EBAY_SELLER)? */
+export const isOwnListing = (item: any) => {
+  const ours = (ebaySeller() || "").toLowerCase();
+  return !!ours && String(item?.seller?.username || "").toLowerCase() === ours;
+};
+
 export function storeListingDetails(item: any): StoreListingDetails {
   const aspects = aspectDict(item);
   const title = String(item.title || "").trim();
@@ -220,7 +244,7 @@ export function storeListingDetails(item: any): StoreListingDetails {
     country: aspects["Country of Origin"] || aspects["Country/Region of Manufacture"] || "",
     qty: qty == null ? 1 : Math.max(0, Number(qty) || 0),
     inStock: !(av?.estimatedAvailabilityStatus === "OUT_OF_STOCK" || qty === 0),
-    upc: cleanId(aspects["UPC"] || item.gtin || undefined) || "",
+    upc: cleanId(aspects["UPC"] || aspects["EAN"] || item.gtin || undefined) || "",
     completenessCode: deriveCompleteness(title, aspects, String(item.conditionId || "")),
     gradeCode: deriveGrade(String(item.conditionId || "")),
     brand: item.brand || aspects["Brand"] || "",
