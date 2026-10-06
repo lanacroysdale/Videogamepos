@@ -1,4 +1,5 @@
 import type { APIRoute } from "astro";
+import { createSupabaseAdminClient } from "../../../lib/supabase";
 import { attachUpcs } from "../../../lib/upcFinder";
 import { canonicalUpc } from "../../../lib/upcMatch";
 import { loadRegions, regionsOn, regionOf, regionByCode, isDefaultRegion, defaultRegionCode, regionFromPlatform, type Region } from "../../../lib/regions";
@@ -9,6 +10,8 @@ export const prerender = false;
 class AlreadyStaged extends Error {
   constructor(public prev: { item_id: string; variant_id: string; product_id: string; created: string }) { super("already staged"); }
 }
+// The day's quick-add entry (see recordQuickAdd) is the one with this note.
+const QUICK_NOTE = "⚡ Quick adds";
 const json = (d: unknown, s = 200) => new Response(JSON.stringify(d), { status: s, headers: { "content-type": "application/json" } });
 const isDate = (v: unknown): v is string => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) && !isNaN(Date.parse(v));
 
@@ -46,6 +49,59 @@ export const POST: APIRoute = async ({ locals, request }) => {
   // Rows a DRAFT creates stay hidden until Finish (migration 20260930000001).
   const pendingFor = async (entryId: string | null | undefined) =>
     entryId && (await hasCol("products", "pending_entry_id")) ? { pending_entry_id: String(entryId) } : {};
+  // ⚡ Quick adds: stock added OUTSIDE an entry (＋ Add product, Receive in the
+  // edit window, a quick non-inventory item) is recorded on the employee's
+  // "⚡ Quick adds" entry for the day — a FINISHED entry that the day's quick
+  // adds keep joining, so they all show in 📥 Entries (labels, Back to draft…).
+  // The caller has already applied the stock. Returns the entry, or throws
+  // (the stock change still stands).
+  //   record_quick_add() (migration 20261006000002) does it in one locked
+  //   transaction. Before that migration: the same steps from here — finished
+  //   entries are frozen to staff (RLS + the open-draft trigger), so the line
+  //   goes in with the server key.
+  const recordQuickAdd = async (receivedOn: unknown, line: Record<string, unknown>) => {
+    const { data: rec, error: rpcErr } = await sb.rpc("record_quick_add", {
+      p_day: isDate(receivedOn) ? receivedOn : null,
+      p_variant: (line.variant_id as string | null) ?? null,
+      p_qty: Number(line.qty_added) || 0,
+      p_cost: line.unit_cost_cents == null ? null : Number(line.unit_cost_cents),
+      p_price: Number(line.price_cents_at_entry) || 0,
+      p_was_new: !!line.was_new_variant,
+      p_kind: (line.kind as string) || "stock",
+      p_description: (line.description as string | undefined) ?? null,
+    });
+    if (!rpcErr) return { id: String((rec as any)?.id), humanId: Number((rec as any)?.human_id) };
+    const missing = (rpcErr as any).code === "PGRST202" || /could not find the function/i.test(rpcErr.message);
+    if (!missing) throw new Error(rpcErr.message);
+    const hasRo = await hasCol("inventory_entries", "received_on");
+    const day = hasRo && isDate(receivedOn) ? receivedOn : null;
+    let q = sb.from("inventory_entries").select("id, human_id").eq("employee_id", uid).eq("status", "committed").eq("note", QUICK_NOTE);
+    // The station's local day (the server runs UTC); else the last 12 hours.
+    q = day ? q.eq("received_on", day) : q.gte("created_at", new Date(Date.now() - 12 * 3600e3).toISOString());
+    const { data: have } = await q.order("created_at", { ascending: false }).limit(1).maybeSingle();
+    let entry: { id: string; human_id: number } | null = have as any;
+    let made = false;
+    if (!entry) {
+      const { data, error } = await sb.from("inventory_entries")
+        .insert({ employee_id: uid, source: "manual", note: QUICK_NOTE, status: "committed", committed_at: new Date().toISOString(), ...(day ? { received_on: day } : {}) })
+        .select("id, human_id").single();
+      if (error) throw new Error(error.message);
+      entry = data as any;
+      made = true;
+    }
+    const admin = createSupabaseAdminClient();
+    const { error } = await admin.from("inventory_entry_items").insert({ entry_id: entry!.id, ...line });
+    if (error) {
+      if (made) await admin.from("inventory_entries").delete().eq("id", entry!.id);
+      throw new Error(error.message);
+    }
+    return { id: entry!.id, humanId: entry!.human_id };
+  };
+  const quickResult = async (receivedOn: unknown, line: Record<string, unknown>) => {
+    try { return { quickEntry: await recordQuickAdd(receivedOn, line) }; }
+    catch (e: any) { return { quickError: String(e?.message || e) }; }
+  };
+
   // A game's UPC is its LISTING's — every condition shares it (migration
   // 20260930000003). A valid UPC typed for a new product, or on a sheet row
   // that CREATES a listing, becomes that listing's. Only brand-new listings:
@@ -127,9 +183,9 @@ export const POST: APIRoute = async ({ locals, request }) => {
       return json({ ok: true, entry: data, resumed: false });
     }
     case "receiveStock": {
-      // Immediate quantity bump (quick adjust from the edit modal). With entry
-      // DRAFTS this no longer requires a session — no entryId = bump + ledger
-      // only; with an entryId it also logs a legacy (already-applied) line.
+      // Immediate quantity bump (Receive in the edit window). No entryId = bump
+      // + ledger, recorded on the day's ⚡ Quick adds entry; with an entryId it
+      // logs a legacy (already-applied) line there instead.
       const qty = Math.max(1, Math.round(Number(b.qtyAdded)) || 1);
       if (!b.variantId) return json({ error: "variantId required" }, 400);
       if (b.entryId) {
@@ -143,9 +199,15 @@ export const POST: APIRoute = async ({ locals, request }) => {
       const { data: newQty, error } = await sb.rpc("receive_stock", { p_variant_id: b.variantId, p_qty: qty });
       if (error) return json({ error: error.message }, 500);
       const cost = b.unitCostCents == null ? null : Math.max(0, Math.round(Number(b.unitCostCents)) || 0);
-      if (b.entryId) await logReceive(b.entryId, b.variantId, qty, v.price_cents ?? 0, cost, false);
-      else await sb.from("stock_movements").insert({ variant_id: b.variantId, delta: qty, reason: "receive", channel: "in_store", employee_id: uid });
-      return json({ ok: true, newQuantity: Number(newQty ?? 0) });
+      if (b.entryId) {
+        await logReceive(b.entryId, b.variantId, qty, v.price_cents ?? 0, cost, false);
+        return json({ ok: true, newQuantity: Number(newQty ?? 0) });
+      }
+      await sb.from("stock_movements").insert({ variant_id: b.variantId, delta: qty, reason: "receive", channel: "in_store", employee_id: uid });
+      const quick = await quickResult(b.receivedOn, {
+        variant_id: b.variantId, qty_added: qty, unit_cost_cents: cost, price_cents_at_entry: v.price_cents ?? 0, was_new_variant: false,
+      });
+      return json({ ok: true, newQuantity: Number(newQty ?? 0), ...quick });
     }
     // ---- Entry DRAFTS (staged lines; nothing applies until commit) ----
     case "stageItem": {
@@ -478,27 +540,19 @@ export const POST: APIRoute = async ({ locals, request }) => {
     }
     case "quickNonInventory": {
       // Quick add from the inventory screen (no entry open): a bulk lot /
-      // supplies recorded RIGHT AWAY as its own finished entry — the way a
-      // quick-added product goes straight into stock. One line at the total.
+      // supplies, recorded right away on the day's ⚡ Quick adds entry (the
+      // same one quick-added products join). One line at the total.
       const description = String(b.description ?? "").trim().slice(0, 200);
       if (!description) return json({ error: "Describe the item (e.g. “DS bulk loose games, grade B”)." }, 400);
       if (!(await hasCol("inventory_entry_items", "kind"))) return json({ error: "Apply migration 20260930000001 to record non-inventory items." }, 400);
       const total = b.totalCents == null || b.totalCents === "" ? null : Math.max(0, Math.round(Number(b.totalCents)) || 0);
-      const { error: roErr } = await sb.from("inventory_entries").select("received_on").limit(1);
-      const receivedOn = !roErr && isDate(b.receivedOn) ? { received_on: b.receivedOn } : {};
-      const { data: entry, error } = await sb.from("inventory_entries")
-        .insert({ employee_id: uid, source: "manual", note: "Quick add — non-inventory", ...receivedOn })
-        .select("id, human_id").single();
-      if (error) return json({ error: error.message }, 500);
-      const undo = () => sb.from("inventory_entries").delete().eq("id", entry.id).eq("status", "open");
-      const { error: lErr } = await sb.from("inventory_entry_items").insert({
-        entry_id: entry.id, variant_id: null, kind: "non_inventory", description,
-        qty_added: 1, unit_cost_cents: total, price_cents_at_entry: 0, was_new_variant: false, applied: false,
-      });
-      if (lErr) { await undo(); return json({ error: lErr.message }, 500); }
-      const { error: cErr } = await sb.rpc("commit_entry", { p_entry_id: entry.id });
-      if (cErr) { await undo(); return json({ error: cErr.message }, 500); }
-      return json({ ok: true, entryId: entry.id, humanId: entry.human_id });
+      try {
+        const entry = await recordQuickAdd(b.receivedOn, {
+          variant_id: null, kind: "non_inventory", description,
+          qty_added: 1, unit_cost_cents: total, price_cents_at_entry: 0, was_new_variant: false,
+        });
+        return json({ ok: true, entryId: entry.id, humanId: entry.humanId });
+      } catch (e: any) { return json({ error: String(e?.message || e) }, 500); }
     }
     case "setEntryLineCondition": {
       // Change a STAGED line's completeness / grade. The line moves to the
@@ -514,8 +568,10 @@ export const POST: APIRoute = async ({ locals, request }) => {
       // the listing's stock row of that type. A field not sent keeps its value.
       if (!b.itemId) return json({ error: "itemId required" }, 400);
       const stockedCol = (await hasCol("inventory_entry_items", "stocked_variant_id")) ? ", stocked_variant_id" : "";
+      const priceSetCol = (await hasCol("inventory_entry_items", "price_set_cents")) ? ", price_set_cents" : "";
+      // (A price typed on the line travels with it.)
       const { data: line } = await sb.from("inventory_entry_items")
-        .select(`id, entry_id, variant_id, was_new_variant, applied${stockedCol}, entry:inventory_entries(status)`)
+        .select(`id, entry_id, variant_id, was_new_variant, applied${stockedCol}${priceSetCol}, entry:inventory_entries(status)`)
         .eq("id", b.itemId).maybeSingle() as { data: any };
       if (!line) return json({ error: "Line not found." }, 404);
       if (!line.variant_id) return json({ error: "Non-inventory lines have no condition." }, 400);
@@ -559,7 +615,8 @@ export const POST: APIRoute = async ({ locals, request }) => {
       if (!dest) {
         const { data: nv, error } = await sb.from("product_variants").insert({
           product_id: old.product_id, condition: label, completeness_code: comp, grade_code: grade,
-          price_cents: old.price_cents ?? 0, quantity: 0,
+          // A new condition starts at the price typed on the line, else the old row's.
+          price_cents: line.price_set_cents ?? old.price_cents ?? 0, quantity: 0,
           ...(typeId ? { inventory_type_id: typeId } : {}),
           ...(old.location_id ? { location_id: old.location_id } : {}),
           ...(await pendingFor(line.entry_id)), // hidden until the draft is finished
@@ -598,12 +655,31 @@ export const POST: APIRoute = async ({ locals, request }) => {
       if (b.qty != null) patch.qty_added = Math.max(1, Math.round(Number(b.qty)) || 1);
       if (b.unitCostCents !== undefined) patch.unit_cost_cents = b.unitCostCents == null ? null : Math.max(0, Math.round(Number(b.unitCostCents)) || 0);
       if (b.supplier !== undefined) patch.supplier = b.supplier ? String(b.supplier).slice(0, 120) : null;
+      // The line's price: it waits on the line and Finish puts it on the stock
+      // row the line ends up on (migration 20261006000002) — changing the
+      // line's condition afterwards never re-prices other copies.
+      let live = false;
+      if (b.priceCents != null) {
+        const cents = Math.max(0, Math.round(Number(b.priceCents)) || 0);
+        // When it was typed: Finish gives a stock row the price typed LAST on its lines.
+        if (await hasCol("inventory_entry_items", "price_set_cents")) { patch.price_set_cents = cents; patch.price_set_at = new Date().toISOString(); }
+        else {
+          // Before that migration: straight onto the line's stock row (the old way).
+          const { data: ln } = await sb.from("inventory_entry_items").select("variant_id").eq("id", b.itemId).maybeSingle();
+          if (ln?.variant_id) {
+            const { error } = await sb.from("product_variants").update({ price_cents: cents }).eq("id", ln.variant_id);
+            if (error) return json({ error: error.message }, 500);
+          }
+          live = true;
+          if (!Object.keys(patch).length) return json({ ok: true, live });
+        }
+      }
       if (!Object.keys(patch).length) return json({ error: "Nothing to update" }, 400);
       // RLS only matches lines on OPEN entries — a frozen line comes back null.
       const { data, error } = await sb.from("inventory_entry_items").update(patch).eq("id", b.itemId).select("id").maybeSingle();
       if (error) return json({ error: error.message }, 500);
       if (!data) return json({ error: "That line is on a committed entry." }, 409);
-      return json({ ok: true });
+      return json({ ok: true, live });
     }
     case "removeEntryItem": {
       if (!b.itemId) return json({ error: "itemId required" }, 400);
@@ -713,6 +789,9 @@ export const POST: APIRoute = async ({ locals, request }) => {
     }
     case "commitEntry": {
       if (!b.entryId) return json({ error: "entryId required" }, 400);
+      // Prices typed on lines (price_set_cents) land on the stock row each
+      // line ends up on inside commit_entry() — same transaction, so a refused
+      // Finish changes no price (migration 20261006000002).
       // Drafts: commit_entry() applies staged lines (quantity + ledger) and
       // commits atomically. Pre-migration the function doesn't exist — fall
       // back to the legacy status flip (those entries applied at receive time).
@@ -766,10 +845,11 @@ export const POST: APIRoute = async ({ locals, request }) => {
       const kindCol = (await hasCol("inventory_entry_items", "kind")) ? ", kind, description" : "";
       const rgCol = (await hasCol("products", "region_code")) ? ", region_code" : "";
       const stockedCols = (await hasCol("inventory_entry_items", "stocked_qty")) ? ", stocked_qty, stocked_variant_id" : "";
+      const priceSetCol = (await hasCol("inventory_entry_items", "price_set_cents")) ? ", price_set_cents, price_set_at" : "";
       const [{ data: entry }, { data: items, error }] = await Promise.all([
         sb.from("inventory_entries").select(`id, human_id, source, status, note, created_at, committed_at${otCol}${supCol}${roCol}, employee:profiles(full_name)`).eq("id", b.entryId).maybeSingle(),
         sb.from("inventory_entry_items")
-          .select(`id, qty_added, unit_cost_cents, price_cents_at_entry, was_new_variant, created_at${supCol}${kindCol}${stockedCols}, variant:product_variants(id, sku, internal_code${lcCol}, price_cents, quantity, completeness_code, grade_code, condition, inventory_type_id, location_id, product:products(title, platform${rgCol}, category:categories(name)))`)
+          .select(`id, qty_added, unit_cost_cents, price_cents_at_entry, was_new_variant, created_at${supCol}${kindCol}${stockedCols}${priceSetCol}, variant:product_variants(id, sku, internal_code${lcCol}, price_cents, quantity, completeness_code, grade_code, condition, inventory_type_id, location_id, product:products(title, platform${rgCol}, category:categories(name)))`)
           .eq("entry_id", b.entryId).order("created_at"),
       ]);
       if (!entry) return json({ error: "Entry not found." }, 404);
@@ -788,6 +868,10 @@ export const POST: APIRoute = async ({ locals, request }) => {
       const patch: Record<string, unknown> = {};
       if (b.priceCents != null) patch.price_cents = Math.max(0, Math.round(Number(b.priceCents)));
       if (b.quantity != null) patch.quantity = Math.max(0, Math.round(Number(b.quantity)));
+      // What you paid per copy (margins in Reports) — managers only.
+      // The column is NOT NULL; blank = 0, which Reports read as "unknown".
+      if (b.costCents !== undefined && locals.can("inventory.manage"))
+        patch.cost_cents = b.costCents == null || b.costCents === "" ? 0 : Math.max(0, Math.round(Number(b.costCents)) || 0);
       if (b.condition) patch.condition = String(b.condition).slice(0, 40);
       if (b.completeness !== undefined) patch.completeness = b.completeness || null;
       if (b.sku !== undefined) patch.sku = b.sku ? String(b.sku).slice(0, 60) : null;
@@ -878,6 +962,8 @@ export const POST: APIRoute = async ({ locals, request }) => {
           quantity: b.stageEntryId ? 0 : Math.max(0, Math.round(Number(b.quantity)) || 0),
           sku: b.sku || null,
           barcode: b.barcode || null,
+          // What was paid per copy, when given (margins in Reports).
+          ...(b.unitCostCents != null && b.unitCostCents !== "" ? { cost_cents: Math.max(0, Math.round(Number(b.unitCostCents)) || 0) } : {}),
           // Keys OMITTED when absent (pre-migration PostgREST rejects unknown
           // columns outright); omitted → the DB trigger defaults to Retail.
           ...(b.inventoryTypeId ? { inventory_type_id: b.inventoryTypeId } : {}),
@@ -898,11 +984,18 @@ export const POST: APIRoute = async ({ locals, request }) => {
         if (stErr) return json({ error: stErr.message }, 500);
         return json({ ok: true, productId: prod.id, slug: prod.slug, variantId: variant.id, internalCode: variant.internal_code ?? "", labelCode: variant.label_code ?? "", itemId: st.id, ...stored });
       }
-      if (b.entryId && variant.quantity > 0) {
-        await logReceive(b.entryId, variant.id, variant.quantity, variant.price_cents ?? 0,
-          b.unitCostCents == null ? null : Math.max(0, Math.round(Number(b.unitCostCents)) || 0), true);
+      const cost = b.unitCostCents == null ? null : Math.max(0, Math.round(Number(b.unitCostCents)) || 0);
+      if (b.entryId && variant.quantity > 0) await logReceive(b.entryId, variant.id, variant.quantity, variant.price_cents ?? 0, cost, true);
+      // A quick add (no entry): the copies are in stock now; the ledger + the
+      // day's ⚡ Quick adds entry record them.
+      let quick = {};
+      if (!b.entryId && variant.quantity > 0) {
+        await sb.from("stock_movements").insert({ variant_id: variant.id, delta: variant.quantity, reason: "initial", channel: "in_store", employee_id: uid });
+        quick = await quickResult(b.receivedOn, {
+          variant_id: variant.id, qty_added: variant.quantity, unit_cost_cents: cost, price_cents_at_entry: variant.price_cents ?? 0, was_new_variant: true,
+        });
       }
-      return json({ ok: true, productId: prod.id, slug: prod.slug, variantId: variant.id, internalCode: variant.internal_code ?? "", labelCode: variant.label_code ?? "", ...stored });
+      return json({ ok: true, productId: prod.id, slug: prod.slug, variantId: variant.id, internalCode: variant.internal_code ?? "", labelCode: variant.label_code ?? "", ...stored, ...quick });
     }
     case "labelCodes": {
       // The short numeric label codes the DB gave stock rows this page made
@@ -925,6 +1018,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
           grade_code: b.gradeCode || null,
           price_cents: Math.max(0, Math.round(Number(b.priceCents)) || 0),
           quantity: b.stageEntryId ? 0 : Math.max(0, Math.round(Number(b.quantity)) || 0),
+          ...(b.unitCostCents != null && b.unitCostCents !== "" ? { cost_cents: Math.max(0, Math.round(Number(b.unitCostCents)) || 0) } : {}),
           ...(b.inventoryTypeId ? { inventory_type_id: b.inventoryTypeId } : {}),
           ...(b.locationId ? { location_id: b.locationId } : {}),
           ...(await pendingFor(b.stageEntryId)),
@@ -942,11 +1036,17 @@ export const POST: APIRoute = async ({ locals, request }) => {
         if (stErr) return json({ error: stErr.message }, 500);
         return json({ ok: true, variant: data, itemId: st.id });
       }
-      if (b.entryId && data.quantity > 0) {
-        await logReceive(b.entryId, data.id, data.quantity, data.price_cents ?? 0,
-          b.unitCostCents == null ? null : Math.max(0, Math.round(Number(b.unitCostCents)) || 0), true);
+      const vCost = b.unitCostCents == null || b.unitCostCents === "" ? null : Math.max(0, Math.round(Number(b.unitCostCents)) || 0);
+      if (b.entryId && data.quantity > 0) await logReceive(b.entryId, data.id, data.quantity, data.price_cents ?? 0, vCost, true);
+      // A quick add of a new condition (no entry): ledger + the day's ⚡ Quick adds.
+      let quick = {};
+      if (!b.entryId && data.quantity > 0) {
+        await sb.from("stock_movements").insert({ variant_id: data.id, delta: data.quantity, reason: "initial", channel: "in_store", employee_id: uid });
+        quick = await quickResult(b.receivedOn, {
+          variant_id: data.id, qty_added: data.quantity, unit_cost_cents: vCost, price_cents_at_entry: data.price_cents ?? 0, was_new_variant: true,
+        });
       }
-      return json({ ok: true, variant: data });
+      return json({ ok: true, variant: data, ...quick });
     }
     case "bulkSetOnline": {
       // Publish/unpublish many products at once (all of their variants).

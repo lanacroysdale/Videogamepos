@@ -151,7 +151,7 @@ const lineTitle = (it: LabelItem) => {
 };
 
 // Shared chooser dialog. Returns immediately; printing happens on user action.
-export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], opts?: { title?: string }): void {
+export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], opts?: { title?: string; onClose?: () => void }): void {
   if (!lines.length) { alert("Nothing to print."); return; }
   document.getElementById("lp-dialog")?.remove();
   const tpls = templates.length ? templates : [{ ...DEFAULT_TEMPLATE }];
@@ -220,7 +220,7 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
       <p style="margin:0;color:var(--muted-2,#888);font-size:0.72rem;">Print opens a ready-made PDF in a new tab — press <b>⌘P</b> there and print at 100%. Every page is exactly one label; what you see is what prints.</p>
     </div>`;
 
-  const close = () => overlay.remove();
+  const close = () => { overlay.remove(); opts?.onClose?.(); };
   overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
   overlay.querySelector("#lp-cancel")!.addEventListener("click", close);
   overlay.querySelectorAll<HTMLButtonElement>("[data-lp-all]").forEach((b) =>
