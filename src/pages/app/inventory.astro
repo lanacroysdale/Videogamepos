@@ -8,6 +8,7 @@ import { MARKETING_HOSTS } from "../../consts";
 import { createSupabaseAdminClient } from "../../lib/supabase";
 import { loadRegions, regionsOn, regionBadgeHtml } from "../../lib/regions";
 import { activeVirtualCategories, virtualHint, virtualTag } from "../../lib/virtualCategories";
+import { customPlatforms, platformGroups } from "../../lib/platforms";
 
 const supabase = Astro.locals.supabase;
 const [{ data: categories }, { data: settings }, { data: completeness }, { data: grades }] = await Promise.all([
@@ -69,6 +70,8 @@ const upcCols = upcProbeErr ? "" : ", upc_status, upc_checked_at, product_upcs(i
 // Region tag (migration 20261005000001): before it, no column and no list →
 // every region control and badge stays hidden.
 const { error: rgProbeErr } = await supabase.from("products").select("region_code").limit(1);
+// Market prices from PriceCharting (migration 20261006000003).
+const { error: mpProbeErr } = await supabase.from("products").select("market_prices").limit(1);
 const regions = rgProbeErr ? [] : await loadRegions(supabase);
 const rgOn = regionsOn(regions);
 // Virtual categories ("🇯🇵 Japanese Imports" = the Japan region) in the category filter.
@@ -80,7 +83,7 @@ const tagCats = vCats.filter((v) => virtualTag(v)).map((v) => ({ key: v.key, ico
 const { data: products } = await fetchAll((from, to) => supabase
   .from("products")
   .select(
-    `id, title, slug, platform, franchise, genre, description, image_url, alternative_names, tags, category_id${delProbeErr ? "" : ", deleted_at"}${pendCol}${upcCols}${rgProbeErr ? "" : ", region_code"}, category:categories(name,color)${srcProbeErr ? "" : ", product_suppliers(id, label, url)"}, product_variants(id, condition, completeness, completeness_code, grade_code, sku, barcode, internal_code, price_cents, online_price_cents, cost_cents, quantity, online_visible${variantExtraCols}${pendCol}, product_barcodes(id, barcode, label))`,
+    `id, title, slug, platform, franchise, genre, description, image_url, alternative_names, tags, category_id${mpProbeErr ? "" : ", market_prices"}${delProbeErr ? "" : ", deleted_at"}${pendCol}${upcCols}${rgProbeErr ? "" : ", region_code"}, category:categories(name,color)${srcProbeErr ? "" : ", product_suppliers(id, label, url)"}, product_variants(id, condition, completeness, completeness_code, grade_code, sku, barcode, internal_code, price_cents, online_price_cents, cost_cents, quantity, online_visible${variantExtraCols}${pendCol}, product_barcodes(id, barcode, label))`,
   )
   .order("title")
   .order("id")
@@ -133,6 +136,7 @@ const allRows = (products ?? []).map((p: any) => ({
   supplierLinks: p.product_suppliers ?? [], // manager-only via RLS (staff get [])
   upcs: (p.product_upcs ?? []).map((u: any) => ({ id: u.id, upc: u.upc, source: u.source, evidence: u.evidence ?? "" })),
   upcStatus: p.upc_status ?? "",
+  marketPrices: p.market_prices ?? null, // PriceCharting's Loose / Complete / New… (cents)
   upcCheckedAt: p.upc_checked_at ?? null,
   // Live stock rows only; a draft's not-yet-finished rows sit apart.
   variants: (p.product_variants ?? []).filter((v: any) => !v.pending_entry_id).map(mapVariant),
@@ -150,8 +154,12 @@ const deletedItems = isManager
       }))
       .sort((a, b) => a.daysLeft - b.daysLeft)
   : [];
+// Platforms: the ones the store added + the catalog's own spellings, then the built-ins.
+const customPlats = customPlatforms((settings as any)?.settings);
+const platGroups = platformGroups(items.map((i) => i.platform), customPlats);
 const posData = {
   items,
+  customPlatforms: customPlats,
   categories: categories ?? [],
   completeness: completeness ?? [],
   grades: grades ?? [],
@@ -300,7 +308,10 @@ const posData = {
     </div>
     <div class="add-grid">
       <label>Title<input id="np-title" placeholder="e.g. Donkey Kong 64" /></label>
-      <label>Platform<input id="np-platform" placeholder="Nintendo 64" /></label>
+      <label>Platform<select id="np-platform"><option value="">— none —</option>
+        {platGroups.yours.length > 0 && <optgroup label="Your platforms">{platGroups.yours.map((n) => <option value={n}>{n}</option>)}</optgroup>}
+        <optgroup label="More platforms">{platGroups.more.map((n) => <option value={n}>{n}</option>)}</optgroup>
+      </select></label>
       {rgOn && (
         <label title="The release's market — an import (PAL, Japan…) gets a badge everywhere">Region<select id="np-region">{regions.filter((r) => r.isActive).map((r) => <option value={r.code} selected={r.isDefault}>{r.flag} {r.name}</option>)}</select></label>
       )}
@@ -646,6 +657,7 @@ const posData = {
   .sup-row a { color:var(--cyan); }
   .sup-row .link-btn { margin-left:auto; }
   .ent-add { display:flex; gap:0.6rem; align-items:center; margin-bottom:0.9rem; }
+  .m-market { margin:0.2rem 0 0.5rem; font-size:0.8rem; }
   /* 🔖 Send to TimeLag */
   .bm-card { max-width:560px; }
   .bm-steps { margin:0.6rem 0; padding-left:1.2rem; display:grid; gap:0.5rem; font-size:0.9rem; }
@@ -724,7 +736,8 @@ const posData = {
   import { newListingKey, officialTitleFor, itemKind, norm as normImport } from "../../lib/collectionImport";
   import { upcEligible } from "../../lib/upcMatch";
   import { upcLike, identifyUpc } from "../../lib/upcClient";
-  import { bookmarkletHref, sourceOf } from "../../lib/sourceImport";
+  import { bookmarkletHref, sourceOf, marketKeyFor, MARKET_KEYS, MARKET_LABELS } from "../../lib/sourceImport";
+  import { platformGroups, matchPlatform } from "../../lib/platforms";
   import { regionOf, regionsOn, regionByCode, isDefaultRegion, regionBadgeHtml, displayTitle, regionTag, regionSortKey, splitTitleRegion, regionFromPlatform, type Region } from "../../lib/regions";
 
   const data = JSON.parse(document.getElementById("pos-data")!.textContent!);
@@ -761,6 +774,58 @@ const posData = {
       catch (e: any) { sel.value = prev; alert(e.message); }
     });
   }
+  // Platform dropdowns (Add form + edit window), like the category one: the
+  // store's platforms + "＋ New platform…" (any staff — it's just a name,
+  // kept in the store's list so it's offered next time).
+  const NEW_PLAT = "__new_platform__";
+  let customPlats: string[] = data.customPlatforms || [];
+  const platOptions = (sel: HTMLSelectElement) => [...sel.options].map((o) => o.value).filter((v) => v && v !== NEW_PLAT);
+  function addPlatformOption(sel: HTMLSelectElement, name: string) {
+    if (platOptions(sel).some((o) => o.toLowerCase() === name.toLowerCase())) return;
+    let grp = [...sel.querySelectorAll("optgroup")].find((g) => g.label === "Your platforms") as HTMLOptGroupElement | undefined;
+    if (!grp) { grp = document.createElement("optgroup"); grp.label = "Your platforms"; sel.insertBefore(grp, sel.querySelector("optgroup")); }
+    const before = [...grp.querySelectorAll("option")].find((o) => o.value.localeCompare(name) > 0) ?? null;
+    grp.insertBefore(new Option(name, name), before);
+    // A built-in "More platforms" entry with that name goes (no duplicates).
+    sel.querySelectorAll("optgroup").forEach((g) => { if (g !== grp) g.querySelectorAll("option").forEach((o) => { if (o.value.toLowerCase() === name.toLowerCase()) o.remove(); }); });
+  }
+  /** Select a platform by name: the same one (or its built-in spelling), else add it. */
+  function setPlatform(sel: HTMLSelectElement | null, name: string | null | undefined) {
+    if (!sel) return;
+    const n = String(name ?? "").trim();
+    if (!n) { sel.value = ""; return; }
+    const m = matchPlatform(n, platOptions(sel));
+    if (m) { sel.value = m; return; }
+    addPlatformOption(sel, n);
+    sel.value = n;
+  }
+  const platformOptionsHtml = () => {
+    const g = platformGroups(items.map((p: any) => p.platform), customPlats);
+    const opts = (l: string[]) => l.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
+    return `<option value="">— none —</option>${g.yours.length ? `<optgroup label="Your platforms">${opts(g.yours)}</optgroup>` : ""}<optgroup label="More platforms">${opts(g.more)}</optgroup>`;
+  };
+  function wireNewPlatform(sel: HTMLSelectElement | null) {
+    if (!sel || [...sel.options].some((o) => o.value === NEW_PLAT)) return;
+    sel.add(new Option("＋ New platform…", NEW_PLAT));
+    let prev = sel.value;
+    sel.addEventListener("focus", () => { if (sel.value !== NEW_PLAT) prev = sel.value; });
+    sel.addEventListener("change", async () => {
+      if (sel.value !== NEW_PLAT) { prev = sel.value; return; }
+      const name = (prompt("New platform name (e.g. WonderSwan Color):", "") || "").replace(/\s+/g, " ").trim().slice(0, 60);
+      if (!name) { sel.value = prev; return; }
+      const same = matchPlatform(name, platOptions(sel));
+      try {
+        if (!same || !customPlats.some((c) => c.toLowerCase() === same.toLowerCase())) {
+          const j = await api({ action: "addPlatform", name: same || name });
+          customPlats = j.platforms || customPlats;
+        }
+        const final = same || name;
+        for (const s2 of document.querySelectorAll<HTMLSelectElement>("#np-platform, #m-platform")) addPlatformOption(s2, final);
+        sel.value = final; prev = final;
+        toast(same ? `“${final}” is already in the list — selected` : `✓ Platform “${final}” added`);
+      } catch (e: any) { sel.value = prev; alert(e.message); }
+    });
+  }
   const completeness: any[] = data.completeness || [];
   const grades: any[] = data.grades || [];
   const conditionPricing: boolean = !!data.conditionPricing;
@@ -785,7 +850,7 @@ const posData = {
   const listingRegion = (p: any) => regionOf(p.regionCode || splitTitleRegion(p.title, regions).code || regionFromPlatform(p.platform, regions).code, regions);
 
   /* ---------- Smart find-or-create (shared module: src/lib/smartSearch.ts) ---------- */
-  const PLATFORMS = buildPlatforms(items.map((p) => p.platform));
+  const PLATFORMS = buildPlatforms([...items.map((p) => p.platform), ...customPlats]);
   const parseQuery = (raw: string) => _parseQuery(raw, { completeness, grades, platforms: PLATFORMS, regions });
   // A draft's not-yet-finished listings / stock rows are hidden everywhere but
   // that draft's own screen (search, scanning, import matching, Finish).
@@ -897,6 +962,8 @@ const posData = {
     const note = document.getElementById("np-ebay-note") as HTMLElement | null; if (note) { note.hidden = true; note.innerHTML = ""; }
     pendingEbay = null;
     pendingSource = null;
+    pendingMarket = null;
+    npPriceTouched = false;
   }
   // The Add panel: open = the "＋ Add product" button turns into "✕ Cancel".
   // Closing with something typed asks first (also when Start entry closes it).
@@ -960,7 +1027,7 @@ const posData = {
     const panel = $("add-panel") as HTMLElement;
     setAddOpen(true);
     ($("np-title") as HTMLInputElement).value = parsed.titleForNew.replace(/\b\w/g, (c: string) => c.toUpperCase());
-    ($("np-platform") as HTMLInputElement).value = parsed.platform || "";
+    setPlatform($("np-platform") as HTMLSelectElement, parsed.platform || "");
     setNpRegion(parsed.regionCode);
     setComp($("np-comp") as HTMLInputElement, parsed.completenessCode || "", $("np-comp-abbr"));
     ($("np-grade") as HTMLSelectElement).value = parsed.gradeCode || "3";
@@ -1049,7 +1116,7 @@ const posData = {
       const panel = $("add-panel") as HTMLElement;
       setAddOpen(true);
       ($("np-title") as HTMLInputElement).value = id.title;
-      ($("np-platform") as HTMLInputElement).value = id.platform || "";
+      setPlatform($("np-platform") as HTMLSelectElement, id.platform || "");
       setNpRegion(id.region); // eBay's catalog is the US one: "" = home
       ($("np-qty") as HTMLInputElement).value = "1";
       panel.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -1392,7 +1459,7 @@ const posData = {
         <div class="m-label" style="display:flex;align-items:center;gap:0.5rem;">Product <button type="button" class="btn btn-ghost btn-sm" id="m-enrich">✨ Auto‑fill from IGDB</button></div>
         <div class="m-grid">
           <label>Title<input id="m-title" value="${esc(p.title)}"></label>
-          <label>Platform<input id="m-platform" value="${esc(p.platform)}"></label>
+          <label>Platform<select id="m-platform">${platformOptionsHtml()}</select></label>
           ${rgOn ? `<label title="The release's market — an import (PAL, Japan…) gets a badge everywhere">Region<select id="m-region">${regionOpts}</select></label>` : ""}
           <label>Genre / set<input id="m-genre" value="${esc(p.genre)}"></label>
           <label>Franchise<input id="m-franchise" value="${esc(p.franchise)}"></label>
@@ -1413,6 +1480,7 @@ const posData = {
 
       <div class="m-section">
         <div class="m-label">Pricing &amp; web — per condition${conditionPricing ? ` <span class="cp-on">↻ condition pricing on</span>` : ""}</div>
+        ${p.marketPrices ? `<p class="muted m-market">📈 PriceCharting averages (${esc(p.marketPrices.at || "")}): ${marketLine(p.marketPrices)}${p.marketPrices.url ? ` <a href="${esc(p.marketPrices.url)}" target="_blank" rel="noopener noreferrer">↗</a>` : ""}</p>` : ""}
         <div class="cond-scroll">
           <table class="cond-table"${invTypes.length ? "" : ` style="min-width:660px;"`}>
             <thead><tr><th>Completeness</th><th>Grade</th><th>SKU</th><th>In‑store $</th><th>Online $</th><th>Qty</th>${data.isManager ? `<th title="Purchase price — what you paid per copy">Paid $</th>` : ""}<th>Web</th>${invTypes.length ? "<th>Type</th><th>Loc</th>" : ""}</tr></thead>
@@ -1460,6 +1528,16 @@ const posData = {
     } else { ebayLink.hidden = true; }
 
     wireNewCategory(document.getElementById("m-category") as HTMLSelectElement | null);
+    // The listing's own platform, exactly as stored (never re-spelled / cut by
+    // the list) — and only sent back on Save if it was changed.
+    const mPlat = document.getElementById("m-platform") as HTMLSelectElement | null;
+    if (mPlat) {
+      const raw = String(p.platform ?? "");
+      if (raw && ![...mPlat.options].some((o) => o.value === raw)) mPlat.insertBefore(new Option(raw, raw), mPlat.options[1] ?? null);
+      mPlat.value = raw;
+      mPlat.dataset.orig = raw;
+    }
+    wireNewPlatform(mPlat);
     // A UPC names ONE release — moving a listing that has one to another
     // region deserves a look before saving.
     document.getElementById("m-region")?.addEventListener("change", (ev) => {
@@ -1880,8 +1958,9 @@ const posData = {
     const defComp = categories.find((c) => c.id === p.categoryId)?.default_completeness || "";
     const compLabel = completeness.find((c) => c.code === defComp)?.label || "New";
     try {
-      const j = await api({ action: "addVariant", productId: p.id, completenessCode: defComp, gradeCode: "3", condition: compLabel, priceCents: 0, quantity: 0 });
-      const nv: any = { id: j.variant.id, condition: compLabel, completeness: null, completenessCode: defComp, gradeCode: "3", sku: null, internalCode: j.variant.internal_code || "", labelCode: j.variant.label_code || "", priceCents: 0, onlinePriceCents: null, costCents: null, quantity: 0, onlineVisible: false, inventoryTypeId: retailTypeId, locationId: "", barcodes: [] };
+      const startPrice = marketPriceFor(p.marketPrices, defComp) ?? 0; // PriceCharting's average for it, when known
+      const j = await api({ action: "addVariant", productId: p.id, completenessCode: defComp, gradeCode: "3", condition: compLabel, priceCents: startPrice, quantity: 0 });
+      const nv: any = { id: j.variant.id, condition: compLabel, completeness: null, completenessCode: defComp, gradeCode: "3", sku: null, internalCode: j.variant.internal_code || "", labelCode: j.variant.label_code || "", priceCents: startPrice, onlinePriceCents: null, costCents: null, quantity: 0, onlineVisible: false, inventoryTypeId: retailTypeId, locationId: "", barcodes: [] };
       p.variants.push(nv);
       $("cond-body").insertAdjacentHTML("beforeend", condRowHtml(nv));
       $("bc-blocks").insertAdjacentHTML("beforeend", bcBlockHtml(nv));
@@ -1903,7 +1982,9 @@ const posData = {
       const regionSel = document.getElementById("m-region") as HTMLSelectElement | null;
       const pj = await api({
         action: "updateProduct", id: pid,
-        title: get("m-title").trim(), platform: get("m-platform").trim(), genre: get("m-genre").trim(),
+        title: get("m-title").trim(), genre: get("m-genre").trim(),
+        // Platform only when it was changed (a save never re-spells it).
+        ...(get("m-platform") !== ($("m-platform") as HTMLSelectElement).dataset.orig ? { platform: get("m-platform") } : {}),
         franchise: get("m-franchise").trim(), categoryId: get("m-category"), imageUrl: get("m-image").trim(),
         description: ($("m-desc") as HTMLTextAreaElement).value.trim(),
         ...(regionSel ? { regionCode: regionSel.value } : {}),
@@ -1911,7 +1992,7 @@ const posData = {
         ...(document.querySelector("[data-vtag]") ? { tags: Object.fromEntries([...document.querySelectorAll<HTMLInputElement>("[data-vtag]")].map((c) => [c.dataset.vtag!, c.checked])) } : {}),
       });
       Object.assign(p, {
-        title: get("m-title").trim(), platform: get("m-platform").trim(), genre: get("m-genre").trim(),
+        title: get("m-title").trim(), platform: get("m-platform"), genre: get("m-genre").trim(),
         franchise: get("m-franchise").trim(), categoryId: get("m-category"), imageUrl: get("m-image").trim(),
         description: ($("m-desc") as HTMLTextAreaElement).value.trim(),
         categoryName: categories.find((c) => c.id === get("m-category"))?.name ?? p.categoryName,
@@ -2718,8 +2799,13 @@ const posData = {
       const f = (k: string) => tr.querySelector(`[data-rf="${k}"]`) as HTMLInputElement;
       const onCond = () => {
         r.comp = f("comp").value; r.grade = f("grade").value;
-        // The price follows the condition (that condition's own price) until you type one.
-        if (!r.priceTouched) { const t = recvTarget(r); if (t) r.price = (t.priceCents / 100).toFixed(2); }
+        // The price follows the condition (that condition's own price — or, for
+        // a condition the listing doesn't have yet, PriceCharting's average) until you type one.
+        if (!r.priceTouched) {
+          const t = recvTarget(r);
+          const m = t ? null : marketPriceFor(r.p.marketPrices, r.comp);
+          r.price = ((t ? t.priceCents : m ?? r.v.priceCents) / 100).toFixed(2);
+        }
         renderRecv();
       };
       f("comp").addEventListener("change", onCond);
@@ -2815,11 +2901,11 @@ const posData = {
       // Picked from the game database (or a scanned UPC): its official name +
       // our platform name, in the region the query named (else the home one).
       ($("np-title") as HTMLInputElement).value = official.title;
-      ($("np-platform") as HTMLInputElement).value = official.platform || parsed?.platform || "";
+      setPlatform($("np-platform") as HTMLSelectElement, official.platform || parsed?.platform || "");
       setNpRegion(official.region || parsed?.regionCode);
     } else {
       if (parsed?.title) ($("np-title") as HTMLInputElement).value = parsed.titleForNew.replace(/\b\w/g, (c: string) => c.toUpperCase());
-      if (parsed?.platform) ($("np-platform") as HTMLInputElement).value = parsed.platform;
+      if (parsed?.platform) setPlatform($("np-platform") as HTMLSelectElement, parsed.platform);
       if (parsed) setNpRegion(parsed.regionCode);
     }
     if (parsed) { setComp($("np-comp") as HTMLInputElement, parsed.completenessCode || "", $("np-comp-abbr")); if (parsed.gradeCode) ($("np-grade") as HTMLSelectElement).value = parsed.gradeCode; }
@@ -3266,6 +3352,7 @@ const posData = {
 
   wireComp($("np-comp") as HTMLInputElement, $("np-comp-abbr"));
   wireNewCategory(document.getElementById("np-cat") as HTMLSelectElement | null);
+  wireNewPlatform(document.getElementById("np-platform") as HTMLSelectElement | null);
   // A Japanese barcode (JAN: 13 digits starting 45 / 49) is a Japan release.
   $("np-barcode")?.addEventListener("change", () => {
     const code = ($("np-barcode") as HTMLInputElement).value.replace(/\D/g, "");
@@ -3391,11 +3478,14 @@ const posData = {
           toast(`✓ Added${where} — copying the photo…`);
           try {
             const r = await fetch("/api/pos/source-import", { method: "POST", headers: { "content-type": "application/json" },
-              body: JSON.stringify({ mode: "attach", productId: newItem.id, source: ps }) });
+              body: JSON.stringify({ mode: "attach", productId: newItem.id, source: ps, market: ps.market || undefined }) });
             const e = await r.json();
             if (r.ok && e.ok) {
               if (e.imageUrl) newItem.imageUrl = e.imageUrl;
               if (e.supplier) newItem.supplierLinks = [...(newItem.supplierLinks || []), e.supplier];
+              if (e.market) newItem.marketPrices = e.market;
+              if (e.marketError) alert(e.marketError);
+              if (e.market?.id) newItem.pcId = e.market.id;
               render();
             }
           } catch { /* the listing is saved; the photo can be added by hand */ }
@@ -3421,6 +3511,31 @@ const posData = {
   /* ---------- eBay import ---------- */
   let pendingEbay: any = null;
 
+  /* ---------- Market prices (PriceCharting) ----------
+     Saved on a listing when it's added from its PriceCharting page. A copy's
+     price follows its condition: Loose / Complete / New… → that average. */
+  const marketPriceFor = (m: any, compCode: string): number | null => {
+    if (!m) return null;
+    const key = marketKeyFor(completeness.find((c: any) => c.code === compCode)?.label || compCode);
+    const v = key ? Number(m[key]) : NaN;
+    return Number.isFinite(v) && v > 0 ? v : null;
+  };
+  const marketLine = (m: any, clickable = false) => !m ? "" : MARKET_KEYS.filter((k) => Number(m[k]) > 0 && k !== "graded")
+    .map((k) => clickable ? `<button type="button" class="link-btn" data-mkt="${k}">${MARKET_LABELS[k]} ${money(m[k])}</button>` : `${MARKET_LABELS[k]} ${money(m[k])}`).join(" · ");
+  // The Add form: a PriceCharting import's prices, and whether a price was typed by hand.
+  let pendingMarket: any = null;
+  let npPriceTouched = false;
+  function priceFromMarket() {
+    if (!pendingMarket || npPriceTouched) return;
+    // A condition PriceCharting has no average for → no price (not the last one's).
+    const c = marketPriceFor(pendingMarket, compVal($("np-comp") as HTMLInputElement));
+    ($("np-price") as HTMLInputElement).value = c != null ? (c / 100).toFixed(2) : "";
+  }
+  $("np-price")?.addEventListener("input", () => { npPriceTouched = true; });
+  $("np-comp")?.addEventListener("input", priceFromMarket);
+  $("np-comp")?.addEventListener("change", priceFromMarket);
+  $("np-comp")?.addEventListener("blur", () => setTimeout(priceFromMarket, 0));
+
   /* ---------- 🔖 Send to TimeLag: a product from another shop's page ----------
      The bookmark reads the page in the browser it's open in (Suruga-ya etc.
      can't be read from our server) and opens /inventory?import=page here:
@@ -3437,7 +3552,7 @@ const posData = {
     ov.setAttribute("aria-modal", "true");
     ov.innerHTML = `<div class="upc-pick-card bm-card">
       <h3>🔖 Send to TimeLag</h3>
-      <p class="muted">Add products from <strong>Suruga-ya</strong>, <strong>Buyee</strong> (Yahoo! Auctions, Mercari…), Amazon JP or any shop. The bookmark reads the page you're looking at, in your own browser, so nothing visits that shop from our server.</p>
+      <p class="muted">Add products from <strong>PriceCharting</strong> (its UPC + Loose / Complete / New averages), <strong>Suruga-ya</strong>, <strong>Buyee</strong> (Yahoo! Auctions, Mercari…), Amazon JP or any shop. Dragged it in before? Drag it again — new sites need the new copy. The bookmark reads the page you're looking at, in your own browser, so nothing visits that shop from our server.</p>
       <ol class="bm-steps">
         <li><strong>Drag this button</strong> onto your bookmarks bar: <a class="bm-link" id="bm-link" draggable="true">🔖 Send to TimeLag</a></li>
         <li>On a product page, <strong>click the bookmark</strong>. A POS tab opens with this form filled in: a clean English title, platform, region, condition, JAN and what you paid in dollars.</li>
@@ -3518,7 +3633,7 @@ const posData = {
     } catch (e: any) { note.innerHTML = `<div>⚠ ${esc(e.message)}</div>`; return; }
     const f = j.fields, so = j.source;
     ($("np-title") as HTMLInputElement).value = f.title || "";
-    ($("np-platform") as HTMLInputElement).value = f.platform || "";
+    setPlatform($("np-platform") as HTMLSelectElement, f.platform || "");
     setNpRegion(f.regionCode || "");
     if (f.categoryId) ($("np-cat") as HTMLSelectElement).value = f.categoryId;
     const newCode = completeness.find((c: any) => /^(new|sealed)/i.test(c.label) || c.code === "NEW")?.code || "";
@@ -3526,12 +3641,28 @@ const posData = {
     ($("np-barcode") as HTMLInputElement).value = f.barcode || "";
     ($("np-cost") as HTMLInputElement).value = f.costCents != null ? (f.costCents / 100).toFixed(2) : "";
     ($("np-qty") as HTMLInputElement).value = "1";
-    pendingSource = { url: so.url, priceText: so.priceText, titleOriginal: so.titleOriginal, images: so.images };
+    pendingSource = { url: so.url, priceText: so.priceText, titleOriginal: so.titleOriginal, images: so.images, market: j.market || null };
+    pendingMarket = j.market || null;
+    npPriceTouched = false;
     const rate = j.money?.jpyPerUsd, fee = j.money?.feePct;
     const paid = f.costCents != null
       ? `Paid <strong>${money(f.costCents)}</strong> = ${esc(so.priceText)}${so.currency === "JPY" ? ` at ¥${rate}/$${fee ? ` + ${fee}% fees` : ""}` : fee ? ` + ${fee}% fees` : ""}`
       : so.priceText ? `price ${esc(so.priceText)}` : "no price found";
     const img = so.images?.[0] ? `<img src="${esc(so.images[0])}" alt="" referrerpolicy="no-referrer" style="width:54px;height:54px;object-fit:cover;border:1px solid var(--line);">` : "";
+    if (j.market) {
+      // A price guide: its averages are what copies SELL for — the price
+      // follows the condition you pick (until you type one); nothing is "paid".
+      note.innerHTML = `${img}<div><strong>📈 From PriceCharting</strong>${f.barcode ? ` · UPC ${esc(f.barcode)}` : ""}${f.regionCode && f.regionCode !== "US" ? ` · ${esc(f.regionCode)} release` : ""}
+        <br>${marketLine(j.market, true) || "no prices taken"} <span style="color:var(--muted-2);">(averages, ${esc(j.market.at)})</span>
+        ${j.priceNote ? `<br><span style="color:var(--magenta);">⚠ ${esc(j.priceNote)}</span>` : ""}
+        <br><span style="color:var(--muted-2);">Pick the condition — the price follows it (or click one). On Save: ${j.marketReady ? "these averages are kept on the listing, plus" : "<span style='color:var(--magenta);'>(averages can't be kept until the market-prices migration is run)</span>"} its PriceCharting photo and link.</span>
+        ${j.existing ? `<br><span style="color:var(--magenta);">Already in the POS: <strong>${esc(j.existing.title)}</strong> — <button type="button" class="link-btn" id="src-existing">add copies to it instead</button></span>` : ""}
+        ${j.openEntry && !entryMode ? `<br><button type="button" class="link-btn" id="src-entry">📥 Put it on your open Entry #${esc(j.openEntry.human_id)} instead</button>` : ""}</div>`;
+      note.querySelectorAll<HTMLElement>("[data-mkt]").forEach((b) => b.addEventListener("click", () => {
+        ($("np-price") as HTMLInputElement).value = (Number(j.market[b.dataset.mkt!]) / 100).toFixed(2);
+        npPriceTouched = true;
+      }));
+    } else
     note.innerHTML = `${img}<div><strong>🔖 From ${esc(so.label)}</strong> · ${paid}${f.barcode ? ` · JAN ${esc(f.barcode)}` : ""}${f.regionCode === "JP" ? " · 🇯🇵 Japan" : ""}
       ${so.titleOriginal ? `<br><span style="color:var(--muted-2);">Original: ${esc(so.titleOriginal)}</span>` : so.pageTitle && so.pageTitle !== f.title ? `<br><span style="color:var(--muted-2);">On the page: ${esc(so.pageTitle)}</span>` : ""}
       ${f.note ? `<br><span style="color:var(--muted-2);">Condition note: ${esc(f.note)}</span>` : ""}
@@ -3540,6 +3671,14 @@ const posData = {
       ${j.openEntry && !entryMode ? `<br><button type="button" class="link-btn" id="src-entry">📥 Put it on your open Entry #${esc(j.openEntry.human_id)} instead</button>` : ""}</div>`;
     document.getElementById("src-existing")?.addEventListener("click", () => {
       const t = j.existing.title;
+      // PriceCharting: today's averages go onto that listing too (the rows price new conditions from them).
+      if (j.market) {
+        const ex = items.find((x: any) => x.id === j.existing.productId);
+        if (ex) ex.marketPrices = j.market;
+        fetch("/api/pos/source-import", { method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ mode: "attach", productId: j.existing.productId, source: pendingSource, market: j.market }) })
+          .then((r) => r.json()).then((e) => { if (e.marketError) alert(e.marketError); }).catch(() => {});
+      }
       // What this copy cost goes onto the row you pick.
       pendingRecvCost = f.costCents != null ? (f.costCents / 100).toFixed(2) : "";
       clearProductFields();
@@ -3553,7 +3692,8 @@ const posData = {
       else alert("That draft isn't open anymore.");
     });
     ($("np-price") as HTMLInputElement).value = "";
-    ($("np-price") as HTMLInputElement).focus();
+    priceFromMarket(); // PriceCharting: the current condition's average
+    (j.market ? $("np-comp") : $("np-price") as HTMLInputElement).focus();
   }
 
   // Pasting a listing link (or pressing Enter) pulls it — no extra click.
@@ -3582,11 +3722,13 @@ const posData = {
       const j = await r.json();
       if (!r.ok || !j.ok) throw new Error(j.error || "Couldn't pull that listing");
       const it = j.item;
+      // A previous 🔖 import's prices / page don't belong to this listing.
+      pendingMarket = null; pendingSource = null; npPriceTouched = false;
       // Sell Similar suggestions (the store importer's title / platform / region /
       // category rules) — else the listing's raw fields.
       const sim = j.similar || {};
       ($("np-title") as HTMLInputElement).value = sim.title || it.title;
-      ($("np-platform") as HTMLInputElement).value = sim.platform ?? it.platform ?? "";
+      setPlatform($("np-platform") as HTMLSelectElement, sim.platform ?? it.platform ?? "");
       setNpRegion(sim.region || it.region); // "" = home
       setComp($("np-comp") as HTMLInputElement, sim.completenessCode || it.completenessCode || "", $("np-comp-abbr"));
       const grade = sim.gradeCode || it.gradeCode;

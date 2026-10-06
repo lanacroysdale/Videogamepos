@@ -231,7 +231,7 @@ const MAKER_SET = new Set(MAKERS.split("|"));
 
 // Makers' names that eBay stores as the "platform" when an item has none
 // (amiibo, docks, controllers). Not platforms — never parse them as one.
-const BRAND_ONLY = /^(nintendo|sony|sega|microsoft|atari|nec|snk|bandai|bandai namco|hori|powera|pdp|mad catz|8bitdo|hyperkin|nyko|razer|turtle beach|logitech)$/i;
+export const BRAND_ONLY = /^(nintendo|sony|sega|microsoft|atari|nec|snk|bandai|bandai namco|hori|powera|pdp|mad catz|8bitdo|hyperkin|nyko|razer|turtle beach|logitech)$/i;
 
 /** Built-in platforms + the catalog's own spellings. A catalog spelling that
  *  names a built-in platform ("Sony PlayStation 4", eBay's aspect) becomes an

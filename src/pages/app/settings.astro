@@ -10,6 +10,7 @@ import { labelTemplates, labelTypeIconIds, LABEL_FONTS } from "../../lib/labels"
 import type { StoreDepartment, StoreInventoryType, StoreLocation, StoreRegion } from "../../lib/types";
 import { createSupabaseAdminClient } from "../../lib/supabase";
 import { sourceImportSettings } from "../../lib/sourceImport";
+import { customPlatforms } from "../../lib/platforms";
 import { PERMISSIONS, PERMISSION_GROUPS, loadRoles, roleName } from "../../lib/permissions";
 
 const supabase = Astro.locals.supabase;
@@ -59,6 +60,7 @@ const leadNotifyEnabled = (row?.settings as any)?.leadNotifyEnabled !== false;
 const ebayAutoSync = (row?.settings as any)?.ebayAutoSync !== false;
 const ebayShipZip = String((row?.settings as any)?.ebayShipZip ?? "");
 const srcImp = sourceImportSettings((row?.settings as any) ?? {});
+const storePlatforms = customPlatforms((row?.settings as any) ?? {});
 const leadNotifyEmail = String((row?.settings as any)?.leadNotifyEmail ?? "");
 const bar = barSettings(row?.settings);
 const deptLocked = (row?.settings as any)?.departmentsLocked === true;
@@ -410,6 +412,21 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
           <span id="rg-status" class="muted"></span>
         </div>
       )}
+    </div>
+  )}
+
+  {canInvConfig && (
+    <div class="pos-panel set-panel" id="platforms-panel" style="margin-bottom:1.25rem;">
+      <h2>Platforms</h2>
+      <p class="muted set-desc">Platforms you've added (WonderSwan Color, Pippin…). The Platform dropdowns offer these plus every platform your listings already use and the built-in list. Anyone can add one from the dropdown with <strong>＋ New platform…</strong>; removing one here only takes it off this list — listings keep their platform.</p>
+      <div id="plat-list" class="plat-list">
+        {storePlatforms.length ? storePlatforms.map((n) => <span class="plat-chip" data-plat={n}>{n} <button type="button" class="link-btn plat-del" title="Remove from the list">✕</button></span>) : <span class="muted">None added yet.</span>}
+      </div>
+      <div class="dept-actions">
+        <input type="text" id="plat-new" maxlength="60" placeholder="e.g. WonderSwan Color" style="width:16rem;text-align:left;" />
+        <button id="plat-add" class="btn btn-ghost btn-sm" type="button">+ Platform</button>
+        <span id="plat-status" class="muted"></span>
+      </div>
     </div>
   )}
 
@@ -929,6 +946,8 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   .dept-act-col .link-btn { margin-left: 0.6rem; }
   .dept-enabled { width: 1.2rem; height: 1.2rem; accent-color: var(--cyan); }
   .dept-actions { display: flex; align-items: center; gap: 0.9rem; margin-top: 0.9rem; flex-wrap: wrap; }
+  .plat-list { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+  .plat-chip { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.2rem 0.5rem; border: 1px solid var(--border-strong); font-size: 0.85rem; }
   .dept-lock-actions { display: inline-flex; gap: 0.5rem; }
   .dept-lock-pill { font-size: 0.7rem; font-weight: 700; color: var(--magenta); border: 1px solid var(--magenta); padding: 0.05rem 0.45rem; vertical-align: middle; }
   .dept-panel[data-locked="1"] .dept-tbl { opacity: 0.6; }
@@ -1164,6 +1183,34 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     ebayAutoSync: ($("ebay-autosync") as HTMLInputElement).checked,
     ebayShipZip: ($("ebay-zip") as HTMLInputElement).value.trim(),
   }, document.getElementById("ebay-status")!, e.currentTarget as HTMLButtonElement));
+
+  // Platforms: the store's own list (the inventory dropdowns offer it).
+  async function platCall(action: string, name: string) {
+    const r = await fetch("/api/pos/inventory", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action, name }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) throw new Error(j.error || "Failed");
+    return j.platforms as string[];
+  }
+  function renderPlats(list: string[]) {
+    const box = document.getElementById("plat-list");
+    if (!box) return;
+    const e2 = (s: string) => s.replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m] as string));
+    box.innerHTML = list.length ? list.map((n) => `<span class="plat-chip" data-plat="${e2(n)}">${e2(n)} <button type="button" class="link-btn plat-del" title="Remove from the list">✕</button></span>`).join("") : `<span class="muted">None added yet.</span>`;
+  }
+  document.getElementById("plat-list")?.addEventListener("click", async (e) => {
+    const btn = (e.target as HTMLElement).closest(".plat-del");
+    const name = btn?.closest<HTMLElement>("[data-plat]")?.dataset.plat;
+    if (!name) return;
+    if (!confirm(`Take “${name}” off the platform list? Listings keep their platform.`)) return;
+    try { renderPlats(await platCall("removePlatform", name)); } catch (err: any) { alert(err.message); }
+  });
+  document.getElementById("plat-add")?.addEventListener("click", async () => {
+    const inp = document.getElementById("plat-new") as HTMLInputElement;
+    const st = document.getElementById("plat-status")!;
+    if (!inp.value.trim()) { inp.focus(); return; }
+    try { renderPlats(await platCall("addPlatform", inp.value)); inp.value = ""; st.textContent = "✓ Added"; }
+    catch (err: any) { st.textContent = err.message; }
+  });
 
   document.getElementById("src-save")!.addEventListener("click", (e) => save({
     sourceImport: { jpyPerUsd: Number(($("src-rate") as HTMLInputElement).value), feePct: Number(($("src-fee") as HTMLInputElement).value) || 0 },

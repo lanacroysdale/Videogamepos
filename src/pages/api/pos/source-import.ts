@@ -4,9 +4,10 @@ import { createSupabaseAdminClient } from "../../../lib/supabase";
 import { aiSettings, aiStatus, callAI } from "../../../lib/ai";
 import { PLATFORM_ALIASES, resolveStaticPlatform } from "../../../lib/smartSearch";
 import { lbPlatform } from "../../../lib/launchbox";
-import { regionsOn, loadRegions, regionByCode } from "../../../lib/regions";
+import { regionsOn, loadRegions, regionByCode, regionFromPlatform } from "../../../lib/regions";
 import {
   sanitizeCaptured, pageFacts, sourceOf, sourceItemId, publicUrl, canonicalUrl, sourceImportSettings, costCentsFor, priceText, parseJsonObject,
+  priceChartingFacts, isPriceCharting, MARKET_KEYS,
   type CapturedPage, type PageFacts,
 } from "../../../lib/sourceImport";
 
@@ -45,6 +46,45 @@ export const POST: APIRoute = async ({ locals, request }) => {
     const settings = (st as any)?.settings ?? {};
     const money = sourceImportSettings(settings);
     const ai = aiSettings(settings);
+
+    // A PriceCharting game page: everything is there, field by field — no AI.
+    // Its prices are the MARKET (what copies sell for), not what you paid.
+    // A bookmark dragged in before PriceCharting support sends no PriceCharting fields.
+    if (isPriceCharting(page.url) && !page.pc)
+      return json({ error: "Your 🔖 Send to TimeLag bookmark is an older copy that can't read PriceCharting. Drag it to your bookmarks bar again (Inventory → ＋ Add product → 🔖 Other shops), delete the old one, then click it on this page." }, 400);
+    const pcf = priceChartingFacts(page, new Date().toISOString().slice(0, 10));
+    if (pcf && pcf.name) {
+      const rg = regionFromPlatform(pcf.console, regions); // "JP Super Famicom" → JP + Super Famicom
+      const platform = resolveStaticPlatform(rg.platform) ?? rg.platform;
+      const regionCode = regionsOn(regions) && rg.code && regionByCode(rg.code, regions) ? rg.code : "";
+      // PriceCharting flags a console itself; accessories by name (never "System Shock").
+      const isSystem = pcf.kind === "system";
+      const isAccessory = !isSystem && /\b(controller|adapter|memory card|cable|charger|power supply|ac adapter|stylus)\b/i.test(pcf.name);
+      const want = isSystem ? /console|hardware|system/i : isAccessory ? /accessor/i : /game/i;
+      const cat = ((cats ?? []) as any[]).find((c) => want.test(c.name)) ?? ((cats ?? []) as any[]).find((c) => /game/i.test(c.name));
+      const marketReady = !(await sb.from("products").select("market_prices").limit(1)).error;
+      let existing: { productId: string; title: string } | null = null;
+      if (pcf.market.id) {
+        const { data: tagged } = await sb.from("products").select("id, title").contains("tags", [`pricecharting:${pcf.market.id}`]).is("deleted_at", null).limit(1);
+        if (tagged?.[0]) existing = { productId: (tagged[0] as any).id, title: (tagged[0] as any).title ?? "" };
+      }
+      let oq2 = sb.from("inventory_entries").select("id, human_id").eq("employee_id", locals.user.id).eq("status", "open");
+      if (!(await sb.from("inventory_entries").select("reopened_at").limit(1)).error) oq2 = oq2.is("reopened_at", null);
+      const { data: openEntry2 } = await oq2.order("created_at", { ascending: false }).limit(1).maybeSingle();
+      return json({
+        ok: true,
+        fields: {
+          title: pcf.name.slice(0, 200), platform, regionCode, categoryId: cat?.id ?? "", kind: isSystem ? "console" : isAccessory ? "accessory" : "game",
+          completenessCode: "", isNew: false, barcode: pcf.upc, costCents: null, franchise: "", releaseYear: pcf.year, note: "",
+        },
+        source: {
+          kind: "reference", url: pcf.market.url, label: "PriceCharting", host: "pricecharting.com", itemId: pcf.market.id,
+          price: null, currency: "USD", priceText: "", titleOriginal: "", pageTitle: pcf.name, images: pcf.image ? [pcf.image] : facts.images.slice(0, 3),
+        },
+        market: pcf.market, marketReady, priceNote: pcf.priceNote,
+        money, official: true, ai: false, aiError: "", existing, openEntry: openEntry2 ?? null,
+      });
+    }
 
     let out: AiListing | null = null;
     let aiError = "";
@@ -134,23 +174,39 @@ export const POST: APIRoute = async ({ locals, request }) => {
     if (!prod) return json({ error: "Listing not found" }, 404);
     // Supplier links are managers' — staff may only add one to a listing they
     // just created with this import.
-    const fresh = Date.now() - Date.parse(prod.created_at ?? "") < 30 * 60_000;
-    if (!fresh && !locals.can("inventory.manage")) return json({ error: "Only a listing you just added can take its source page." }, 403);
     const src = sourceOf(url);
-    // An internal marker ("kind:value" tags never show on the website) — and
-    // what "Already in the POS from this page" looks for.
+    // (A price guide only adds its tag, averages and photo — no supplier link — so any staff may.)
+    const fresh = Date.now() - Date.parse(prod.created_at ?? "") < 30 * 60_000;
+    if (!fresh && !isPriceCharting(url) && !locals.can("inventory.manage")) return json({ error: "Only a listing you just added can take its source page." }, 403);
+    // A price guide (PriceCharting) isn't where it was bought: its id tag (the
+    // collection importer's "pricecharting:<id>") and its market prices, no
+    // supplier link. Else an internal "src:" marker — what "Already in the POS
+    // from this page" looks for. ("kind:value" tags never show on the website.)
+    const reference = isPriceCharting(url);
+    const pcId = reference ? String(b.market?.id ?? "").replace(/\D/g, "").slice(0, 20) : "";
     const itemId = sourceItemId(url);
-    const marker = `src:${src.host}${itemId ? ":" + itemId : ""}`.slice(0, 120);
+    const marker = reference ? (pcId ? `pricecharting:${pcId}` : "") : `src:${src.host}${itemId ? ":" + itemId : ""}`.slice(0, 120);
     const tags: string[] = Array.isArray(prod.tags) ? prod.tags : [];
-    if (!tags.includes(marker)) {
-      const { error } = await admin.from("products").update({ tags: [...tags, marker] }).eq("id", productId);
+    const patch: Record<string, unknown> = {};
+    if (marker && !tags.includes(marker)) patch.tags = [...tags, marker];
+    // Market prices (migration 20261006000003): only PriceCharting's numbers, as cents.
+    let market: any = null;
+    let marketError = "";
+    if (reference && b.market && typeof b.market === "object") {
+      market = { source: "pricecharting", id: pcId, url, at: /^\d{4}-\d{2}-\d{2}$/.test(String(b.market.at)) ? String(b.market.at) : new Date().toISOString().slice(0, 10) } as Record<string, unknown>;
+      for (const k of MARKET_KEYS) { const n = Number(b.market[k]); market[k] = Number.isFinite(n) && n > 0 && n < 100_000_000 ? Math.round(n) : null; }
+      if (!(await admin.from("products").select("market_prices").limit(1)).error) patch.market_prices = market;
+      else { market = null; marketError = "The PriceCharting averages weren't kept — run supabase/migrations/20261006000003_market_prices.sql in the Supabase SQL editor."; }
+    }
+    if (Object.keys(patch).length) {
+      const { error } = await admin.from("products").update(patch).eq("id", productId);
       if (error) return json({ error: error.message }, 500);
     }
     // The page as a supplier link: where it was bought / can be found again,
     // with the shop's own title (kept internal: never an alt name, which the
     // website shows — a seller's exact title leads straight back to them).
     let supplier: any = null;
-    const { data: haveSup, error: supErr } = await admin.from("product_suppliers").select("id").eq("product_id", productId).eq("url", url).limit(1);
+    const { data: haveSup, error: supErr } = reference ? { data: [1], error: null } : await admin.from("product_suppliers").select("id").eq("product_id", productId).eq("url", url).limit(1);
     if (!supErr && !haveSup?.length) {
       const orig = String(s.titleOriginal ?? "").trim();
       const label = `${src.label}${s.priceText ? ` (${String(s.priceText).slice(0, 30)})` : ""}${orig ? ` · ${orig}` : ""}`.slice(0, 120);
@@ -170,7 +226,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
         }
       }
     }
-    return json({ ok: true, imageUrl, supplier });
+    return json({ ok: true, imageUrl, supplier, market, marketError });
   }
 
   return json({ error: "Unknown mode" }, 400);

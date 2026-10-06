@@ -3,6 +3,7 @@ import { createSupabaseAdminClient } from "../../../lib/supabase";
 import { attachUpcs } from "../../../lib/upcFinder";
 import { canonicalUpc } from "../../../lib/upcMatch";
 import { DEPARTMENT_TAGS } from "../../../lib/shopFilters";
+import { cleanPlatformName, customPlatforms, withPlatform } from "../../../lib/platforms";
 import { loadRegions, regionsOn, regionOf, regionByCode, isDefaultRegion, defaultRegionCode, regionFromPlatform, type Region } from "../../../lib/regions";
 
 export const prerender = false;
@@ -1098,6 +1099,25 @@ export const POST: APIRoute = async ({ locals, request }) => {
       const upcReset = code !== "US" ? moved : [];
       await resetUpcsForRegion(upcReset);
       return json({ ok: true, updated: data?.length ?? 0, regionCode: code, upcReset });
+    }
+    case "addPlatform":
+    case "removePlatform": {
+      // The store's platform list (store_settings.settings.platforms): the
+      // dropdowns offer it even before a listing uses one. Adding is for any
+      // staff (it's a name); taking one off the list is for managers.
+      if (!locals.profile) return json({ error: "Staff only" }, 403);
+      const name = cleanPlatformName(b.name);
+      if (!name) return json({ error: "Type a platform name" }, 400);
+      if (b.action === "removePlatform" && !locals.can("inventory_config.manage")) return json({ error: "Only managers can remove platforms" }, 403);
+      const admin = createSupabaseAdminClient();
+      const { data: cur, error: rErr } = await admin.from("store_settings").select("settings").eq("id", 1).maybeSingle();
+      if (rErr) return json({ error: rErr.message }, 500);
+      const settings = { ...((cur as any)?.settings ?? {}) };
+      const list = customPlatforms(settings);
+      settings.platforms = b.action === "addPlatform" ? withPlatform(list, name) : list.filter((x) => x.toLowerCase() !== name.toLowerCase());
+      const { error } = await admin.from("store_settings").update({ settings }).eq("id", 1);
+      if (error) return json({ error: error.message }, 500);
+      return json({ ok: true, platforms: settings.platforms });
     }
     case "bulkSetTag": {
       // Put many listings in (or out of) a tag category (🧸 Plush). Other tags stay.
