@@ -56,7 +56,6 @@ const CSS = `
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m] as string));
 const money = (c: number) => (c / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
 const NEW_CAT = "__new__";
-const JP_KEEP = "";
 const ls = {
   get(k: string) { try { return localStorage.getItem(k); } catch { return null; } },
   set(k: string, v: string) { try { localStorage.setItem(k, v); } catch { /* private mode / full */ } },
@@ -120,11 +119,10 @@ export function openEbayImportDialog(o: EbayImportDialogOpts) {
   let gameComp = findComp(/^CIB|complete/i) || o.completeness[0]?.code || "";
   let itemComp = findComp(/^L\b|loose/i) || gameComp;
   const defGrade = o.grades.find((g) => g.code === "3")?.code || o.grades[0]?.code || "";
-  // Group → category for new listings; Japan items → their own category.
+  // Group → category for new listings. Japan items keep theirs: "🇯🇵 Japanese
+  // Imports" is a virtual category (the Japan region), not a real one.
   const groupCat = new Map<EbayGroup, string>();
   for (const g of EBAY_GROUPS) groupCat.set(g.key, defaultCategoryFor(g.key, categories) || fallbackCat);
-  const jpExisting = categories.find((c) => /japan/i.test(c.name));
-  let japanCat = jpExisting?.id || `${NEW_CAT}:Japanese Imports`; // "" = keep the group's category
   const pendingNew = new Map<string, string>(); // "__new__:Name" → name (created on Import)
 
   // ---- state ----
@@ -223,7 +221,7 @@ export function openEbayImportDialog(o: EbayImportDialogOpts) {
   })();
 
   // ---- rows ----
-  const rowCat = (r: EbayImportRow) => catPicks.get(r.ebay.id) ?? (japanCat && r.ebay.japan ? japanCat : groupCat.get(r.ebay.group) || fallbackCat);
+  const rowCat = (r: EbayImportRow) => catPicks.get(r.ebay.id) ?? (groupCat.get(r.ebay.group) || fallbackCat);
   function rebuild() {
     const built = buildEbayRows(listings, details, {
       completeness: o.completeness, grades: o.grades, platforms: o.platforms, regions: o.regions,
@@ -299,10 +297,9 @@ export function openEbayImportDialog(o: EbayImportDialogOpts) {
       + (cleanTitles ? `<label class="chk" style="text-transform:none;letter-spacing:0;font-weight:600;" title="Merch / toys: game + character + type from eBay's item specifics (“Splatoon 3 Judd & Li'l Judd Alarm Clock”) — only when those words are in the listing title and it isn't a set; otherwise the trimmed listing title"><input type="checkbox" id="tle-short"${shortMerch ? " checked" : ""} /> Short merch titles</label>` : "");
     const groupsHere = EBAY_GROUPS.filter((g) => rows.some((r) => r.row.ebay.group === g.key && (showImported || !isImported(r))));
     $("tle-cats").innerHTML = groupsHere.map((g) => sel(`tle-gc-${g.key}`, g.label, catOptions(groupCat.get(g.key) || ""))).join("")
-      + sel("tle-jpcat", "🇯🇵 Japan items →", catOptions(japanCat, `<option value="${JP_KEEP}"${!japanCat ? " selected" : ""}>Keep the category above</option>`), "Games with a Japan region, plus merch / accessories made in or imported from Japan")
       + sel("tle-gcomp", "Game condition when eBay doesn't say", o.completeness.map((c) => `<option value="${esc(c.code)}"${c.code === gameComp ? " selected" : ""}>${esc(c.label)}</option>`).join(""))
       + sel("tle-icomp", "Other items", o.completeness.map((c) => `<option value="${esc(c.code)}"${c.code === itemComp ? " selected" : ""}>${esc(c.label)}</option>`).join(""))
-      + `<span class="tli-note">Everything lands on this entry as a draft — nothing is in stock until you Finish it (which prints the labels). New listings get the eBay listing title + description as their description. Existing listings keep their own category, price and description; a copy matched onto one gets its own stock row there.</span>`;
+      + `<span class="tli-note">Everything lands on this entry as a draft — nothing is in stock until you Finish it (which prints the labels). New listings get the eBay listing title + description as their description. Japan items keep their category and get the 🇯🇵 Japan region — they show under 🇯🇵 Japanese Imports (Inventory category filter, shop). Existing listings keep their own category, price and description; a copy matched onto one gets its own stock row there.</span>`;
   }
 
   // Category select → "＋ New category…" asks for a name (created on Import).
@@ -340,7 +337,6 @@ export function openEbayImportDialog(o: EbayImportDialogOpts) {
       case "tle-short": shortMerch = t.checked; ls.set("tl-ebay-shortmerch", t.checked ? "1" : "0"); return rebuild();
       case "tle-gcomp": gameComp = t.value; return rebuild();
       case "tle-icomp": itemComp = t.value; return rebuild();
-      case "tle-jpcat": japanCat = pickCategory(t.value, japanCat); return rerender();
     }
     if (t.id.startsWith("tle-gc-")) { const g = t.id.slice(7) as EbayGroup; groupCat.set(g, pickCategory(t.value, groupCat.get(g) || "")); return rerender(); }
   });
@@ -513,7 +509,6 @@ export function openEbayImportDialog(o: EbayImportDialogOpts) {
       const realCat = (c: string) => made.get(c) || (c.startsWith(NEW_CAT) ? fallbackCat : c);
       for (const [k, id] of made) {
         pendingNew.delete(k);
-        if (japanCat === k) japanCat = id;
         for (const [g, v] of groupCat) if (v === k) groupCat.set(g, id);
         for (const [rid, v] of catPicks) if (v === k) catPicks.set(rid, id);
       }

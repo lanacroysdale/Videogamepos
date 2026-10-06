@@ -7,6 +7,7 @@ import { labelTemplates } from "../../lib/labels";
 import { MARKETING_HOSTS } from "../../consts";
 import { createSupabaseAdminClient } from "../../lib/supabase";
 import { loadRegions, regionsOn, regionBadgeHtml } from "../../lib/regions";
+import { activeVirtualCategories } from "../../lib/virtualCategories";
 
 const supabase = Astro.locals.supabase;
 const [{ data: categories }, { data: settings }, { data: completeness }, { data: grades }] = await Promise.all([
@@ -70,6 +71,8 @@ const upcCols = upcProbeErr ? "" : ", upc_status, upc_checked_at, product_upcs(i
 const { error: rgProbeErr } = await supabase.from("products").select("region_code").limit(1);
 const regions = rgProbeErr ? [] : await loadRegions(supabase);
 const rgOn = regionsOn(regions);
+// Virtual categories ("🇯🇵 Japanese Imports" = the Japan region) in the category filter.
+const vCats = rgOn ? activeVirtualCategories(regions) : [];
 // Paged — one request stops at 1,000 listings (later titles silently vanished).
 const { data: products } = await fetchAll((from, to) => supabase
   .from("products")
@@ -298,7 +301,7 @@ const posData = {
         <span class="mag" aria-hidden="true">🔎</span>
         <input id="inv-search" type="search" placeholder="Search or add — e.g. zelda botw switch cib good" autocomplete="off" />
       </div>
-      <select id="inv-cat"><option value="">All categories</option>{categories?.map((c) => <option value={c.id}>{c.name}</option>)}</select>
+      <select id="inv-cat"><option value="">All categories</option>{categories?.map((c) => <option value={c.id}>{c.name}</option>)}{vCats.map((v) => <option value={`v:${v.key}`} title={`Every listing with the ${v.region} region, whatever its category`}>{v.icon} {v.label}</option>)}</select>
       <select id="inv-plat" title="Only one platform (Nintendo Switch, 3DS…)"><option value="">All platforms</option></select>
       {rgOn && (
         <select id="inv-region" title="Only listings from one region (market)"><option value="">All regions</option>{regions.filter((r) => r.isActive).map((r) => <option value={r.code} title={r.name}>{r.flag} {r.short}</option>)}</select>
@@ -667,6 +670,7 @@ const posData = {
   import { barcodeEq } from "../../lib/gtin";
   import { openImportDialog, importPrice } from "../../lib/importDialog";
   import { openEbayImportDialog } from "../../lib/ebayImportDialog";
+  import { VIRTUAL_CATEGORIES } from "../../lib/virtualCategories";
   import { newListingKey, officialTitleFor, itemKind, norm as normImport } from "../../lib/collectionImport";
   import { upcEligible } from "../../lib/upcMatch";
   import { upcLike, identifyUpc } from "../../lib/upcClient";
@@ -1087,7 +1091,11 @@ const posData = {
       if (codeHits.length) return codeHits.sort(byTitle);
     }
     let list = liveItems().filter((p) => {
-      if (state.cat && p.categoryId !== state.cat) return false;
+      if (state.cat.startsWith("v:")) {
+        // Virtual category: a field, not the listing's one category.
+        const v = VIRTUAL_CATEGORIES.find((x) => `v:${x.key}` === state.cat);
+        if (v && regionOf(p.regionCode, regions) !== v.region) return false;
+      } else if (state.cat && p.categoryId !== state.cat) return false;
       if (state.plat && platKey(p) !== (state.plat === NO_PLAT ? "" : state.plat)) return false;
       if (state.region && regionOf(p.regionCode, regions) !== state.region) return false;
       if (state.instock && totalQty(p) <= 0) return false;
@@ -3104,14 +3112,9 @@ const posData = {
       const opt = [...sel.options].find((op) => op.value === sim.categoryId)
         || [...sel.options].find((op) => op.textContent?.toLowerCase() === String(it.categoryName).toLowerCase());
       if (opt) sel.value = opt.value;
-      // A Japan item and no Japan category yet: make "Japanese Imports" (managers).
-      let catNote = "";
-      if (sim.newCategory) {
-        if (data.isManager) {
-          try { const c = await createCategory(sim.newCategory); sel.value = c.id; catNote = ` · category “${c.name}” created`; }
-          catch { catNote = ""; }
-        } else catNote = ` · ask a manager to add a “${sim.newCategory}” category`;
-      }
+      // A Japan item keeps its real category — the Japan region puts it under
+      // the virtual "🇯🇵 Japanese Imports" too.
+      const catNote = sim.japan ? " → 🇯🇵 Japanese Imports" : "";
       pendingEbay = { input, group: sim.group || "", own: !!sim.ownListing };
       const meta = [sim.franchise && `series: ${sim.franchise}`, sim.character && `character: ${sim.character}`, sim.brand && `brand: ${sim.brand}`, sim.releaseYear && `year: ${sim.releaseYear}`].filter(Boolean).join(" · ");
       const note = $("np-ebay-note") as HTMLElement; note.hidden = false;
