@@ -484,6 +484,7 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
         <div class="lt-right">
           <div class="dm-field" style="min-width:0;">Preview
             <div id="lt-preview" class="lt-preview"></div>
+            <p id="lt-iconnote" class="muted-2" hidden style="margin:0.3rem 0 0;font-size:0.78rem;">⚠ The type icon doesn't fit beside the barcode on this label size — it's left off (it never prints over the price).</p>
           </div>
           <p id="lt-warn" class="muted-2" style="color:var(--magenta);" hidden>⚠ Barcode won’t fit at a scannable density — widen the label or shrink the spine.</p>
         </div>
@@ -1313,7 +1314,12 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       cb.addEventListener("change", async () => {
         const tr = cb.closest("tr") as HTMLElement;
         itStatus.textContent = "Saving…";
-        try { await icApi({ action: "setTypeLabelIcon", id: tr.dataset.itId, value: cb.checked }); itStatus.textContent = "✓ Saved — labels printed from now on show it"; }
+        try {
+          await icApi({ action: "setTypeLabelIcon", id: tr.dataset.itId, value: cb.checked });
+          itStatus.textContent = "✓ Saved — labels printed from now on show it";
+          // The label designer's sample follows along.
+          window.dispatchEvent(new CustomEvent("tl-label-icon", { detail: { id: tr.dataset.itId, icon: tr.dataset.icon, name: tr.dataset.name, on: cb.checked } }));
+        }
         catch (e: any) { cb.checked = !cb.checked; itStatus.textContent = ""; alert(e.message); }
       });
     });
@@ -1501,6 +1507,17 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       internalCode: "TL2C3F5A7B9D", labelCode: "1000000042", sku: "SNES-MMX3", storeName: blob.storeName || "TimeLag",
     };
     const shows = [...ltPanel.querySelectorAll<HTMLInputElement>("[data-ltshow]")];
+    // A type's "Label icon" ticked / unticked in Inventory types: the sample
+    // shows that type (or no icon once none is left).
+    window.addEventListener("tl-label-icon", (e: any) => {
+      const d = e.detail || {};
+      if (d.on && d.icon) Object.assign(SAMPLE, { invTypeId: d.id, invTypeIcon: d.icon, invTypeName: d.name || SAMPLE.invTypeName });
+      else if (!d.on && SAMPLE.invTypeId === d.id) {
+        const next = document.querySelector<HTMLElement>("tr[data-it-id]:has(.it-label:checked)");
+        Object.assign(SAMPLE, next ? { invTypeId: next.dataset.itId, invTypeIcon: next.dataset.icon || "", invTypeName: next.dataset.name || "" } : { invTypeId: "", invTypeIcon: "" });
+      }
+      ltPreview();
+    });
 
     function ltList() {
       const list = document.getElementById("lt-list")!;
@@ -1560,7 +1577,16 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     }
     function ltPreview() {
       const t = lts[sel];
-      const draw = () => { try { document.getElementById("lt-preview")!.innerHTML = renderLabelSvg(t, SAMPLE, { preview: true }); } catch { /* mid-edit invalid numbers */ } };
+      // The sample's type is one whose icon prints (store-wide list), so the
+      // corner shows on every template — including ones added this session.
+      const withIcon = { ...t, typeIconIds: SAMPLE.invTypeId ? [SAMPLE.invTypeId] : [] };
+      const draw = () => {
+        try {
+          const svg = renderLabelSvg(withIcon, SAMPLE, { preview: true });
+          document.getElementById("lt-preview")!.innerHTML = svg;
+          (document.getElementById("lt-iconnote") as HTMLElement).hidden = !svg.includes('data-icon-skipped="1"');
+        } catch { /* mid-edit invalid numbers */ }
+      };
       draw();
       // Re-draw once the chosen font finishes loading so the preview is honest.
       ensureLabelFont(t).then(draw).catch(() => {});
