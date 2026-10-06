@@ -2,7 +2,7 @@
 export const prerender = false;
 import AppLayout from "../../layouts/AppLayout.astro";
 import { labelTemplates } from "../../lib/labels";
-import { sanitizeSaved, LM_FONTS, inches, SIZE_4X6 } from "../../lib/labelMaker";
+import { sanitizeSaved, LM_FONTS, WORD_SIZES, inches, SIZE_4X6 } from "../../lib/labelMaker";
 
 // LABEL MAKER — type a note ("Includes IPS SCREEN MOD"), print it on the
 // store's small stickers (Zebra) or a 4×6 shipping label (the separate 4×6
@@ -38,9 +38,17 @@ const blob = { sizes, saved: sanitizeSaved((row?.settings as any)?.labelMakerSav
         <label class="lm-num">Height ″<input id="lm-ch" type="number" min="0.5" max="8" step="0.05" value="1" /></label>
       </div>
       <label id="lm-orient-wrap" class="lm-check" hidden><input type="checkbox" id="lm-landscape" /> Landscape — text runs along the long side (6 × 4″)</label>
-      <label>Text
-        <textarea id="lm-text" rows="4" maxlength="400" placeholder="Includes IPS SCREEN MOD"></textarea>
-      </label>
+      <div class="lm-textwrap">
+        <span class="lm-lbl" id="lm-text-lbl">Text</span>
+        <!-- Select words, then B / I or a size. Ctrl/⌘+B and +I work too. -->
+        <div class="lm-tools" role="toolbar" aria-label="Format selected text">
+          <button type="button" data-cmd="bold" title="Bold (Ctrl/⌘+B)" aria-pressed="false"><b>B</b></button>
+          <button type="button" data-cmd="italic" title="Italic (Ctrl/⌘+I)" aria-pressed="false"><i>I</i></button>
+          <span class="lm-tools-sep"></span>
+          {WORD_SIZES.map((z) => <button type="button" data-size={z.font} title={`Make the selected words ${z.label.toLowerCase()}`}>{z.label}</button>)}
+        </div>
+        <div id="lm-text" class="lm-editor" contenteditable="true" role="textbox" aria-multiline="true" aria-labelledby="lm-text-lbl" data-placeholder="Includes IPS SCREEN MOD" spellcheck="true"></div>
+      </div>
       <div class="lm-row">
         <label>Font<select id="lm-font">{LM_FONTS.map((f) => <option value={f.key}>{f.label}</option>)}</select></label>
         <label>Text size
@@ -53,7 +61,6 @@ const blob = { sizes, saved: sanitizeSaved((row?.settings as any)?.labelMakerSav
         </label>
       </div>
       <div class="lm-row lm-opts">
-        <label class="lm-check"><input type="checkbox" id="lm-bold" checked /> Bold</label>
         <span class="lm-seg" role="group" aria-label="Alignment">
           <button type="button" data-align="center" class="on" aria-pressed="true">Center</button>
           <button type="button" data-align="left" aria-pressed="false">Left</button>
@@ -88,7 +95,16 @@ const blob = { sizes, saved: sanitizeSaved((row?.settings as any)?.labelMakerSav
   .lm { display:grid; grid-template-columns:minmax(0, 23rem) minmax(0, 1fr); gap:1rem; align-items:start; }
   .lm-controls { display:flex; flex-direction:column; gap:0.75rem; }
   .lm-controls label { display:flex; flex-direction:column; gap:0.3rem; font-size:0.82rem; font-weight:700; color:var(--muted); }
-  .lm-controls textarea { font:inherit; font-size:1rem; resize:vertical; min-height:5.5rem; }
+  .lm-textwrap { display:flex; flex-direction:column; gap:0.3rem; }
+  .lm-lbl { font-size:0.82rem; font-weight:700; color:var(--muted); }
+  .lm-tools { display:flex; flex-wrap:wrap; align-items:center; gap:0.25rem; }
+  .lm-tools button { background:transparent; border:1px solid var(--border-strong); color:var(--text); font:inherit; font-size:0.8rem; padding:0.25rem 0.55rem; min-width:2rem; cursor:pointer; }
+  .lm-tools button[aria-pressed="true"] { background:color-mix(in srgb, var(--cyan) 18%, transparent); color:var(--cyan); border-color:var(--cyan); }
+  .lm-tools-sep { width:0.4rem; }
+  /* 16px base: the size buttons' 13 / 16 / 24 / 32px read back as × 0.81 / 1 / 1.5 / 2. */
+  .lm-editor { min-height:5.5rem; max-height:16rem; overflow:auto; padding:0.55rem 0.7rem; font-size:16px; font-weight:400; line-height:1.3; background:var(--bg); color:var(--text); border:1px solid var(--border-strong); outline:none; white-space:pre-wrap; overflow-wrap:anywhere; }
+  .lm-editor:focus { border-color:var(--cyan); }
+  .lm-editor:empty::before { content:attr(data-placeholder); color:var(--muted-2); }
   .lm-row { display:flex; flex-wrap:wrap; gap:0.6rem; align-items:flex-end; }
   .lm-row > label { flex:1 1 9rem; }
   .lm-controls label.lm-check { flex-direction:row; align-items:center; gap:0.4rem; flex:0 0 auto; color:var(--text); font-weight:600; }
@@ -118,7 +134,7 @@ const blob = { sizes, saved: sanitizeSaved((row?.settings as any)?.labelMakerSav
 </style>
 
 <script>
-  import { renderTextLabelSvg, layoutTextLabel, inches, type TextLabelSpec, type SavedLabel, type TextSize } from "../../lib/labelMaker";
+  import { renderTextLabelSvg, layoutTextLabel, inches, plainText, sanitizeLines, linesFromText, fontOf, type TextLabelSpec, type SavedLabel, type TextSize, type RichLine } from "../../lib/labelMaker";
   import { ensureLabelFont, type LabelTemplate } from "../../lib/labels";
   import { fontStyleTag } from "../../lib/labelPdf";
   import { printSvgLabels, type RotateDeg } from "../../lib/labelPrint";
@@ -151,11 +167,79 @@ const blob = { sizes, saved: sanitizeSaved((row?.settings as any)?.labelMakerSav
     if (s.key === "4x6" && $<HTMLInputElement>("lm-landscape").checked) return { widthMm: s.heightMm, heightMm: s.widthMm };
     return { widthMm: s.widthMm, heightMm: s.heightMm };
   };
+  // ---- the formatted text box ----
+  // What it shows is read back through the browser's computed styles, so
+  // whatever markup the browser made for B / I / sizes, the label matches.
+  const ed = $("lm-text");
+  const BASE_PX = 16;
+  function readEditor(): RichLine[] {
+    const lines: RichLine[] = [[]];
+    const cur = () => lines[lines.length - 1];
+    const BLOCK = /^(DIV|P|LI|H[1-6])$/;
+    const walk = (node: Node) => {
+      node.childNodes.forEach((ch) => {
+        if (ch.nodeType === Node.TEXT_NODE) {
+          const text = (ch.nodeValue || "").replace(/\u00a0/g, " ").replace(/[\r\n]+/g, " ");
+          if (!text) return;
+          const cs = getComputedStyle(ch.parentElement || ed);
+          const w = cs.fontWeight === "bold" ? 700 : Number(cs.fontWeight) || 400;
+          cur().push({ text, bold: w >= 600, italic: cs.fontStyle === "italic" || cs.fontStyle.startsWith("oblique"), scale: parseFloat(cs.fontSize) / BASE_PX || 1 });
+        } else if (ch.nodeName === "BR") lines.push([]);
+        else if (ch.nodeType === Node.ELEMENT_NODE) {
+          const block = BLOCK.test(ch.nodeName);
+          if (block && cur().length) lines.push([]);
+          walk(ch);
+          if (block && cur().length) lines.push([]);
+        }
+      });
+    };
+    walk(ed);
+    return sanitizeLines(lines);
+  }
+  function writeEditor(lines: RichLine[]) {
+    ed.replaceChildren(...lines.map((line) => {
+      const div = document.createElement("div");
+      if (!line.length) div.appendChild(document.createElement("br"));
+      for (const r of line) {
+        const span = document.createElement("span");
+        span.textContent = r.text;
+        if (r.bold) span.style.fontWeight = "700";
+        if (r.italic) span.style.fontStyle = "italic";
+        if (r.scale !== 1) span.style.fontSize = `${Math.round(r.scale * BASE_PX)}px`;
+        div.appendChild(span);
+      }
+      return div;
+    }));
+  }
+  // Pasted text arrives plain (no other site's fonts / colours in a label).
+  ed.addEventListener("paste", (e) => {
+    e.preventDefault();
+    document.execCommand("insertText", false, e.clipboardData?.getData("text/plain") ?? "");
+  });
+  ed.addEventListener("input", () => { if (!ed.textContent) ed.innerHTML = ""; render(); }); // empty → placeholder shows
+  // Toolbar: mousedown keeps the selection in the box.
+  document.querySelectorAll<HTMLButtonElement>(".lm-tools button").forEach((b) => {
+    b.addEventListener("mousedown", (e) => e.preventDefault());
+    b.addEventListener("click", () => {
+      ed.focus();
+      document.execCommand("styleWithCSS", false, "false");
+      if (b.dataset.cmd) document.execCommand(b.dataset.cmd);
+      else if (b.dataset.size) document.execCommand("fontSize", false, b.dataset.size);
+      syncTools(); render();
+    });
+  });
+  function syncTools() {
+    for (const cmd of ["bold", "italic"]) {
+      const on = document.activeElement === ed && document.queryCommandState(cmd);
+      document.querySelector(`.lm-tools [data-cmd="${cmd}"]`)?.setAttribute("aria-pressed", String(on));
+    }
+  }
+  document.addEventListener("selectionchange", syncTools);
+
   const spec = (): TextLabelSpec => ({
     ...dims(),
-    text: $<HTMLTextAreaElement>("lm-text").value,
+    lines: readEditor(),
     fontKey: $<HTMLSelectElement>("lm-font").value,
-    bold: $<HTMLInputElement>("lm-bold").checked,
     align,
     textSize: $<HTMLSelectElement>("lm-tsize").value as TextSize,
     border: $<HTMLInputElement>("lm-border").checked,
@@ -167,7 +251,8 @@ const blob = { sizes, saved: sanitizeSaved((row?.settings as any)?.labelMakerSav
     $("lm-custom").hidden = sizeOf()?.key !== "custom";
     $("lm-orient-wrap").hidden = !is4x6();
     $("lm-preview").innerHTML = renderTextLabelSvg(s, measure);
-    $("lm-overflow").hidden = !s.text.trim() || layoutTextLabel(s, measure).fits;
+    $("lm-overflow").hidden = !plainText(s.lines).trim() || layoutTextLabel(s, measure).fits;
+    ed.style.fontFamily = fontOf(s.fontKey).f.family; // the box shows the label's font
     $("lm-sizecap").textContent = `${inches(s.widthMm)} × ${inches(s.heightMm)}″`;
     const canZebra = !!zebra && sizeOf()?.zebra;
     $("lm-zebra").hidden = !canZebra;
@@ -201,7 +286,7 @@ const blob = { sizes, saved: sanitizeSaved((row?.settings as any)?.labelMakerSav
   };
   $("lm-print").addEventListener("click", async () => {
     const s = spec();
-    if (!s.text.trim()) { alert("Type the label's text first."); $("lm-text").focus(); return; }
+    if (!plainText(s.lines).trim()) { alert("Type the label's text first."); ed.focus(); return; }
     const svg = await printableSvg(s);
     // 4×6: its own printer, portrait paper — landscape text turns onto it.
     const opts = is4x6() ? { rotateDeg: ($<HTMLInputElement>("lm-landscape").checked ? 90 : 0) as RotateDeg } : stickerTune(s);
@@ -209,7 +294,7 @@ const blob = { sizes, saved: sanitizeSaved((row?.settings as any)?.labelMakerSav
   });
   $("lm-zebra").addEventListener("click", async () => {
     const s = spec();
-    if (!s.text.trim()) { alert("Type the label's text first."); $("lm-text").focus(); return; }
+    if (!plainText(s.lines).trim()) { alert("Type the label's text first."); ed.focus(); return; }
     if (!zebra) return;
     const btn = $<HTMLButtonElement>("lm-zebra"); btn.disabled = true;
     try {
@@ -227,9 +312,9 @@ const blob = { sizes, saved: sanitizeSaved((row?.settings as any)?.labelMakerSav
   const current = (): Omit<SavedLabel, "id" | "name"> => {
     const s = spec();
     return {
-      text: s.text, sizeKey: sizeOf()?.key ?? "", landscape: $<HTMLInputElement>("lm-landscape").checked,
+      text: plainText(s.lines), lines: s.lines, sizeKey: sizeOf()?.key ?? "", landscape: $<HTMLInputElement>("lm-landscape").checked,
       customW: Number($<HTMLInputElement>("lm-cw").value) * 25.4, customH: Number($<HTMLInputElement>("lm-ch").value) * 25.4,
-      fontKey: s.fontKey, bold: s.bold, align: s.align, textSize: s.textSize, border: s.border,
+      fontKey: s.fontKey, align: s.align, textSize: s.textSize, border: s.border,
     };
   };
   function load(l: Partial<SavedLabel>) {
@@ -237,10 +322,11 @@ const blob = { sizes, saved: sanitizeSaved((row?.settings as any)?.labelMakerSav
     if (l.customW) $<HTMLInputElement>("lm-cw").value = (l.customW / 25.4).toFixed(2);
     if (l.customH) $<HTMLInputElement>("lm-ch").value = (l.customH / 25.4).toFixed(2);
     $<HTMLInputElement>("lm-landscape").checked = !!l.landscape;
-    if (l.text != null) $<HTMLTextAreaElement>("lm-text").value = l.text;
+    // Formatted runs (older saves / this station's last label: plain text).
+    if (Array.isArray(l.lines)) writeEditor(sanitizeLines(l.lines));
+    else if (l.text != null) writeEditor(sanitizeLines(linesFromText(l.text, (l as any).bold === true)));
     if (l.fontKey) $<HTMLSelectElement>("lm-font").value = l.fontKey;
     if (l.textSize) $<HTMLSelectElement>("lm-tsize").value = l.textSize;
-    if (l.bold != null) $<HTMLInputElement>("lm-bold").checked = l.bold;
     if (l.border != null) $<HTMLInputElement>("lm-border").checked = l.border;
     if (l.align) setAlign(l.align);
     ensureLabelFont(fontTpl($<HTMLSelectElement>("lm-font").value)).then(render);
@@ -278,7 +364,7 @@ const blob = { sizes, saved: sanitizeSaved((row?.settings as any)?.labelMakerSav
     document.querySelectorAll<HTMLElement>(".lm-seg [data-align]").forEach((b) => { const on = b.dataset.align === a; b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); });
   }
   document.querySelectorAll<HTMLElement>(".lm-seg [data-align]").forEach((b) => b.addEventListener("click", () => { setAlign(b.dataset.align === "left" ? "left" : "center"); render(); }));
-  for (const id of ["lm-size", "lm-cw", "lm-ch", "lm-landscape", "lm-text", "lm-tsize", "lm-bold", "lm-border"]) $(id).addEventListener("input", render);
+  for (const id of ["lm-size", "lm-cw", "lm-ch", "lm-landscape", "lm-tsize", "lm-border"]) $(id).addEventListener("input", render);
   $("lm-font").addEventListener("change", () => { render(); ensureLabelFont(fontTpl($<HTMLSelectElement>("lm-font").value)).then(render); });
 
   // This station's last label comes back (handy when printing a run).
