@@ -103,6 +103,9 @@ export type LabelTemplate = {
   titleMaxChars: number;                 // 10–60 — hard cut-off (… beyond this)
   titleDropThe: boolean;                 // print "Legend of Zelda: …" — a leading "The" spends room for nothing
   typeIconMm: number;                    // 1.5–8 — size of the inventory type icon (bottom-right)
+  // Completeness codes whose condition stays OFF the spine (the face still
+  // shows it) — a loose cart is obviously loose, so "LOOSE" there is noise.
+  spineCondSkip: string[];
   isDefault?: boolean;
   // Not saved with the template: the inventory types whose icon prints on
   // labels (Settings → Inventory types → "Label icon"), filled in by
@@ -116,6 +119,7 @@ export type LabelItem = {
   categoryName: string;   // e.g. "Super Nintendo" (platform preferred)
   region?: string;        // short region tag, e.g. "JP" ("" / absent = home region; regionTag())
   condShort: string;      // e.g. "CIB · ★★★" (conditionDisplay compAbbrev style)
+  compCode?: string;      // the variant's completeness code (e.g. "L") — for tpl.spineCondSkip
   priceCents: number;
   invTypeName: string;    // e.g. "Personal Collection" ("" hides)
   invTypeId?: string;     // the variant's inventory type — its icon prints when that type is picked
@@ -151,6 +155,7 @@ export const DEFAULT_TEMPLATE: LabelTemplate = {
   titleMaxChars: 56,
   titleDropThe: true,
   typeIconMm: 3,
+  spineCondSkip: ["L"], // the seeded Loose level
   isDefault: true,
 };
 
@@ -204,6 +209,10 @@ export function sanitizeLabelTemplates(raw: any): LabelTemplate[] {
       titleMaxChars: clamp(t.titleMaxChars, 10, 60, d.titleMaxChars),
       titleDropThe: t.titleDropThe !== false,
       typeIconMm: clamp(t.typeIconMm, 1.5, 8, d.typeIconMm),
+      // Never set → the default (Loose off the spine); [] = print every level.
+      spineCondSkip: Array.isArray(t.spineCondSkip)
+        ? [...new Set<string>(t.spineCondSkip.filter((c: any) => typeof c === "string" && c.length > 0 && c.length <= 24))].slice(0, 20)
+        : [...d.spineCondSkip],
       isDefault: t.isDefault === true,
     });
     // Cross-clamps: independent ranges can still combine into impossible
@@ -363,7 +372,8 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
     const tagline = tpl.show.spineText ? tpl.spineText.trim() : "";
     const advance = chW + (FP.spacing ?? 0);
     const priceStr = tpl.show.price ? money(item.priceCents) : "";
-    const condStr = tpl.show.spineCondition ? (item.condShort.split("·")[0] || "").trim().slice(0, 8) : "";
+    const condOnSpine = tpl.show.spineCondition && !(item.compCode && (tpl.spineCondSkip ?? []).includes(item.compCode));
+    const condStr = condOnSpine ? (item.condShort.split("·")[0] || "").trim().slice(0, 8) : "";
     let pF = 4.8 * fs * tpl.priceScale * fsc;
     let cF = 2.6 * fs * fsc;
     const tagF = 2.0 * fs * fsc;
