@@ -673,6 +673,35 @@ const posData = {
   const data = JSON.parse(document.getElementById("pos-data")!.textContent!);
   let items: any[] = data.items;
   const categories: any[] = data.categories;
+  // "＋ New category…" at the end of a category dropdown (managers): asks for a
+  // name, finds-or-creates it, adds it to every category dropdown, selects it.
+  const NEW_CAT = "__new_category__";
+  async function createCategory(name: string): Promise<any> {
+    const r = await fetch("/api/pos/ebay-import", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode: "ensure-category", name }) });
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error(j.error || "Couldn't create the category");
+    if (!categories.some((c: any) => c.id === j.category.id)) categories.push({ ...j.category, default_completeness: null });
+    for (const sel of document.querySelectorAll<HTMLSelectElement>("#np-cat, #m-category")) {
+      if ([...sel.options].some((o) => o.value === j.category.id)) continue;
+      const opt = new Option(j.category.name, j.category.id);
+      const newOpt = [...sel.options].find((o) => o.value === NEW_CAT);
+      sel.insertBefore(opt, newOpt || null);
+    }
+    return j.category;
+  }
+  function wireNewCategory(sel: HTMLSelectElement | null) {
+    if (!sel || !data.isManager || [...sel.options].some((o) => o.value === NEW_CAT)) return;
+    sel.add(new Option("＋ New category…", NEW_CAT));
+    let prev = sel.value;
+    sel.addEventListener("focus", () => { if (sel.value !== NEW_CAT) prev = sel.value; });
+    sel.addEventListener("change", async () => {
+      if (sel.value !== NEW_CAT) { prev = sel.value; return; }
+      const name = (prompt("New category name (e.g. Japanese Imports):", "") || "").replace(/\s+/g, " ").trim().slice(0, 40);
+      if (!name) { sel.value = prev; return; }
+      try { const c = await createCategory(name); sel.value = c.id; prev = c.id; toast(`✓ Category “${c.name}” ready`); }
+      catch (e: any) { sel.value = prev; alert(e.message); }
+    });
+  }
   const completeness: any[] = data.completeness || [];
   const grades: any[] = data.grades || [];
   const conditionPricing: boolean = !!data.conditionPricing;
@@ -1312,6 +1341,7 @@ const posData = {
     const ebayLink = $("m-ebaylink") as HTMLAnchorElement;
     if (p.ebayId) { ebayLink.href = `https://www.ebay.com/itm/${p.ebayId}`; ebayLink.hidden = false; } else { ebayLink.hidden = true; }
 
+    wireNewCategory(document.getElementById("m-category") as HTMLSelectElement | null);
     // A UPC names ONE release — moving a listing that has one to another
     // region deserves a look before saving.
     document.getElementById("m-region")?.addEventListener("change", (ev) => {
@@ -2906,6 +2936,16 @@ const posData = {
   });
 
   wireComp($("np-comp") as HTMLInputElement, $("np-comp-abbr"));
+  wireNewCategory(document.getElementById("np-cat") as HTMLSelectElement | null);
+  // A Japanese barcode (JAN: 13 digits starting 45 / 49) is a Japan release.
+  $("np-barcode")?.addEventListener("change", () => {
+    const code = ($("np-barcode") as HTMLInputElement).value.replace(/\D/g, "");
+    const sel = document.getElementById("np-region") as HTMLSelectElement | null;
+    const jp = regions.find((r: any) => r.code === "JP" || /japan/i.test(r.name));
+    if (!sel || !jp || !/^4[59]\d{11}$/.test(code) || sel.value === jp.code || !isDefaultRegion(sel.value, regions)) return;
+    sel.value = jp.code;
+    toast("🇯🇵 Japanese barcode (JAN) — region set to Japan");
+  });
   $("np-save").addEventListener("click", async () => {
     const comp = compVal($("np-comp") as HTMLInputElement);
     const grade = ($("np-grade") as HTMLSelectElement).value;
@@ -3054,10 +3094,18 @@ const posData = {
       const opt = [...sel.options].find((op) => op.value === sim.categoryId)
         || [...sel.options].find((op) => op.textContent?.toLowerCase() === String(it.categoryName).toLowerCase());
       if (opt) sel.value = opt.value;
+      // A Japan item and no Japan category yet: make "Japanese Imports" (managers).
+      let catNote = "";
+      if (sim.newCategory) {
+        if (data.isManager) {
+          try { const c = await createCategory(sim.newCategory); sel.value = c.id; catNote = ` · category “${c.name}” created`; }
+          catch { catNote = ""; }
+        } else catNote = ` · ask a manager to add a “${sim.newCategory}” category`;
+      }
       pendingEbay = { input, group: sim.group || "", own: !!sim.ownListing };
       const meta = [sim.franchise && `series: ${sim.franchise}`, sim.character && `character: ${sim.character}`, sim.brand && `brand: ${sim.brand}`, sim.releaseYear && `year: ${sim.releaseYear}`].filter(Boolean).join(" · ");
       const note = $("np-ebay-note") as HTMLElement; note.hidden = false;
-      note.innerHTML = `${it.primaryImage ? `<img src="${esc(it.primaryImage)}" alt="" style="width:46px;height:46px;object-fit:cover;border:1px solid var(--line);">` : ""}<div><strong>✓ Filled from eBay</strong> · ${esc(it.conditionLabel || "—")} · price ${ship ? `${money(it.priceCents)} + ${money(ship)} shipping = <strong>${money(it.priceCents + ship)}</strong> <button type="button" class="link-btn" id="np-ebay-noship" title="Use their item price without shipping">use ${money(it.priceCents)}</button>` : ship === 0 ? `${money(it.priceCents)} (free shipping)` : `${money(it.priceCents)}${sim.shipZip ? " (no shipping quote)" : ` <span title="Set the store's ZIP in Settings → eBay to include calculated shipping">(shipping not included — set ZIP in Settings → eBay)</span>`}`}${code ? " · UPC/EAN " + esc(code) : ""}${sim.japan ? " · 🇯🇵 Japan item" : ""}${sim.ownListing ? " · <em>your own listing</em>" : sim.seller ? ` · seller ${esc(sim.seller)}` : ""}<br><span style="color:var(--muted-2);">${esc(it.title.slice(0, 90))}</span>${meta ? `<br><span style="color:var(--muted-2);">On Save: cover photo + ${esc(meta)}</span>` : `<br><span style="color:var(--muted-2);">On Save: cover photo</span>`}${(sim.warnings || []).length ? `<br><span style="color:var(--magenta);">⚠ ${esc(sim.warnings.join(" · "))}</span>` : ""}</div>`;
+      note.innerHTML = `${it.primaryImage ? `<img src="${esc(it.primaryImage)}" alt="" style="width:46px;height:46px;object-fit:cover;border:1px solid var(--line);">` : ""}<div><strong>✓ Filled from eBay</strong> · ${esc(it.conditionLabel || "—")} · price ${ship ? `${money(it.priceCents)} + ${money(ship)} shipping = <strong>${money(it.priceCents + ship)}</strong> <button type="button" class="link-btn" id="np-ebay-noship" title="Use their item price without shipping">use ${money(it.priceCents)}</button>` : ship === 0 ? `${money(it.priceCents)} (free shipping)` : `${money(it.priceCents)}${sim.shipZip ? " (no shipping quote)" : ` <span title="Set the store's ZIP in Settings → eBay to include calculated shipping">(shipping not included — set ZIP in Settings → eBay)</span>`}`}${code ? " · UPC/EAN " + esc(code) : ""}${sim.japan ? ` · 🇯🇵 Japan item${sim.japanWhy ? ` (${esc(sim.japanWhy)})` : ""}${esc(catNote)}` : ""}${sim.ownListing ? " · <em>your own listing</em>" : sim.seller ? ` · seller ${esc(sim.seller)}` : ""}<br><span style="color:var(--muted-2);">${esc(it.title.slice(0, 90))}</span>${meta ? `<br><span style="color:var(--muted-2);">On Save: cover photo + ${esc(meta)}</span>` : `<br><span style="color:var(--muted-2);">On Save: cover photo</span>`}${(sim.warnings || []).length ? `<br><span style="color:var(--magenta);">⚠ ${esc(sim.warnings.join(" · "))}</span>` : ""}</div>`;
       document.getElementById("np-ebay-noship")?.addEventListener("click", (e) => {
         ($("np-price") as HTMLInputElement).value = (it.priceCents / 100).toFixed(2);
         (e.currentTarget as HTMLElement).replaceWith(document.createTextNode("(using item price)"));
