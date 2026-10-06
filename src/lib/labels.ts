@@ -102,6 +102,7 @@ export type LabelTemplate = {
   logoSide: "left" | "right";            // logo before/after the price (read order); no-spine: lower corner
   titleMaxChars: number;                 // 10–60 — hard cut-off (… beyond this)
   titleDropThe: boolean;                 // print "Legend of Zelda: …" — a leading "The" spends room for nothing
+  typeIconMm: number;                    // 1.5–8 — size of the inventory type icon (bottom-right)
   isDefault?: boolean;
   // Not saved with the template: the inventory types whose icon prints on
   // labels (Settings → Inventory types → "Label icon"), filled in by
@@ -149,6 +150,7 @@ export const DEFAULT_TEMPLATE: LabelTemplate = {
   logoSide: "left",
   titleMaxChars: 56,
   titleDropThe: true,
+  typeIconMm: 3,
   isDefault: true,
 };
 
@@ -201,6 +203,7 @@ export function sanitizeLabelTemplates(raw: any): LabelTemplate[] {
       logoSide: t.logoSide === "right" ? "right" : "left",
       titleMaxChars: clamp(t.titleMaxChars, 10, 60, d.titleMaxChars),
       titleDropThe: t.titleDropThe !== false,
+      typeIconMm: clamp(t.typeIconMm, 1.5, 8, d.typeIconMm),
       isDefault: t.isDefault === true,
     });
     // Cross-clamps: independent ranges can still combine into impossible
@@ -570,7 +573,7 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
   // solid black silhouette: a thermal printer is black-or-white, and a colour
   // emoji would print as specks.
   const iconOn = tpl.show.typeIcon && !!item.invTypeIcon && !!item.invTypeId && (tpl.typeIconIds ?? []).includes(item.invTypeId);
-  const icS = iconOn ? Math.min(5.2 * fs, H * 0.22) : 0;          // icon box, mm
+  const icS = iconOn ? Math.min(tpl.typeIconMm, H * 0.3) : 0;     // icon box, mm (a small mark — owner)
   const icRight = fx + contentW;                                    // the content column's right edge
   let icBottom = H - BOTTOM;
   // Barcode pinned to the bottom (face-width, or full label width — see above).
