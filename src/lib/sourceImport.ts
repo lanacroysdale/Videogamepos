@@ -22,7 +22,10 @@ export interface CapturedPage {
   images: string[];              // absolute image URLs, biggest first
   text: string;                  // the page's visible text (trimmed)
   lang: string;
+  offers: SiteOffer[];           // the shop's own condition / price pickers (Suruga-ya)
+  vars: Record<string, unknown>; // the shop's item data globals (Buyee: gaItemDetailData / itemData)
 }
+export interface SiteOffer { label: string; price: number | null; stock: number | null; checked: boolean }
 
 const str = (v: unknown, max: number) => (typeof v === "string" ? v : v == null ? "" : String(v)).replace(/\u0000/g, "").slice(0, max);
 const strList = (v: unknown, maxItems: number, maxLen: number) =>
@@ -67,7 +70,19 @@ export function sanitizeCaptured(raw: any): CapturedPage | null {
     images: strList(raw.images, 12, 1000).map(publicUrl).filter(Boolean),
     text: str(raw.text, 6000),
     lang: str(raw.lang, 20),
+    offers: (Array.isArray(raw.offers) ? raw.offers : []).slice(0, 12).map((o: any) => ({
+      label: str(o?.label, 60), price: num(o?.price), stock: o?.stock == null || o?.stock === "" ? null : Number(o.stock) || 0, checked: !!o?.checked,
+    })),
+    vars: boundedVars(raw.vars),
   };
+}
+function boundedVars(v: unknown): Record<string, unknown> {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  const out: Record<string, unknown> = {};
+  for (const [k, x] of Object.entries(v).slice(0, 4)) {
+    try { if (/^[A-Za-z_$][\w$]{0,40}$/.test(k) && JSON.stringify(x).length <= 20_000) out[k] = x; } catch { /* circular */ }
+  }
+  return out;
 }
 
 // ---- where it came from --------------------------------------------------
@@ -95,8 +110,8 @@ export function sourceOf(url: string): { host: string; label: string; japan: boo
 /** A shop's own item number from its URL, when it has one (for "already imported?"). */
 export function sourceItemId(url: string): string {
   try {
-    const u = new URL(url);
-    const m = u.pathname.match(/\/(?:product(?:\/detail)?|item(?:\/[a-z]+)*?|auction|items?|dp|gp\/product)\/(?:[a-z]+\/)*([A-Za-z0-9_-]{5,40})/i);
+    const path = decodeURIComponent(new URL(url).pathname);
+    const m = path.match(/\/(?:product(?:\/detail)?|detail|item(?:\/[a-z]+)*?|auction|items?|dp|gp\/product)\/(?:[a-z]+\/)*([A-Za-z0-9_:.-]{5,60})/i);
     return m ? m[1] : "";
   } catch { return ""; }
 }
@@ -153,26 +168,39 @@ export function pageFacts(p: CapturedPage): PageFacts {
     .sort((a, b) => (/instock/i.test(String(b.o.availability ?? "")) ? 1 : 0) - (/instock/i.test(String(a.o.availability ?? "")) ? 1 : 0) || a.n! - b.n!);
   const best = priced[0];
   const m = p.meta;
-  let price = best?.n ?? num(m["product:price:amount"] ?? m["og:price:amount"] ?? m["price"]);
-  let currency = firstStr(best?.o?.priceCurrency, offers[0]?.priceCurrency, m["product:price:currency"], m["og:price:currency"], m["pricecurrency"]).toUpperCase();
+  // The shop's own pickers beat JSON-LD (Suruga-ya's JSON-LD carries the list
+  // price, not the sale price): the one chosen on the page, else the cheapest in stock.
+  const site = p.offers.filter((o) => o.price != null);
+  const pick = site.find((o) => o.checked) ?? site.filter((o) => (o.stock ?? 1) > 0).sort((a, b) => a.price! - b.price!)[0] ?? site[0];
+  // Buyee: no JSON-LD — its item data globals have the name + yen price.
+  const v: any = (p.vars as any).gaItemDetailData ?? (p.vars as any).itemData ?? {};
+  const vPrice = num(v.price ?? v.current_price ?? v.priceYen);
+  let price = pick?.price ?? best?.n ?? vPrice ?? num(m["product:price:amount"] ?? m["og:price:amount"] ?? m["price"]);
+  let currency = firstStr(best?.o?.priceCurrency, offers[0]?.priceCurrency, m["product:price:currency"], m["og:price:currency"], m["pricecurrency"]).toUpperCase()
+    || (pick || vPrice != null ? "JPY" : "");
   // Last resort: a yen price in the page text ("¥1,980" / "1,980円").
   if (price == null) {
     const y = p.text.match(/[¥￥]\s?([\d,]{2,9})|([\d,]{2,9})\s?円/);
     if (y) { price = num(y[1] ?? y[2]); currency = currency || "JPY"; }
   }
-  const condRaw = firstStr(best?.o?.itemCondition, offers[0]?.itemCondition, prod.itemCondition, m["product:condition"], m["og:condition"]).toLowerCase();
-  const condition = /new/.test(condRaw) ? "new" : /used|refurb|damaged/.test(condRaw) ? "used" : "";
+  const condRaw = (pick ? pick.label : firstStr(best?.o?.itemCondition, offers[0]?.itemCondition, prod.itemCondition, m["product:condition"], m["og:condition"])).toLowerCase();
+  const condition = /新品|未開封|new|unopened|sealed/.test(condRaw) ? "new" : /中古|used|refurb|damaged|junk|ジャンク/.test(condRaw) ? "used" : "";
   // JAN / EAN / UPC: the structured one, else a JAN-looking number near "JAN".
   let gtin = [prod.gtin13, prod.gtin, prod.gtin12, prod.gtin14, prod.gtin8, m["product:ean"], m["product:upc"], m["gtin13"]].map(digits).find((d) => /^\d{8}$|^\d{12,14}$/.test(d)) ?? "";
   if (!gtin) { const j = p.text.match(/(?:JAN|EAN|ＪＡＮ)[^\d]{0,12}(\d{13})/i); if (j) gtin = j[1]; }
   const ldImages = imgOf(prod.image).map(publicUrl).filter(Boolean);
   const images = [...new Set([...ldImages, ...(m["og:image"] ? [publicUrl(m["og:image"])] : []).filter(Boolean), ...p.images])].slice(0, 12);
-  const name = firstStr(prod.name, m["og:title"], p.heads[0], p.title);
+  const name = firstStr(prod.name, v.name, v.item_name, m["og:title"], p.heads[0], p.title).replace(/^\s*[<＜](中古|新品)[>＞]\s*/, "");
   // suruga-ya.com shows "Japanese title: …" under the English one.
+  // The original (Japanese) title: an explicit "Japanese title:", else the
+  // name itself when it's Japanese (Buyee, suruga-ya.jp), else the first
+  // Japanese heading right under it (suruga-ya.com) — never a "you may also
+  // like" item further down the page.
+  const JP = /[\u3040-\u30ff\u4e00-\u9faf]/;
   const alt = (p.heads.find((h) => /^japanese title\s*[:：]/i.test(h)) || "").replace(/^japanese title\s*[:：]\s*/i, "")
-    || p.heads.find((h) => h !== name && /[\u3040-\u30ff\u4e00-\u9faf]/.test(h)) || "";
+    || (JP.test(name) ? name : p.heads.slice(0, 3).find((h) => h !== name && JP.test(h))) || "";
   // Shop prefixes off the original title: "PS3ソフト …", "<中古>…".
-  const cleanAlt = alt.replace(/^\s*[<＜](中古|新品)[>＞]\s*/, "").replace(/^[A-Za-z0-9０-９Ａ-Ｚａ-ｚ .・ー-]{0,20}ソフト\s+/, "").trim();
+  const cleanAlt = alt.replace(/^\s*[<＜【\[](中古|新品|未使用|ジャンク)[>＞】\]]\s*/, "").replace(/^[A-Za-z0-9０-９Ａ-Ｚａ-ｚ .・ー-]{0,20}ソフト\s+/, "").trim();
   return {
     name: name.slice(0, 300),
     nameAlt: cleanAlt.slice(0, 300),
@@ -227,15 +255,19 @@ if(location.origin===P){alert("Open a product page on Suruga-ya, Buyee or anothe
 var d=document,T=function(e){return((e&&(e.innerText||e.textContent))||"").replace(/\\s+/g," ").trim()},A=function(u){try{return new URL(u,location.href).href}catch(x){return""}},E=function(s){return[].slice.call(d.querySelectorAll(s))};
 var meta={};E("meta[content]").forEach(function(m){var k=(m.getAttribute("property")||m.getAttribute("name")||m.getAttribute("itemprop")||"").toLowerCase();if(k&&/^(og:|product:|twitter:(title|image)|description$|price|pricecurrency|gtin|sku|brand|availability|itemcondition)/.test(k)&&!(k in meta))meta[k]=String(m.content).slice(0,400)});
 var ld=[];E('script[type="application/ld+json"]').forEach(function(s){try{ld.push(JSON.parse(s.textContent))}catch(x){}});
-var heads=[];E("h1,h2,h7,[class*=title_product],[id*=item_title],[class*=itemTitle],[class*=ItemTitle],[class*=item-title],[class*=product-title],[class*=productTitle],[data-testid*=name],[data-testid*=title]").forEach(function(e){var x=T(e);if(x&&x.length<300&&heads.indexOf(x)<0&&heads.length<10)heads.push(x)});
-var crumbs=[];E("[class*=readcrumb] a,[class*=readcrumb] li,nav[aria-label*=read] a,[class*=topicpath] a,[class*=pankuzu] a").forEach(function(e){var x=T(e);if(x&&x.length<80&&crumbs.indexOf(x)<0&&crumbs.length<15)crumbs.push(x)});
+var heads=[];E("h1").concat(E("h7,[class*=title_product],[id*=item_title],[class*=itemTitle],[class*=ItemTitle],[class*=item-title],[class*=product-title],[class*=productTitle],[data-testid*=name],[data-testid*=title],h2")).forEach(function(e){var x=T(e);if(x&&x.length<300&&heads.indexOf(x)<0&&heads.length<10)heads.push(x)});
+var crumbs=[];E("[class*=readcrumb] a,[class*=readcrumb] li,nav[aria-label*=read] a,[class*=topicpath] a,[class*=pankuzu] a,.cat_navi a,.shopping_item_category_path a").forEach(function(e){var x=T(e);if(x&&x.length<80&&crumbs.indexOf(x)<0&&crumbs.length<15)crumbs.push(x)});
 var imgs=[],add=function(u){u=A(u);if(/^https?:/.test(u)&&imgs.indexOf(u)<0&&imgs.length<12)imgs.push(u)};if(meta["og:image"])add(meta["og:image"]);
 E("img").filter(function(i){return i.naturalWidth>=160&&i.naturalHeight>=160}).sort(function(a,b){return b.naturalWidth*b.naturalHeight-a.naturalWidth*a.naturalHeight}).slice(0,10).forEach(function(i){add(i.currentSrc||i.src)});
+E("a.js-smartPhoto[href],li[data-thumb],img[data-src],img[data-original],img[data-lazy-src]").forEach(function(e){var x=e.getAttribute("href")||e.getAttribute("data-thumb")||e.getAttribute("data-src")||e.getAttribute("data-original")||e.getAttribute("data-lazy-src")||"";if(/\.(jpe?g|png|webp|gif)([?@#]|$)/i.test(x)&&!/@webp/i.test(x))add(x)});
+var offers=[];E("input[name=grade][data-zaiko]").forEach(function(i){try{var z=JSON.parse(i.getAttribute("data-zaiko"));offers.push({label:T(i.closest("label")||i.parentNode).slice(0,60),price:z.price_sale||z.baika,stock:z.zaiko,checked:!!i.checked})}catch(x){}});
+E("input[name=variation][data-price]").forEach(function(i){offers.push({label:String(i.getAttribute("data-name")||"").slice(0,60),price:i.getAttribute("data-price"),stock:i.getAttribute("data-stock"),checked:!!i.checked})});
+var vars={};["gaItemDetailData","itemData"].forEach(function(k){try{var v=window[k];if(v&&typeof v==="object"){var j=JSON.stringify(v);if(j.length<20000)vars[k]=JSON.parse(j)}}catch(x){}});
 var main=d.querySelector("main,#main,[role=main],#content,#item,#itemDetail")||d.body,text=String(main.innerText||"").replace(/[ \\t]+/g," ").replace(/\\n\\s*\\n+/g,"\\n").slice(0,6000);
-var p={v:1,url:location.href,title:String(d.title||"").slice(0,300),meta:meta,ld:ld,heads:heads,crumbs:crumbs,images:imgs,text:text,lang:d.documentElement.lang||""};
+var p={v:1,url:location.href,title:String(d.title||"").slice(0,300),meta:meta,ld:ld,heads:heads,crumbs:crumbs,images:imgs,text:text,lang:d.documentElement.lang||"",offers:offers.slice(0,12),vars:vars};
 try{if(JSON.stringify(p).length>400000){p.ld=[];p.text=text.slice(0,3000)}}catch(x){p.ld=[]}
 var L=function(o){var r=[];(function w(x,n){if(!x||n>5||r.length>2)return;if(Array.isArray(x)){x.forEach(function(y){w(y,n+1)});return}if(typeof x!=="object")return;if(/product|videogame/i.test(String(x["@type"]||""))){var f=x.offers;r.push({"@type":"Product",name:x.name,gtin13:x.gtin13,gtin:x.gtin,gtin12:x.gtin12,image:Array.isArray(x.image)?x.image.slice(0,3):x.image,brand:x.brand,releaseDate:x.releaseDate,itemCondition:x.itemCondition,offers:Array.isArray(f)?f.slice(0,5):f})}if(x["@graph"])w(x["@graph"],n+1)})(o,0);return r};
-var c={v:1,url:p.url,title:p.title,meta:p.meta,ld:L(ld),heads:p.heads,crumbs:p.crumbs,images:imgs.slice(0,6),text:text.slice(0,1500),lang:p.lang};try{if(JSON.stringify(c).length>14000)c.ld=[]}catch(x){c.ld=[]}
+var c={v:1,url:p.url,title:p.title,meta:p.meta,ld:L(ld),heads:p.heads,crumbs:p.crumbs,images:imgs.slice(0,6),text:text.slice(0,1500),lang:p.lang,offers:p.offers,vars:vars};try{if(JSON.stringify(c).length>14000)c.ld=[]}catch(x){c.ld=[]}
 var u=P+"/inventory?import=page#tl="+encodeURIComponent(JSON.stringify(c));
 var w=window.open(u,"_blank");if(!w){location.href=u;return}
 var done=false,on=function(e){if(e.origin!==P||!e.data||e.data.type!=="tl-ready"||done)return;done=true;try{e.source.postMessage({type:"tl-page",page:p},P)}catch(x){}window.removeEventListener("message",on)};window.addEventListener("message",on);
