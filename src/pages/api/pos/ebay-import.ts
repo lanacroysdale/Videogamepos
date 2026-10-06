@@ -4,7 +4,7 @@ import { fetchAll } from "../../../lib/fetchAll";
 import { copyImageToStorage, copyGallery, listGallery } from "../../../lib/storage";
 import {
   ebayConfigured, ebaySeller, extractItemId, getItem, listSellerItems, listSellerStore, mapItem, storeListingDetails,
-  listingFromItem, isOwnListing, shippingCents, type MappedItem,
+  listingFromItem, isOwnListing, shippingCents, ebayItemUrl, type MappedItem,
 } from "../../../lib/ebay";
 import { buildEbayRows, defaultCategoryFor } from "../../../lib/ebayImport";
 import { syncEbayStock } from "../../../lib/ebaySync";
@@ -91,7 +91,8 @@ async function importOne(admin: any, cats: Map<string, string>, legacyId: string
 // specifics it doesn't have yet (brand, year, franchise / series, genre,
 // character) — not the seller's description.
 // Another seller's listing is tagged ebay-ref:<id>, a reference the stock sync
-// never reads; the store's own listing gets ebay:<id> (it IS that item).
+// never reads, and saved as a supplier link; the store's own listing gets
+// ebay:<id> (it IS that item).
 async function attachSimilar(admin: any, productId: string, item: any) {
   const mi = mapItem(item);
   // The full eBay title goes in the description (the title itself is the
@@ -122,7 +123,22 @@ async function attachSimilar(admin: any, productId: string, item: any) {
     if (error) throw new Error(error.message);
   }
   const { tags: _t, ...fields } = patch;
-  return { imageUrl, fields, tag };
+  // Another seller's listing = where to find (restock) this item: a supplier
+  // link on the listing (Suppliers, managers only), with their price at the
+  // time. Skipped before migration 20260801000003 / when it's already there.
+  let supplier: { id: string; label: string; url: string } | null = null;
+  if (!isOwnListing(item)) {
+    const url = ebayItemUrl(mi.ebayItemId);
+    const { data: have, error: supErr } = await admin.from("product_suppliers").select("id").eq("product_id", productId).eq("url", url).limit(1);
+    if (!supErr && !have?.length) {
+      const ship = shippingCents(item);
+      const usd = (c: number) => `$${(c / 100).toFixed(2)}`;
+      const label = `eBay: ${String(item.seller?.username || "seller")} (${usd(mi.priceCents)}${ship.cents ? ` + ${usd(ship.cents)} ship` : ""})`.slice(0, 120);
+      const { data } = await admin.from("product_suppliers").insert({ product_id: productId, label, url }).select("id, label, url").single();
+      supplier = data ?? null;
+    }
+  }
+  return { imageUrl, fields, tag, supplier };
 }
 
 export const POST: APIRoute = async ({ locals, request }) => {
