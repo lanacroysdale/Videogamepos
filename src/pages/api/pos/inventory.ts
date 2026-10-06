@@ -885,13 +885,23 @@ export const POST: APIRoute = async ({ locals, request }) => {
           price_cents_at_entry: variant.price_cents ?? 0, was_new_variant: true, applied: false,
         }).select("id").single();
         if (stErr) return json({ error: stErr.message }, 500);
-        return json({ ok: true, productId: prod.id, slug: prod.slug, variantId: variant.id, internalCode: variant.internal_code ?? "", itemId: st.id, ...stored });
+        return json({ ok: true, productId: prod.id, slug: prod.slug, variantId: variant.id, internalCode: variant.internal_code ?? "", labelCode: variant.label_code ?? "", itemId: st.id, ...stored });
       }
       if (b.entryId && variant.quantity > 0) {
         await logReceive(b.entryId, variant.id, variant.quantity, variant.price_cents ?? 0,
           b.unitCostCents == null ? null : Math.max(0, Math.round(Number(b.unitCostCents)) || 0), true);
       }
-      return json({ ok: true, productId: prod.id, slug: prod.slug, variantId: variant.id, internalCode: variant.internal_code ?? "", ...stored });
+      return json({ ok: true, productId: prod.id, slug: prod.slug, variantId: variant.id, internalCode: variant.internal_code ?? "", labelCode: variant.label_code ?? "", ...stored });
+    }
+    case "labelCodes": {
+      // The short numeric label codes the DB gave stock rows this page made
+      // (they're assigned on insert) — so a label printed right after adding
+      // uses the compact barcode, not the wide internal-code fallback.
+      const ids: string[] = Array.isArray(b.variantIds) ? b.variantIds.filter((x: unknown) => typeof x === "string").slice(0, 500) : [];
+      if (!ids.length || !(await hasCol("product_variants", "label_code"))) return json({ ok: true, codes: {} });
+      const { data, error } = await sb.from("product_variants").select("id, label_code").in("id", ids);
+      if (error) return json({ error: error.message }, 500);
+      return json({ ok: true, codes: Object.fromEntries((data ?? []).filter((r: any) => r.label_code).map((r: any) => [r.id, r.label_code])) });
     }
     case "addVariant": {
       if (!b.productId) return json({ error: "productId required" }, 400);
@@ -908,8 +918,8 @@ export const POST: APIRoute = async ({ locals, request }) => {
           ...(b.locationId ? { location_id: b.locationId } : {}),
           ...(await pendingFor(b.stageEntryId)),
         })
-        .select("id, internal_code, quantity, price_cents")
-        .single();
+        .select(`id, internal_code, quantity, price_cents${(await hasCol("product_variants", "label_code")) ? ", label_code" : ""}`)
+        .single() as { data: any; error: any };
       if (error) return json({ error: error.message }, 500);
       if (b.stageEntryId) {
         const { data: st, error: stErr } = await sb.from("inventory_entry_items").insert({
