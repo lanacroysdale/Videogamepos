@@ -18,6 +18,9 @@ const json = (d: unknown, s = 200) =>
 //       official title + box art), for a box that isn't in inventory yet.
 //   { action: "remove", id } → managers; an automatic UPC removed by hand is
 //       never auto-filled again for that listing ("rejected").
+//   { action: "confirm", productId, upcs, title } → staff picked one of the
+//       lookup's possible matches (a name that differs, or one of several
+//       releases): attach its UPC(s), noting the eBay catalog product.
 export const POST: APIRoute = async ({ locals, request }) => {
   if (!locals.user || !locals.profile) return json({ error: "unauthorized" }, 401);
   const b = await request.json().catch(() => ({}));
@@ -65,6 +68,18 @@ export const POST: APIRoute = async ({ locals, request }) => {
       await admin.from("products").update({ upc_status: "found", upc_checked_at: new Date().toISOString() }).eq("id", b.productId);
       const { data: all } = await admin.from("product_upcs").select("id, upc, source").eq("product_id", b.productId).order("created_at");
       return json({ ok: true, added: added[0] ?? null, upcs: all || [] });
+    }
+
+    if (b.action === "confirm") {
+      if (!b.productId) return json({ error: "productId required" }, 400);
+      const codes = [...new Set((Array.isArray(b.upcs) ? b.upcs : []).slice(0, 5).map((u: unknown) => canonicalUpc(String(u))).filter(Boolean))] as string[];
+      if (!codes.length) return json({ error: "No valid UPC to attach." }, 400);
+      const title = String(b.title ?? "").replace(/\s+/g, " ").trim().slice(0, 160);
+      const { added, conflicts } = await attachUpcs(admin, b.productId, codes, "manual", `Confirmed by staff — eBay catalog: ${title || "(no title)"}`);
+      if (!added.length && conflicts.length) return json({ error: `UPC ${conflicts[0]}.` }, 409);
+      await admin.from("products").update({ upc_status: "found", upc_checked_at: new Date().toISOString() }).eq("id", b.productId);
+      const { data: all } = await admin.from("product_upcs").select("id, upc, source").eq("product_id", b.productId).order("created_at");
+      return json({ ok: true, upcs: all || [], skipped: conflicts });
     }
 
     if (b.action === "remove") {
