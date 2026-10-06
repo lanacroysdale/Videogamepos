@@ -49,14 +49,20 @@ export const POST: APIRoute = async ({ locals, request }) => {
 
     // A PriceCharting game page: everything is there, field by field — no AI.
     // Its prices are the MARKET (what copies sell for), not what you paid.
+    // A bookmark dragged in before PriceCharting support sends no PriceCharting fields.
+    if (isPriceCharting(page.url) && !page.pc)
+      return json({ error: "Your 🔖 Send to TimeLag bookmark is an older copy that can't read PriceCharting. Drag it to your bookmarks bar again (Inventory → ＋ Add product → 🔖 Other shops), delete the old one, then click it on this page." }, 400);
     const pcf = priceChartingFacts(page, new Date().toISOString().slice(0, 10));
     if (pcf && pcf.name) {
       const rg = regionFromPlatform(pcf.console, regions); // "JP Super Famicom" → JP + Super Famicom
       const platform = resolveStaticPlatform(rg.platform) ?? rg.platform;
       const regionCode = regionsOn(regions) && rg.code && regionByCode(rg.code, regions) ? rg.code : "";
-      const kindRe = /\b(console|system|controller|adapter|memory card|cable|charger|power supply)\b/i;
-      const want = kindRe.test(pcf.name) ? /accessor|console|hardware/i : /game/i;
+      // PriceCharting flags a console itself; accessories by name (never "System Shock").
+      const isSystem = pcf.kind === "system";
+      const isAccessory = !isSystem && /\b(controller|adapter|memory card|cable|charger|power supply|ac adapter|stylus)\b/i.test(pcf.name);
+      const want = isSystem ? /console|hardware|system/i : isAccessory ? /accessor/i : /game/i;
       const cat = ((cats ?? []) as any[]).find((c) => want.test(c.name)) ?? ((cats ?? []) as any[]).find((c) => /game/i.test(c.name));
+      const marketReady = !(await sb.from("products").select("market_prices").limit(1)).error;
       let existing: { productId: string; title: string } | null = null;
       if (pcf.market.id) {
         const { data: tagged } = await sb.from("products").select("id, title").contains("tags", [`pricecharting:${pcf.market.id}`]).is("deleted_at", null).limit(1);
@@ -68,14 +74,14 @@ export const POST: APIRoute = async ({ locals, request }) => {
       return json({
         ok: true,
         fields: {
-          title: pcf.name.slice(0, 200), platform, regionCode, categoryId: cat?.id ?? "", kind: kindRe.test(pcf.name) ? "accessory" : "game",
+          title: pcf.name.slice(0, 200), platform, regionCode, categoryId: cat?.id ?? "", kind: isSystem ? "console" : isAccessory ? "accessory" : "game",
           completenessCode: "", isNew: false, barcode: pcf.upc, costCents: null, franchise: "", releaseYear: pcf.year, note: "",
         },
         source: {
           kind: "reference", url: pcf.market.url, label: "PriceCharting", host: "pricecharting.com", itemId: pcf.market.id,
           price: null, currency: "USD", priceText: "", titleOriginal: "", pageTitle: pcf.name, images: pcf.image ? [pcf.image] : facts.images.slice(0, 3),
         },
-        market: pcf.market,
+        market: pcf.market, marketReady, priceNote: pcf.priceNote,
         money, official: true, ai: false, aiError: "", existing, openEntry: openEntry2 ?? null,
       });
     }
@@ -168,9 +174,10 @@ export const POST: APIRoute = async ({ locals, request }) => {
     if (!prod) return json({ error: "Listing not found" }, 404);
     // Supplier links are managers' — staff may only add one to a listing they
     // just created with this import.
-    const fresh = Date.now() - Date.parse(prod.created_at ?? "") < 30 * 60_000;
-    if (!fresh && !locals.can("inventory.manage")) return json({ error: "Only a listing you just added can take its source page." }, 403);
     const src = sourceOf(url);
+    // (A price guide only adds its tag, averages and photo — no supplier link — so any staff may.)
+    const fresh = Date.now() - Date.parse(prod.created_at ?? "") < 30 * 60_000;
+    if (!fresh && !isPriceCharting(url) && !locals.can("inventory.manage")) return json({ error: "Only a listing you just added can take its source page." }, 403);
     // A price guide (PriceCharting) isn't where it was bought: its id tag (the
     // collection importer's "pricecharting:<id>") and its market prices, no
     // supplier link. Else an internal "src:" marker — what "Already in the POS
@@ -184,11 +191,12 @@ export const POST: APIRoute = async ({ locals, request }) => {
     if (marker && !tags.includes(marker)) patch.tags = [...tags, marker];
     // Market prices (migration 20261006000003): only PriceCharting's numbers, as cents.
     let market: any = null;
+    let marketError = "";
     if (reference && b.market && typeof b.market === "object") {
       market = { source: "pricecharting", id: pcId, url, at: /^\d{4}-\d{2}-\d{2}$/.test(String(b.market.at)) ? String(b.market.at) : new Date().toISOString().slice(0, 10) } as Record<string, unknown>;
       for (const k of MARKET_KEYS) { const n = Number(b.market[k]); market[k] = Number.isFinite(n) && n > 0 && n < 100_000_000 ? Math.round(n) : null; }
       if (!(await admin.from("products").select("market_prices").limit(1)).error) patch.market_prices = market;
-      else market = null;
+      else { market = null; marketError = "The PriceCharting averages weren't kept — run supabase/migrations/20261006000003_market_prices.sql in the Supabase SQL editor."; }
     }
     if (Object.keys(patch).length) {
       const { error } = await admin.from("products").update(patch).eq("id", productId);
@@ -218,7 +226,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
         }
       }
     }
-    return json({ ok: true, imageUrl, supplier, market });
+    return json({ ok: true, imageUrl, supplier, market, marketError });
   }
 
   return json({ error: "Unknown mode" }, 400);

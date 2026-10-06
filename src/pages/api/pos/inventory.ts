@@ -1105,6 +1105,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
       // The store's platform list (store_settings.settings.platforms): the
       // dropdowns offer it even before a listing uses one. Adding is for any
       // staff (it's a name); taking one off the list is for managers.
+      if (!locals.profile) return json({ error: "Staff only" }, 403);
       const name = cleanPlatformName(b.name);
       if (!name) return json({ error: "Type a platform name" }, 400);
       if (b.action === "removePlatform" && !locals.can("inventory_config.manage")) return json({ error: "Only managers can remove platforms" }, 403);

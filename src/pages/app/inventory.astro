@@ -1528,8 +1528,16 @@ const posData = {
     } else { ebayLink.hidden = true; }
 
     wireNewCategory(document.getElementById("m-category") as HTMLSelectElement | null);
-    setPlatform(document.getElementById("m-platform") as HTMLSelectElement | null, p.platform);
-    wireNewPlatform(document.getElementById("m-platform") as HTMLSelectElement | null);
+    // The listing's own platform, exactly as stored (never re-spelled / cut by
+    // the list) — and only sent back on Save if it was changed.
+    const mPlat = document.getElementById("m-platform") as HTMLSelectElement | null;
+    if (mPlat) {
+      const raw = String(p.platform ?? "");
+      if (raw && ![...mPlat.options].some((o) => o.value === raw)) mPlat.insertBefore(new Option(raw, raw), mPlat.options[1] ?? null);
+      mPlat.value = raw;
+      mPlat.dataset.orig = raw;
+    }
+    wireNewPlatform(mPlat);
     // A UPC names ONE release — moving a listing that has one to another
     // region deserves a look before saving.
     document.getElementById("m-region")?.addEventListener("change", (ev) => {
@@ -1974,7 +1982,9 @@ const posData = {
       const regionSel = document.getElementById("m-region") as HTMLSelectElement | null;
       const pj = await api({
         action: "updateProduct", id: pid,
-        title: get("m-title").trim(), platform: get("m-platform").trim(), genre: get("m-genre").trim(),
+        title: get("m-title").trim(), genre: get("m-genre").trim(),
+        // Platform only when it was changed (a save never re-spells it).
+        ...(get("m-platform") !== ($("m-platform") as HTMLSelectElement).dataset.orig ? { platform: get("m-platform") } : {}),
         franchise: get("m-franchise").trim(), categoryId: get("m-category"), imageUrl: get("m-image").trim(),
         description: ($("m-desc") as HTMLTextAreaElement).value.trim(),
         ...(regionSel ? { regionCode: regionSel.value } : {}),
@@ -1982,7 +1992,7 @@ const posData = {
         ...(document.querySelector("[data-vtag]") ? { tags: Object.fromEntries([...document.querySelectorAll<HTMLInputElement>("[data-vtag]")].map((c) => [c.dataset.vtag!, c.checked])) } : {}),
       });
       Object.assign(p, {
-        title: get("m-title").trim(), platform: get("m-platform").trim(), genre: get("m-genre").trim(),
+        title: get("m-title").trim(), platform: get("m-platform"), genre: get("m-genre").trim(),
         franchise: get("m-franchise").trim(), categoryId: get("m-category"), imageUrl: get("m-image").trim(),
         description: ($("m-desc") as HTMLTextAreaElement).value.trim(),
         categoryName: categories.find((c) => c.id === get("m-category"))?.name ?? p.categoryName,
@@ -2794,8 +2804,7 @@ const posData = {
         if (!r.priceTouched) {
           const t = recvTarget(r);
           const m = t ? null : marketPriceFor(r.p.marketPrices, r.comp);
-          if (t) r.price = (t.priceCents / 100).toFixed(2);
-          else if (m != null) r.price = (m / 100).toFixed(2);
+          r.price = ((t ? t.priceCents : m ?? r.v.priceCents) / 100).toFixed(2);
         }
         renderRecv();
       };
@@ -3475,6 +3484,7 @@ const posData = {
               if (e.imageUrl) newItem.imageUrl = e.imageUrl;
               if (e.supplier) newItem.supplierLinks = [...(newItem.supplierLinks || []), e.supplier];
               if (e.market) newItem.marketPrices = e.market;
+              if (e.marketError) alert(e.marketError);
               if (e.market?.id) newItem.pcId = e.market.id;
               render();
             }
@@ -3517,8 +3527,9 @@ const posData = {
   let npPriceTouched = false;
   function priceFromMarket() {
     if (!pendingMarket || npPriceTouched) return;
+    // A condition PriceCharting has no average for → no price (not the last one's).
     const c = marketPriceFor(pendingMarket, compVal($("np-comp") as HTMLInputElement));
-    if (c != null) ($("np-price") as HTMLInputElement).value = (c / 100).toFixed(2);
+    ($("np-price") as HTMLInputElement).value = c != null ? (c / 100).toFixed(2) : "";
   }
   $("np-price")?.addEventListener("input", () => { npPriceTouched = true; });
   $("np-comp")?.addEventListener("input", priceFromMarket);
@@ -3541,7 +3552,7 @@ const posData = {
     ov.setAttribute("aria-modal", "true");
     ov.innerHTML = `<div class="upc-pick-card bm-card">
       <h3>🔖 Send to TimeLag</h3>
-      <p class="muted">Add products from <strong>Suruga-ya</strong>, <strong>Buyee</strong> (Yahoo! Auctions, Mercari…), Amazon JP or any shop. The bookmark reads the page you're looking at, in your own browser, so nothing visits that shop from our server.</p>
+      <p class="muted">Add products from <strong>PriceCharting</strong> (its UPC + Loose / Complete / New averages), <strong>Suruga-ya</strong>, <strong>Buyee</strong> (Yahoo! Auctions, Mercari…), Amazon JP or any shop. Dragged it in before? Drag it again — new sites need the new copy. The bookmark reads the page you're looking at, in your own browser, so nothing visits that shop from our server.</p>
       <ol class="bm-steps">
         <li><strong>Drag this button</strong> onto your bookmarks bar: <a class="bm-link" id="bm-link" draggable="true">🔖 Send to TimeLag</a></li>
         <li>On a product page, <strong>click the bookmark</strong>. A POS tab opens with this form filled in: a clean English title, platform, region, condition, JAN and what you paid in dollars.</li>
@@ -3642,8 +3653,9 @@ const posData = {
       // A price guide: its averages are what copies SELL for — the price
       // follows the condition you pick (until you type one); nothing is "paid".
       note.innerHTML = `${img}<div><strong>📈 From PriceCharting</strong>${f.barcode ? ` · UPC ${esc(f.barcode)}` : ""}${f.regionCode && f.regionCode !== "US" ? ` · ${esc(f.regionCode)} release` : ""}
-        <br>${marketLine(j.market, true) || "no prices on the page"} <span style="color:var(--muted-2);">(averages, ${esc(j.market.at)})</span>
-        <br><span style="color:var(--muted-2);">Pick the condition — the price follows it (or click one). On Save: these averages are kept on the listing, plus its PriceCharting photo and link.</span>
+        <br>${marketLine(j.market, true) || "no prices taken"} <span style="color:var(--muted-2);">(averages, ${esc(j.market.at)})</span>
+        ${j.priceNote ? `<br><span style="color:var(--magenta);">⚠ ${esc(j.priceNote)}</span>` : ""}
+        <br><span style="color:var(--muted-2);">Pick the condition — the price follows it (or click one). On Save: ${j.marketReady ? "these averages are kept on the listing, plus" : "<span style='color:var(--magenta);'>(averages can't be kept until the market-prices migration is run)</span>"} its PriceCharting photo and link.</span>
         ${j.existing ? `<br><span style="color:var(--magenta);">Already in the POS: <strong>${esc(j.existing.title)}</strong> — <button type="button" class="link-btn" id="src-existing">add copies to it instead</button></span>` : ""}
         ${j.openEntry && !entryMode ? `<br><button type="button" class="link-btn" id="src-entry">📥 Put it on your open Entry #${esc(j.openEntry.human_id)} instead</button>` : ""}</div>`;
       note.querySelectorAll<HTMLElement>("[data-mkt]").forEach((b) => b.addEventListener("click", () => {
@@ -3659,6 +3671,14 @@ const posData = {
       ${j.openEntry && !entryMode ? `<br><button type="button" class="link-btn" id="src-entry">📥 Put it on your open Entry #${esc(j.openEntry.human_id)} instead</button>` : ""}</div>`;
     document.getElementById("src-existing")?.addEventListener("click", () => {
       const t = j.existing.title;
+      // PriceCharting: today's averages go onto that listing too (the rows price new conditions from them).
+      if (j.market) {
+        const ex = items.find((x: any) => x.id === j.existing.productId);
+        if (ex) ex.marketPrices = j.market;
+        fetch("/api/pos/source-import", { method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ mode: "attach", productId: j.existing.productId, source: pendingSource, market: j.market }) })
+          .then((r) => r.json()).then((e) => { if (e.marketError) alert(e.marketError); }).catch(() => {});
+      }
       // What this copy cost goes onto the row you pick.
       pendingRecvCost = f.costCents != null ? (f.costCents / 100).toFixed(2) : "";
       clearProductFields();
@@ -3702,6 +3722,8 @@ const posData = {
       const j = await r.json();
       if (!r.ok || !j.ok) throw new Error(j.error || "Couldn't pull that listing");
       const it = j.item;
+      // A previous 🔖 import's prices / page don't belong to this listing.
+      pendingMarket = null; pendingSource = null; npPriceTouched = false;
       // Sell Similar suggestions (the store importer's title / platform / region /
       // category rules) — else the listing's raw fields.
       const sim = j.similar || {};

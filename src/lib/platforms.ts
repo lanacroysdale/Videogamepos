@@ -48,13 +48,16 @@ export function platformGroups(catalog: (string | null | undefined)[], custom: s
     if (!seen.has(name.toLowerCase())) seen.set(name.toLowerCase(), name);
   }
   const yours = [...seen.values()].sort((a, b) => a.localeCompare(b));
-  // A built-in already covered by one of yours (same name, or a spelling of it) isn't repeated.
-  const covered = new Set(yours.map((y) => (resolveStaticPlatform(y) ?? y).toLowerCase()));
+  // A built-in is left out only when it's literally one of yours — "PC Engine"
+  // in the catalog must not hide "TurboGrafx-16" (a different release).
+  const covered = new Set(yours.map((y) => y.toLowerCase()));
   const more = PLATFORM_ALIASES.map((p) => p.canonical).filter((c) => !covered.has(c.toLowerCase())).sort((a, b) => a.localeCompare(b));
   return { yours, more };
 }
 
-/** The option a name means: the same spelling, else the same built-in platform ("PS4" → "PlayStation 4"). */
+/** The option a name means: the same spelling, else the built-in platform it
+ *  spells ("PS4" → "PlayStation 4"). Never a sibling / regional name ("PC
+ *  Engine" for "TurboGrafx-16") — those are different releases. */
 export function matchPlatform(name: string, options: string[]): string | null {
   const n = cleanPlatformName(name);
   if (!n) return null;
@@ -62,6 +65,5 @@ export function matchPlatform(name: string, options: string[]): string | null {
   if (exact) return exact;
   const canon = resolveStaticPlatform(n);
   if (!canon) return null;
-  return options.find((o) => o.toLowerCase() === canon.toLowerCase())
-    ?? options.find((o) => (resolveStaticPlatform(o) ?? "").toLowerCase() === canon.toLowerCase()) ?? null;
+  return options.find((o) => o.toLowerCase() === canon.toLowerCase()) ?? null;
 }
