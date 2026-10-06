@@ -8,6 +8,7 @@ import { MARKETING_HOSTS } from "../../consts";
 import { createSupabaseAdminClient } from "../../lib/supabase";
 import { loadRegions, regionsOn, regionBadgeHtml } from "../../lib/regions";
 import { activeVirtualCategories, virtualHint, virtualTag } from "../../lib/virtualCategories";
+import { customPlatforms, platformGroups } from "../../lib/platforms";
 
 const supabase = Astro.locals.supabase;
 const [{ data: categories }, { data: settings }, { data: completeness }, { data: grades }] = await Promise.all([
@@ -150,8 +151,12 @@ const deletedItems = isManager
       }))
       .sort((a, b) => a.daysLeft - b.daysLeft)
   : [];
+// Platforms: the ones the store added + the catalog's own spellings, then the built-ins.
+const customPlats = customPlatforms((settings as any)?.settings);
+const platGroups = platformGroups(items.map((i) => i.platform), customPlats);
 const posData = {
   items,
+  customPlatforms: customPlats,
   categories: categories ?? [],
   completeness: completeness ?? [],
   grades: grades ?? [],
@@ -300,7 +305,10 @@ const posData = {
     </div>
     <div class="add-grid">
       <label>Title<input id="np-title" placeholder="e.g. Donkey Kong 64" /></label>
-      <label>Platform<input id="np-platform" placeholder="Nintendo 64" /></label>
+      <label>Platform<select id="np-platform"><option value="">— none —</option>
+        {platGroups.yours.length > 0 && <optgroup label="Your platforms">{platGroups.yours.map((n) => <option value={n}>{n}</option>)}</optgroup>}
+        <optgroup label="More platforms">{platGroups.more.map((n) => <option value={n}>{n}</option>)}</optgroup>
+      </select></label>
       {rgOn && (
         <label title="The release's market — an import (PAL, Japan…) gets a badge everywhere">Region<select id="np-region">{regions.filter((r) => r.isActive).map((r) => <option value={r.code} selected={r.isDefault}>{r.flag} {r.name}</option>)}</select></label>
       )}
@@ -725,6 +733,7 @@ const posData = {
   import { upcEligible } from "../../lib/upcMatch";
   import { upcLike, identifyUpc } from "../../lib/upcClient";
   import { bookmarkletHref, sourceOf } from "../../lib/sourceImport";
+  import { platformGroups, matchPlatform } from "../../lib/platforms";
   import { regionOf, regionsOn, regionByCode, isDefaultRegion, regionBadgeHtml, displayTitle, regionTag, regionSortKey, splitTitleRegion, regionFromPlatform, type Region } from "../../lib/regions";
 
   const data = JSON.parse(document.getElementById("pos-data")!.textContent!);
@@ -761,6 +770,58 @@ const posData = {
       catch (e: any) { sel.value = prev; alert(e.message); }
     });
   }
+  // Platform dropdowns (Add form + edit window), like the category one: the
+  // store's platforms + "＋ New platform…" (any staff — it's just a name,
+  // kept in the store's list so it's offered next time).
+  const NEW_PLAT = "__new_platform__";
+  let customPlats: string[] = data.customPlatforms || [];
+  const platOptions = (sel: HTMLSelectElement) => [...sel.options].map((o) => o.value).filter((v) => v && v !== NEW_PLAT);
+  function addPlatformOption(sel: HTMLSelectElement, name: string) {
+    if (platOptions(sel).some((o) => o.toLowerCase() === name.toLowerCase())) return;
+    let grp = [...sel.querySelectorAll("optgroup")].find((g) => g.label === "Your platforms") as HTMLOptGroupElement | undefined;
+    if (!grp) { grp = document.createElement("optgroup"); grp.label = "Your platforms"; sel.insertBefore(grp, sel.querySelector("optgroup")); }
+    const before = [...grp.querySelectorAll("option")].find((o) => o.value.localeCompare(name) > 0) ?? null;
+    grp.insertBefore(new Option(name, name), before);
+    // A built-in "More platforms" entry with that name goes (no duplicates).
+    sel.querySelectorAll("optgroup").forEach((g) => { if (g !== grp) g.querySelectorAll("option").forEach((o) => { if (o.value.toLowerCase() === name.toLowerCase()) o.remove(); }); });
+  }
+  /** Select a platform by name: the same one (or its built-in spelling), else add it. */
+  function setPlatform(sel: HTMLSelectElement | null, name: string | null | undefined) {
+    if (!sel) return;
+    const n = String(name ?? "").trim();
+    if (!n) { sel.value = ""; return; }
+    const m = matchPlatform(n, platOptions(sel));
+    if (m) { sel.value = m; return; }
+    addPlatformOption(sel, n);
+    sel.value = n;
+  }
+  const platformOptionsHtml = () => {
+    const g = platformGroups(items.map((p: any) => p.platform), customPlats);
+    const opts = (l: string[]) => l.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
+    return `<option value="">— none —</option>${g.yours.length ? `<optgroup label="Your platforms">${opts(g.yours)}</optgroup>` : ""}<optgroup label="More platforms">${opts(g.more)}</optgroup>`;
+  };
+  function wireNewPlatform(sel: HTMLSelectElement | null) {
+    if (!sel || [...sel.options].some((o) => o.value === NEW_PLAT)) return;
+    sel.add(new Option("＋ New platform…", NEW_PLAT));
+    let prev = sel.value;
+    sel.addEventListener("focus", () => { if (sel.value !== NEW_PLAT) prev = sel.value; });
+    sel.addEventListener("change", async () => {
+      if (sel.value !== NEW_PLAT) { prev = sel.value; return; }
+      const name = (prompt("New platform name (e.g. WonderSwan Color):", "") || "").replace(/\s+/g, " ").trim().slice(0, 60);
+      if (!name) { sel.value = prev; return; }
+      const same = matchPlatform(name, platOptions(sel));
+      try {
+        if (!same || !customPlats.some((c) => c.toLowerCase() === same.toLowerCase())) {
+          const j = await api({ action: "addPlatform", name: same || name });
+          customPlats = j.platforms || customPlats;
+        }
+        const final = same || name;
+        for (const s2 of document.querySelectorAll<HTMLSelectElement>("#np-platform, #m-platform")) addPlatformOption(s2, final);
+        sel.value = final; prev = final;
+        toast(same ? `“${final}” is already in the list — selected` : `✓ Platform “${final}” added`);
+      } catch (e: any) { sel.value = prev; alert(e.message); }
+    });
+  }
   const completeness: any[] = data.completeness || [];
   const grades: any[] = data.grades || [];
   const conditionPricing: boolean = !!data.conditionPricing;
@@ -785,7 +846,7 @@ const posData = {
   const listingRegion = (p: any) => regionOf(p.regionCode || splitTitleRegion(p.title, regions).code || regionFromPlatform(p.platform, regions).code, regions);
 
   /* ---------- Smart find-or-create (shared module: src/lib/smartSearch.ts) ---------- */
-  const PLATFORMS = buildPlatforms(items.map((p) => p.platform));
+  const PLATFORMS = buildPlatforms([...items.map((p) => p.platform), ...customPlats]);
   const parseQuery = (raw: string) => _parseQuery(raw, { completeness, grades, platforms: PLATFORMS, regions });
   // A draft's not-yet-finished listings / stock rows are hidden everywhere but
   // that draft's own screen (search, scanning, import matching, Finish).
@@ -960,7 +1021,7 @@ const posData = {
     const panel = $("add-panel") as HTMLElement;
     setAddOpen(true);
     ($("np-title") as HTMLInputElement).value = parsed.titleForNew.replace(/\b\w/g, (c: string) => c.toUpperCase());
-    ($("np-platform") as HTMLInputElement).value = parsed.platform || "";
+    setPlatform($("np-platform") as HTMLSelectElement, parsed.platform || "");
     setNpRegion(parsed.regionCode);
     setComp($("np-comp") as HTMLInputElement, parsed.completenessCode || "", $("np-comp-abbr"));
     ($("np-grade") as HTMLSelectElement).value = parsed.gradeCode || "3";
@@ -1049,7 +1110,7 @@ const posData = {
       const panel = $("add-panel") as HTMLElement;
       setAddOpen(true);
       ($("np-title") as HTMLInputElement).value = id.title;
-      ($("np-platform") as HTMLInputElement).value = id.platform || "";
+      setPlatform($("np-platform") as HTMLSelectElement, id.platform || "");
       setNpRegion(id.region); // eBay's catalog is the US one: "" = home
       ($("np-qty") as HTMLInputElement).value = "1";
       panel.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -1392,7 +1453,7 @@ const posData = {
         <div class="m-label" style="display:flex;align-items:center;gap:0.5rem;">Product <button type="button" class="btn btn-ghost btn-sm" id="m-enrich">✨ Auto‑fill from IGDB</button></div>
         <div class="m-grid">
           <label>Title<input id="m-title" value="${esc(p.title)}"></label>
-          <label>Platform<input id="m-platform" value="${esc(p.platform)}"></label>
+          <label>Platform<select id="m-platform">${platformOptionsHtml()}</select></label>
           ${rgOn ? `<label title="The release's market — an import (PAL, Japan…) gets a badge everywhere">Region<select id="m-region">${regionOpts}</select></label>` : ""}
           <label>Genre / set<input id="m-genre" value="${esc(p.genre)}"></label>
           <label>Franchise<input id="m-franchise" value="${esc(p.franchise)}"></label>
@@ -1460,6 +1521,8 @@ const posData = {
     } else { ebayLink.hidden = true; }
 
     wireNewCategory(document.getElementById("m-category") as HTMLSelectElement | null);
+    setPlatform(document.getElementById("m-platform") as HTMLSelectElement | null, p.platform);
+    wireNewPlatform(document.getElementById("m-platform") as HTMLSelectElement | null);
     // A UPC names ONE release — moving a listing that has one to another
     // region deserves a look before saving.
     document.getElementById("m-region")?.addEventListener("change", (ev) => {
@@ -2815,11 +2878,11 @@ const posData = {
       // Picked from the game database (or a scanned UPC): its official name +
       // our platform name, in the region the query named (else the home one).
       ($("np-title") as HTMLInputElement).value = official.title;
-      ($("np-platform") as HTMLInputElement).value = official.platform || parsed?.platform || "";
+      setPlatform($("np-platform") as HTMLSelectElement, official.platform || parsed?.platform || "");
       setNpRegion(official.region || parsed?.regionCode);
     } else {
       if (parsed?.title) ($("np-title") as HTMLInputElement).value = parsed.titleForNew.replace(/\b\w/g, (c: string) => c.toUpperCase());
-      if (parsed?.platform) ($("np-platform") as HTMLInputElement).value = parsed.platform;
+      if (parsed?.platform) setPlatform($("np-platform") as HTMLSelectElement, parsed.platform);
       if (parsed) setNpRegion(parsed.regionCode);
     }
     if (parsed) { setComp($("np-comp") as HTMLInputElement, parsed.completenessCode || "", $("np-comp-abbr")); if (parsed.gradeCode) ($("np-grade") as HTMLSelectElement).value = parsed.gradeCode; }
@@ -3266,6 +3329,7 @@ const posData = {
 
   wireComp($("np-comp") as HTMLInputElement, $("np-comp-abbr"));
   wireNewCategory(document.getElementById("np-cat") as HTMLSelectElement | null);
+  wireNewPlatform(document.getElementById("np-platform") as HTMLSelectElement | null);
   // A Japanese barcode (JAN: 13 digits starting 45 / 49) is a Japan release.
   $("np-barcode")?.addEventListener("change", () => {
     const code = ($("np-barcode") as HTMLInputElement).value.replace(/\D/g, "");
@@ -3518,7 +3582,7 @@ const posData = {
     } catch (e: any) { note.innerHTML = `<div>⚠ ${esc(e.message)}</div>`; return; }
     const f = j.fields, so = j.source;
     ($("np-title") as HTMLInputElement).value = f.title || "";
-    ($("np-platform") as HTMLInputElement).value = f.platform || "";
+    setPlatform($("np-platform") as HTMLSelectElement, f.platform || "");
     setNpRegion(f.regionCode || "");
     if (f.categoryId) ($("np-cat") as HTMLSelectElement).value = f.categoryId;
     const newCode = completeness.find((c: any) => /^(new|sealed)/i.test(c.label) || c.code === "NEW")?.code || "";
@@ -3586,7 +3650,7 @@ const posData = {
       // category rules) — else the listing's raw fields.
       const sim = j.similar || {};
       ($("np-title") as HTMLInputElement).value = sim.title || it.title;
-      ($("np-platform") as HTMLInputElement).value = sim.platform ?? it.platform ?? "";
+      setPlatform($("np-platform") as HTMLSelectElement, sim.platform ?? it.platform ?? "");
       setNpRegion(sim.region || it.region); // "" = home
       setComp($("np-comp") as HTMLInputElement, sim.completenessCode || it.completenessCode || "", $("np-comp-abbr"));
       const grade = sim.gradeCode || it.gradeCode;
