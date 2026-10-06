@@ -182,6 +182,7 @@ const posData = {
     <button id="phone-scan-btn" class="btn btn-ghost btn-sm" title="Pair your phone as a wireless scanner">📱 Phone</button>
     <a href="/entries" class="btn btn-ghost btn-sm" title="Past receiving entries + label reprints">📥 Entries</a>
     <button id="inv-import" class="btn btn-ghost btn-sm" title="Import a collection .csv (PriceCharting export or any Title / Platform / Condition sheet) as staged lines on an entry">📄 Import CSV</button>
+    <button id="inv-similar" class="btn btn-ghost btn-sm" title="Quick-add an item from any eBay listing of the same thing: paste the link and the Add form fills in (title, platform, region, condition, category, price, UPC/EAN). Saves 1 photo + details. Never synced with eBay.">🛒 Sell similar</button>
     </div>
     <!-- The two main actions, on the right: Start entry (outlined) + Add product. -->
     <div class="inv-head-r">
@@ -2966,6 +2967,20 @@ const posData = {
 
   /* ---------- eBay import ---------- */
   let pendingEbay: any = null;
+
+  // "🛒 Sell similar" in the header: the Add form, straight to the paste box.
+  $("inv-similar")?.addEventListener("click", () => {
+    const panel = $("add-panel") as HTMLElement;
+    if (panel.hidden) { clearProductFields(); setAddOpen(true); }
+    setNpKind("stock");
+    panel.scrollIntoView({ behavior: "smooth", block: "center" });
+    ($("np-ebay") as HTMLInputElement).focus();
+  });
+  // Pasting a listing link (or pressing Enter) pulls it — no extra click.
+  $("np-ebay")?.addEventListener("paste", () => setTimeout(() => {
+    if (/\d{9,15}/.test(($("np-ebay") as HTMLInputElement).value)) ($("np-ebay-go") as HTMLButtonElement).click();
+  }, 0));
+  $("np-ebay")?.addEventListener("keydown", (e) => { if ((e as KeyboardEvent).key === "Enter") { e.preventDefault(); ($("np-ebay-go") as HTMLButtonElement).click(); } });
 
   // Paste a listing → pull its data into the add form for review.
   $("np-ebay-go")?.addEventListener("click", async () => {
