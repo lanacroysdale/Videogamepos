@@ -156,8 +156,9 @@ export const POST: APIRoute = async ({ locals, request }) => {
     }
 
     // -- eBay importer: photos + details onto a staged listing ---------------
-    // Photos, description and item specifics (brand, year, franchise / series,
-    // genre, character) only fill what the listing doesn't have yet, so a
+    // Photos, description (the eBay listing title, then its description) and
+    // item specifics (brand, year, franchise / series, genre, character) only
+    // fill what the listing doesn't have yet, so a
     // listing that already existed keeps its own. Always adds the ebay:<id>
     // tag (never removes other tags).
     if (mode === "media") {
@@ -185,7 +186,10 @@ export const POST: APIRoute = async ({ locals, request }) => {
       let gallery = 0;
       if (galleryMax > 1 && mi.images.length > 1 && !(await listGallery(admin, prod.id)).length)
         gallery = await copyGallery(admin, mi.images, prod.id, galleryMax);
-      if (!prod.description && mi.description) patch.description = mi.description;
+      // The listing's title is eBay's game data (Game Name); the eBay listing
+      // title leads the description, then the eBay description itself.
+      const desc = [mi.title, mi.description].filter(Boolean).join("\n\n").slice(0, 3200);
+      if (!prod.description && desc) patch.description = desc;
       if (!prod.brand && mi.brand) patch.brand = mi.brand;
       if (!prod.release_year && mi.releaseYear) patch.release_year = mi.releaseYear;
       if (!prod.franchise && mi.franchise) patch.franchise = mi.franchise;

@@ -294,13 +294,13 @@ export function openEbayImportDialog(o: EbayImportDialogOpts) {
       + `<label class="chk" style="text-transform:none;letter-spacing:0;font-weight:600;" title="If rounding would land above the eBay price, round down instead"><input type="checkbox" id="tle-cap"${price.cap ? " checked" : ""} /> Never above the eBay price</label>`
       + sel("tle-photos", "Photos", [[1, "1 (cover only)"], [3, "3"], [6, "6"], [12, "All (up to 12)"]].map(([v, l]) => `<option value="${v}"${choices.galleryMax === v ? " selected" : ""}>${l}</option>`).join(""), "Photos copied from each eBay listing onto its new listing")
       + (o.invTypes?.length ? sel("tle-type", "Inventory type", o.invTypes.map((t) => `<option value="${esc(t.id)}"${t.id === choices.inventoryTypeId ? " selected" : ""}>${esc((t.icon ? t.icon + " " : "") + t.name)}</option>`).join("")) : "")
-      + `<label class="chk" style="text-transform:none;letter-spacing:0;font-weight:600;" title="Games use eBay's Game Name (plus any edition in the title); other items drop the seller's search words. The eBay title shows under each row."><input type="checkbox" id="tle-clean"${cleanTitles ? " checked" : ""} /> Clean up titles</label>`;
+      + `<label class="chk" style="text-transform:none;letter-spacing:0;font-weight:600;" title="Games take eBay's Game Name (plus any edition in the listing title); other items use the listing title less the seller's search words. Off = the eBay listing title as is. Either way the eBay listing title goes into the description."><input type="checkbox" id="tle-clean"${cleanTitles ? " checked" : ""} /> Titles from eBay's game data</label>`;
     const groupsHere = EBAY_GROUPS.filter((g) => rows.some((r) => r.row.ebay.group === g.key && (showImported || !isImported(r))));
     $("tle-cats").innerHTML = groupsHere.map((g) => sel(`tle-gc-${g.key}`, g.label, catOptions(groupCat.get(g.key) || ""))).join("")
       + sel("tle-jpcat", "🇯🇵 Japan items →", catOptions(japanCat, `<option value="${JP_KEEP}"${!japanCat ? " selected" : ""}>Keep the category above</option>`), "Games with a Japan region, plus merch / accessories made in or imported from Japan")
       + sel("tle-gcomp", "Game condition when eBay doesn't say", o.completeness.map((c) => `<option value="${esc(c.code)}"${c.code === gameComp ? " selected" : ""}>${esc(c.label)}</option>`).join(""))
       + sel("tle-icomp", "Other items", o.completeness.map((c) => `<option value="${esc(c.code)}"${c.code === itemComp ? " selected" : ""}>${esc(c.label)}</option>`).join(""))
-      + `<span class="tli-note">Existing listings keep their own category and price; a copy matched onto one gets its own stock row there.</span>`;
+      + `<span class="tli-note">Everything lands on this entry as a draft — nothing is in stock until you Finish it (which prints the labels). New listings get the eBay listing title + description as their description. Existing listings keep their own category, price and description; a copy matched onto one gets its own stock row there.</span>`;
   }
 
   // Category select → "＋ New category…" asks for a name (created on Import).
@@ -405,7 +405,7 @@ export function openEbayImportDialog(o: EbayImportDialogOpts) {
         <td><input type="checkbox" data-keep ${r.skip ? "" : "checked"} ${imported ? "disabled" : ""} /></td>
         <td>${r.row.ebay.image ? `<img class="tle-thumb" src="${esc(r.row.ebay.image)}" alt="" loading="lazy" />` : ""}</td>
         <td class="t">${imported ? `<strong>${esc(listings.find((l) => l.id === id)?.imported?.title || r.row.title)}</strong>` : `<input class="tle-ti" data-title value="${esc(r.row.title)}" />`}${jp}${warn}
-          <div class="tle-src">eBay: <a href="${esc(r.row.ebay.url)}" target="_blank" rel="noopener">${esc(r.row.ebay.title)} ↗</a> · ${esc(r.row.ebay.leaf)} · 📷 ${r.row.ebay.imageCount}${!imported && r.row.title !== r.row.ebay.title ? ` · <button type="button" class="tli-link" data-ebaytitle>use eBay title</button>` : ""}</div></td>
+          <div class="tle-src" title="The eBay listing title goes into the description">eBay: <a href="${esc(r.row.ebay.url)}" target="_blank" rel="noopener">${esc(r.row.ebay.title)} ↗</a> · ${esc(r.row.ebay.leaf)} · 📷 ${r.row.ebay.imageCount}${!imported && r.row.title !== r.row.ebay.title ? ` · <button type="button" class="tli-link" data-ebaytitle>use eBay title</button>` : ""}</div></td>
         <td>${esc(r.row.platform || "—")}${r.row.platformRaw && !r.row.platformResolved ? ` <span class="warn" title="eBay says “${esc(r.row.platformRaw)}” — not a platform the POS knows">?</span>` : ""}</td>
         <td>${esc(cond)}<div class="tle-src">${esc(r.row.conditionRaw)}</div></td>
         <td class="num">${r.row.qty}</td>
