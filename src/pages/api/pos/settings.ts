@@ -36,6 +36,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
   if (b.tabAutoGratuityEnabled !== undefined) settings.tabAutoGratuityEnabled = !!b.tabAutoGratuityEnabled;
   if (b.tabAutoGratuityPercent !== undefined) settings.tabAutoGratuityPercent = Math.max(0, Math.min(100, Math.round(Number(b.tabAutoGratuityPercent)) || 0));
   if (b.labelTemplates !== undefined) settings.labelTemplates = sanitizeLabelTemplates(b.labelTemplates);
+  if (b.ebayAutoSync !== undefined) settings.ebayAutoSync = !!b.ebayAutoSync;
   if (b.leadNotifyEnabled !== undefined) settings.leadNotifyEnabled = !!b.leadNotifyEnabled;
   if (b.leadNotifyEmail !== undefined) settings.leadNotifyEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(b.leadNotifyEmail).trim()) ? String(b.leadNotifyEmail).trim().slice(0, 200) : "";
   if (b.aiProvider !== undefined && AI_PROVIDERS.some((p) => p.key === String(b.aiProvider))) settings.aiProvider = String(b.aiProvider);
