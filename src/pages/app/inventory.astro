@@ -2927,7 +2927,7 @@ const posData = {
           const e = await r.json();
           if (r.ok && e.ok) {
             if (e.imageUrl) newItem.imageUrl = e.imageUrl;
-            for (const k of ["franchise", "genre", "brand"]) if (e.fields?.[k]) newItem[k] = e.fields[k];
+            for (const k of ["franchise", "genre", "brand", "description"]) if (e.fields?.[k]) newItem[k] = e.fields[k];
             if (String(e.tag || "").startsWith("ebay:")) newItem.ebayId = String(e.tag).slice(5);
             render();
             toast(e.imageUrl ? "🛒 Added with the eBay photo" : "✓ Added from eBay");
@@ -2935,10 +2935,11 @@ const posData = {
         } catch { toast("✓ Product added"); }
         if (pe.group === "games") {
           try {
-            const g = await enrich({ productId: newItem.id, title: newItem.title, platform: newItem.platform });
+            // The description is the full eBay title — the game's summary goes under it.
+            const g = await enrich({ productId: newItem.id, title: newItem.title, platform: newItem.platform, appendDescription: true });
             if (g.ok && g.found) {
               if (g.altNames?.length) newItem.altNames = g.altNames;
-              if (g.description && !newItem.description) newItem.description = g.description;
+              if (g.description) newItem.description = newItem.description ? `${newItem.description}\n\n${g.description}` : g.description;
               render();
             }
           } catch { /* the eBay photo + details are already on */ }
@@ -3002,7 +3003,9 @@ const posData = {
       setComp($("np-comp") as HTMLInputElement, sim.completenessCode || it.completenessCode || "", $("np-comp-abbr"));
       const grade = sim.gradeCode || it.gradeCode;
       if (grade) ($("np-grade") as HTMLSelectElement).value = grade;
-      ($("np-price") as HTMLInputElement).value = (it.priceCents / 100).toFixed(2);
+      // Their price + their (cheapest) shipping — what a buyer actually pays.
+      const ship: number | null = typeof sim.shippingCents === "number" ? sim.shippingCents : null;
+      ($("np-price") as HTMLInputElement).value = ((it.priceCents + (ship || 0)) / 100).toFixed(2);
       const code = sim.barcode || it.upc;
       ($("np-barcode") as HTMLInputElement).value = code || "";
       const sel = $("np-cat") as HTMLSelectElement;
@@ -3012,7 +3015,11 @@ const posData = {
       pendingEbay = { input, group: sim.group || "", own: !!sim.ownListing };
       const meta = [sim.franchise && `series: ${sim.franchise}`, sim.character && `character: ${sim.character}`, sim.brand && `brand: ${sim.brand}`, sim.releaseYear && `year: ${sim.releaseYear}`].filter(Boolean).join(" · ");
       const note = $("np-ebay-note") as HTMLElement; note.hidden = false;
-      note.innerHTML = `${it.primaryImage ? `<img src="${esc(it.primaryImage)}" alt="" style="width:46px;height:46px;object-fit:cover;border:1px solid var(--line);">` : ""}<div><strong>✓ Filled from eBay</strong> · ${esc(it.conditionLabel || "—")} · their price ${money(it.priceCents)}${code ? " · UPC/EAN " + esc(code) : ""}${sim.japan ? " · 🇯🇵 Japan item" : ""}${sim.ownListing ? " · <em>your own listing</em>" : sim.seller ? ` · seller ${esc(sim.seller)}` : ""}<br><span style="color:var(--muted-2);">${esc(it.title.slice(0, 90))}</span>${meta ? `<br><span style="color:var(--muted-2);">On Save: cover photo + ${esc(meta)}</span>` : `<br><span style="color:var(--muted-2);">On Save: cover photo</span>`}${(sim.warnings || []).length ? `<br><span style="color:var(--magenta);">⚠ ${esc(sim.warnings.join(" · "))}</span>` : ""}</div>`;
+      note.innerHTML = `${it.primaryImage ? `<img src="${esc(it.primaryImage)}" alt="" style="width:46px;height:46px;object-fit:cover;border:1px solid var(--line);">` : ""}<div><strong>✓ Filled from eBay</strong> · ${esc(it.conditionLabel || "—")} · price ${ship ? `${money(it.priceCents)} + ${money(ship)} shipping = <strong>${money(it.priceCents + ship)}</strong> <button type="button" class="link-btn" id="np-ebay-noship" title="Use their item price without shipping">use ${money(it.priceCents)}</button>` : ship === 0 ? `${money(it.priceCents)} (free shipping)` : `${money(it.priceCents)}${sim.shipZip ? " (no shipping quote)" : ` <span title="Set the store's ZIP in Settings → eBay to include calculated shipping">(shipping not included — set ZIP in Settings → eBay)</span>`}`}${code ? " · UPC/EAN " + esc(code) : ""}${sim.japan ? " · 🇯🇵 Japan item" : ""}${sim.ownListing ? " · <em>your own listing</em>" : sim.seller ? ` · seller ${esc(sim.seller)}` : ""}<br><span style="color:var(--muted-2);">${esc(it.title.slice(0, 90))}</span>${meta ? `<br><span style="color:var(--muted-2);">On Save: cover photo + ${esc(meta)}</span>` : `<br><span style="color:var(--muted-2);">On Save: cover photo</span>`}${(sim.warnings || []).length ? `<br><span style="color:var(--magenta);">⚠ ${esc(sim.warnings.join(" · "))}</span>` : ""}</div>`;
+      document.getElementById("np-ebay-noship")?.addEventListener("click", (e) => {
+        ($("np-price") as HTMLInputElement).value = (it.priceCents / 100).toFixed(2);
+        (e.currentTarget as HTMLElement).replaceWith(document.createTextNode("(using item price)"));
+      });
       toast("✓ Filled from eBay — check it & Save");
     } catch (e: any) { alert(e.message); } finally { btn.disabled = false; btn.textContent = o; }
   });

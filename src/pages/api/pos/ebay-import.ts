@@ -4,7 +4,7 @@ import { fetchAll } from "../../../lib/fetchAll";
 import { copyImageToStorage, copyGallery, listGallery } from "../../../lib/storage";
 import {
   ebayConfigured, ebaySeller, extractItemId, getItem, listSellerItems, listSellerStore, mapItem, storeListingDetails,
-  listingFromItem, isOwnListing, type MappedItem,
+  listingFromItem, isOwnListing, shippingCents, type MappedItem,
 } from "../../../lib/ebay";
 import { buildEbayRows, defaultCategoryFor } from "../../../lib/ebayImport";
 import { syncEbayStock } from "../../../lib/ebaySync";
@@ -87,17 +87,20 @@ async function importOne(admin: any, cats: Map<string, string>, legacyId: string
 }
 
 // Sell Similar (paste any eBay listing into Add Product): the new listing gets
-// the cover photo only, plus the item specifics it doesn't have yet (brand,
-// year, franchise / series, genre, character) — not the seller's description.
+// the cover photo only, the full eBay title as its description, plus the item
+// specifics it doesn't have yet (brand, year, franchise / series, genre,
+// character) — not the seller's description.
 // Another seller's listing is tagged ebay-ref:<id>, a reference the stock sync
 // never reads; the store's own listing gets ebay:<id> (it IS that item).
 async function attachSimilar(admin: any, productId: string, item: any) {
   const mi = mapItem(item);
+  // The full eBay title goes in the description (the title itself is the
+  // short / game-data one) — not the other seller's description text.
   const tag = `${isOwnListing(item) ? "ebay" : "ebay-ref"}:${mi.ebayItemId}`;
   // products.character ships with migration 20261006000001.
   const hasCharacter = !(await admin.from("products").select("character").limit(1)).error;
   const { data: cur } = await admin.from("products")
-    .select(`image_url, brand, release_year, franchise, genre, tags${hasCharacter ? ", character" : ""}`)
+    .select(`image_url, description, brand, release_year, franchise, genre, tags${hasCharacter ? ", character" : ""}`)
     .eq("id", productId).maybeSingle() as { data: any };
   if (!cur) throw new Error("Listing not found");
   const tags: string[] = Array.isArray(cur.tags) ? cur.tags : [];
@@ -108,6 +111,7 @@ async function attachSimilar(admin: any, productId: string, item: any) {
     imageUrl = await copyImageToStorage(admin, mi.primaryImage, "ebay");
     if (imageUrl) patch.image_url = imageUrl;
   }
+  if (!cur.description && mi.title) patch.description = mi.title;
   if (!cur.brand && mi.brand) patch.brand = mi.brand;
   if (!cur.release_year && mi.releaseYear) patch.release_year = mi.releaseYear;
   if (!cur.franchise && mi.franchise) patch.franchise = mi.franchise;
@@ -140,8 +144,14 @@ export const POST: APIRoute = async ({ locals, request }) => {
     if (mode === "preview") {
       const id = extractItemId(b.input || "");
       if (!id) return json({ error: "Couldn't find an eBay item ID in that. Paste the listing URL or the numeric item number." }, 400);
-      const item = await getItem(id);
+      // The store's ZIP (Settings → eBay) gets calculated shipping quoted.
+      const { data: ss } = await admin.from("store_settings").select("settings").eq("id", 1).maybeSingle();
+      const shipZip = String((ss?.settings as any)?.ebayShipZip || "");
+      const item = await getItem(id, shipZip);
       const mi = mapItem(item);
+      const ship0 = shippingCents(item);
+      // CALCULATED shipping without a ZIP comes back as 0.00 — that's "unknown", not free.
+      const ship = ship0.type === "CALCULATED" && !shipZip ? { ...ship0, cents: null } : ship0;
       // Sell Similar: the same title / platform / region / condition / category
       // rules as the store importer, from this one listing.
       let similar: Record<string, unknown> | null = null;
@@ -162,6 +172,9 @@ export const POST: APIRoute = async ({ locals, request }) => {
           japan: row.ebay.japan, barcode: d.upc, ownListing: isOwnListing(item), seller: String(item.seller?.username || ""),
           franchise: mi.franchise, character: mi.character, brand: mi.brand, releaseYear: mi.releaseYear, genre: mi.genre,
           warnings: row.warnings, regionsOn: regionsOn(regions), jpCode: regionFromText("japan", regions),
+          // Their price + their cheapest shipping = what a buyer actually pays.
+          shippingCents: ship.cents, shippingType: ship.type, shippingService: ship.service, shipZip: !!shipZip,
+          fullTitle: mi.title,
         };
       } catch { /* the plain fields below still fill the form */ }
       return json({ ok: true, item: mi, similar });

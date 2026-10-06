@@ -34,10 +34,10 @@ async function appToken(): Promise<string> {
   return cached.token;
 }
 
-async function ebayGet(path: string): Promise<any> {
+async function ebayGet(path: string, extra: Record<string, string> = {}): Promise<any> {
   const token = await appToken();
   const res = await fetch(`${API}${path}`, {
-    headers: { authorization: `Bearer ${token}`, "X-EBAY-C-MARKETPLACE-ID": MARKETPLACE },
+    headers: { authorization: `Bearer ${token}`, "X-EBAY-C-MARKETPLACE-ID": MARKETPLACE, ...extra },
   });
   const j = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -58,8 +58,21 @@ export function extractItemId(input: string): string | null {
 }
 
 // ---- single item -----------------------------------------------------------
-export const getItem = (legacyItemId: string) =>
-  ebayGet(`/item/get_item_by_legacy_id?legacy_item_id=${encodeURIComponent(legacyItemId)}`);
+// `shipZip` = the buyer's ZIP: without one eBay leaves CALCULATED shipping out.
+export const getItem = (legacyItemId: string, shipZip?: string) =>
+  ebayGet(`/item/get_item_by_legacy_id?legacy_item_id=${encodeURIComponent(legacyItemId)}`,
+    shipZip && /^\d{5}$/.test(shipZip) ? { "X-EBAY-C-ENDUSERCTX": `contextualLocation=${encodeURIComponent(`country=US,zip=${shipZip}`)}` } : {});
+
+/** The cheapest shipping option's cost (cents), or null when eBay gives none
+ *  (calculated shipping without a buyer ZIP). */
+export function shippingCents(item: any): { cents: number | null; type: string; service: string } {
+  const opts = ((item?.shippingOptions || []) as any[])
+    .map((o) => ({ cents: o?.shippingCost?.value != null ? Math.round(parseFloat(o.shippingCost.value) * 100) : null, type: String(o?.shippingCostType || ""), service: String(o?.shippingServiceCode || "") }))
+    .filter((o) => o.cents != null && Number.isFinite(o.cents));
+  if (!opts.length) return { cents: null, type: "", service: "" };
+  opts.sort((a, b) => a.cents! - b.cents!);
+  return opts[0];
+}
 
 // ---- availability (for stock sync) -----------------------------------------
 // 404 = listing ended/sold; OUT_OF_STOCK / qty 0 = out of stock. A transient

@@ -84,7 +84,11 @@ export const POST: APIRoute = async ({ locals, request }) => {
   if (b.productId) {
     const patch: Record<string, unknown> = {};
     if (imageUrl && (b.force || !cur?.image_url)) patch.image_url = imageUrl;
+    // appendDescription (Sell Similar): the listing's description is the eBay
+    // title — the game's summary goes under it instead of being skipped.
     if (meta?.summary && !cur?.description) patch.description = meta.summary;
+    else if (meta?.summary && b.appendDescription && cur?.description && !String(cur.description).includes(meta.summary.slice(0, 60)))
+      patch.description = `${cur.description}\n\n${meta.summary}`;
     if (meta?.releaseYear && !cur?.release_year) patch.release_year = meta.releaseYear;
     if (meta?.trailerUrl && !cur?.trailer_url) patch.trailer_url = meta.trailerUrl;
     // Merge (not fill-if-empty): an import may already have saved the sheet's
