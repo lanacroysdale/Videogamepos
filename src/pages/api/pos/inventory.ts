@@ -626,8 +626,13 @@ export const POST: APIRoute = async ({ locals, request }) => {
       }
       // THE move — a single, checked statement (RLS + the open-draft trigger
       // refuse it once the draft is finished).
+      // A reopened line (its copies already labelled) keeps its batch price
+      // through moves — back on its own row, 📥 Entries can still flag a
+      // relabel; Finish stamps the new row's price if the copies really move.
+      // (Needs migration 20261006000002's Finish, which stamps moved copies.)
+      const keepBatch = !!line.stocked_variant_id && !!priceSetCol;
       const { data: moved, error: mErr } = await sb.from("inventory_entry_items")
-        .update({ variant_id: dest!.id, was_new_variant: created, price_cents_at_entry: dest!.price_cents ?? 0 })
+        .update({ variant_id: dest!.id, was_new_variant: created, ...(keepBatch ? {} : { price_cents_at_entry: dest!.price_cents ?? 0 }) })
         .eq("id", line.id).eq("applied", false).select("id").maybeSingle();
       if (mErr || !moved) {
         if (created) await sb.from("product_variants").delete().eq("id", dest!.id).eq("quantity", 0); // undo the empty row
@@ -659,6 +664,11 @@ export const POST: APIRoute = async ({ locals, request }) => {
       // row the line ends up on (migration 20261006000002) — changing the
       // line's condition afterwards never re-prices other copies.
       let live = false;
+      // priceCents null = un-type it (the row keeps its own price).
+      if (b.priceCents === null) {
+        if (await hasCol("inventory_entry_items", "price_set_cents")) { patch.price_set_cents = null; patch.price_set_at = null; }
+        else if (!Object.keys(patch).length) return json({ ok: true, live: true }); // nothing was typed before the migration
+      }
       if (b.priceCents != null) {
         const cents = Math.max(0, Math.round(Number(b.priceCents)) || 0);
         // When it was typed: Finish gives a stock row the price typed LAST on its lines.

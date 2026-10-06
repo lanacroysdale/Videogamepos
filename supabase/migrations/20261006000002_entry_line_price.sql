@@ -129,10 +129,13 @@ begin
     end if;
     update public.inventory_entry_items
        set applied = true, stocked_qty = 0, stocked_variant_id = null,
-           -- The batch's price. A reopened line whose copies already carry
-           -- labels on this same row keeps the old one, so 📥 Entries flags
-           -- "price changed since this batch" for re-labelling.
+           -- The batch's price. Copies of a reopened line that moved to
+           -- another row get fresh labels: that row's price. One whose copies
+           -- already carry labels on this same row keeps the old one, so
+           -- 📥 Entries flags "price changed since this batch" for re-labelling.
            price_cents_at_entry = case
+             when coalesce(r.stocked_qty, 0) > 0 and r.stocked_variant_id is distinct from r.variant_id
+               then (select v.price_cents from public.product_variants v where v.id = r.variant_id)
              when v_price is null or (coalesce(r.stocked_qty, 0) > 0 and r.stocked_variant_id = r.variant_id)
                then price_cents_at_entry
              else v_price end

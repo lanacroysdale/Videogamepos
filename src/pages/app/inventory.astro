@@ -2128,23 +2128,29 @@ const posData = {
         finally { entBusyStep(-1); }
       });
       tr.querySelector<HTMLInputElement>('[data-ef="price"]')?.addEventListener("change", async (e) => {
-        r.priceCents = toCents((e.target as HTMLInputElement).value);
+        // Emptied = un-typed: the row's own price again.
+        const raw = (e.target as HTMLInputElement).value.trim();
+        const rowPrice = items.flatMap(everyVariant).find((x: any) => x.id === r.variantId)?.priceCents ?? r.priceCents;
+        r.priceCents = raw === "" ? rowPrice : toCents(raw);
+        if (raw === "") (e.target as HTMLInputElement).value = (r.priceCents / 100).toFixed(2);
         // The LINE's price: it travels with the line, and Finish gives the
         // stock row the price typed last on its lines — so changing the
         // condition afterwards (Great → Fair) never re-prices the other
         // copies. (Before the migration the server applies it right away —
         // "live".) The row's other lines show the new price too.
-        entRows.forEach((x) => { if (x !== r && x.variantId && x.variantId === r.variantId) x.priceCents = r.priceCents; });
+        if (raw !== "") entRows.forEach((x) => { if (x !== r && x.variantId && x.variantId === r.variantId) x.priceCents = r.priceCents; });
         entTotals();
-        body.querySelectorAll<HTMLElement>("tr[data-item]").forEach((row) => {
+        if (raw !== "") body.querySelectorAll<HTMLElement>("tr[data-item]").forEach((row) => {
           const o = entRows.find((x) => x.itemId === row.dataset.item);
           const pi = row.querySelector<HTMLInputElement>('[data-ef="price"]');
           if (o && o !== r && pi && o.variantId === r.variantId) pi.value = (o.priceCents / 100).toFixed(2);
         });
         entBusyStep(1);
         try {
-          const j = await api({ action: "updateEntryItem", itemId: r.itemId, priceCents: r.priceCents });
-          if (j.live) { const lv = items.flatMap(everyVariant).find((x: any) => x.id === r.variantId); if (lv) lv.priceCents = r.priceCents; }
+          const j = await api({ action: "updateEntryItem", itemId: r.itemId, priceCents: raw === "" ? null : r.priceCents });
+          if (j.live && raw !== "") { const lv = items.flatMap(everyVariant).find((x: any) => x.id === r.variantId); if (lv) lv.priceCents = r.priceCents; }
+          // Un-typed: another line of the row may still carry a typed price — reload what Finish will apply.
+          if (raw === "") { await loadEntry(entryId); renderEnt(); }
         } catch (err: any) { alert(err.message); }
         finally { entBusyStep(-1); }
       });

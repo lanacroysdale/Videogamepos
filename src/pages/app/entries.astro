@@ -150,6 +150,14 @@ const pageData = {
       const e = j.entry;
       // The day's quick adds (＋ Add product / ＋ Receive outside an entry).
       $("ed-title").textContent = `Entry #${e.human_id}${e.note === QUICK_NOTE ? " · ⚡ Quick adds" : ""}`;
+      // A draft's typed prices: Finish gives each stock row the one typed LAST
+      // on its lines — show that on every line of the row.
+      const typed = new Map<string, { c: number; at: string }>();
+      if (e.status === "open") for (const it of j.items || []) {
+        if (it.price_set_cents == null || !it.variant?.id) continue;
+        const cur = typed.get(it.variant.id), at = it.price_set_at || "";
+        if (!cur || at >= cur.at) typed.set(it.variant.id, { c: it.price_set_cents, at });
+      }
       const lines = (j.items || []).map((it: any) => {
         if (it.kind === "non_inventory") return `
           <div class="ed-line">
@@ -161,7 +169,7 @@ const pageData = {
         const v = it.variant || {};
         const p = v.product || {};
         // A draft line's typed price waits on the line until Finish.
-        const shown = e.status === "open" && it.price_set_cents != null ? it.price_set_cents : v.price_cents;
+        const shown = typed.get(v.id)?.c ?? v.price_cents;
         const changed = shown !== it.price_cents_at_entry;
         return `
           <div class="ed-line">
