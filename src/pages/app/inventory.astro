@@ -70,6 +70,8 @@ const upcCols = upcProbeErr ? "" : ", upc_status, upc_checked_at, product_upcs(i
 // Region tag (migration 20261005000001): before it, no column and no list →
 // every region control and badge stays hidden.
 const { error: rgProbeErr } = await supabase.from("products").select("region_code").limit(1);
+// Market prices from PriceCharting (migration 20261006000003).
+const { error: mpProbeErr } = await supabase.from("products").select("market_prices").limit(1);
 const regions = rgProbeErr ? [] : await loadRegions(supabase);
 const rgOn = regionsOn(regions);
 // Virtual categories ("🇯🇵 Japanese Imports" = the Japan region) in the category filter.
@@ -81,7 +83,7 @@ const tagCats = vCats.filter((v) => virtualTag(v)).map((v) => ({ key: v.key, ico
 const { data: products } = await fetchAll((from, to) => supabase
   .from("products")
   .select(
-    `id, title, slug, platform, franchise, genre, description, image_url, alternative_names, tags, category_id${delProbeErr ? "" : ", deleted_at"}${pendCol}${upcCols}${rgProbeErr ? "" : ", region_code"}, category:categories(name,color)${srcProbeErr ? "" : ", product_suppliers(id, label, url)"}, product_variants(id, condition, completeness, completeness_code, grade_code, sku, barcode, internal_code, price_cents, online_price_cents, cost_cents, quantity, online_visible${variantExtraCols}${pendCol}, product_barcodes(id, barcode, label))`,
+    `id, title, slug, platform, franchise, genre, description, image_url, alternative_names, tags, category_id${mpProbeErr ? "" : ", market_prices"}${delProbeErr ? "" : ", deleted_at"}${pendCol}${upcCols}${rgProbeErr ? "" : ", region_code"}, category:categories(name,color)${srcProbeErr ? "" : ", product_suppliers(id, label, url)"}, product_variants(id, condition, completeness, completeness_code, grade_code, sku, barcode, internal_code, price_cents, online_price_cents, cost_cents, quantity, online_visible${variantExtraCols}${pendCol}, product_barcodes(id, barcode, label))`,
   )
   .order("title")
   .order("id")
@@ -134,6 +136,7 @@ const allRows = (products ?? []).map((p: any) => ({
   supplierLinks: p.product_suppliers ?? [], // manager-only via RLS (staff get [])
   upcs: (p.product_upcs ?? []).map((u: any) => ({ id: u.id, upc: u.upc, source: u.source, evidence: u.evidence ?? "" })),
   upcStatus: p.upc_status ?? "",
+  marketPrices: p.market_prices ?? null, // PriceCharting's Loose / Complete / New… (cents)
   upcCheckedAt: p.upc_checked_at ?? null,
   // Live stock rows only; a draft's not-yet-finished rows sit apart.
   variants: (p.product_variants ?? []).filter((v: any) => !v.pending_entry_id).map(mapVariant),
@@ -654,6 +657,7 @@ const posData = {
   .sup-row a { color:var(--cyan); }
   .sup-row .link-btn { margin-left:auto; }
   .ent-add { display:flex; gap:0.6rem; align-items:center; margin-bottom:0.9rem; }
+  .m-market { margin:0.2rem 0 0.5rem; font-size:0.8rem; }
   /* 🔖 Send to TimeLag */
   .bm-card { max-width:560px; }
   .bm-steps { margin:0.6rem 0; padding-left:1.2rem; display:grid; gap:0.5rem; font-size:0.9rem; }
@@ -732,7 +736,7 @@ const posData = {
   import { newListingKey, officialTitleFor, itemKind, norm as normImport } from "../../lib/collectionImport";
   import { upcEligible } from "../../lib/upcMatch";
   import { upcLike, identifyUpc } from "../../lib/upcClient";
-  import { bookmarkletHref, sourceOf } from "../../lib/sourceImport";
+  import { bookmarkletHref, sourceOf, marketKeyFor, MARKET_KEYS, MARKET_LABELS } from "../../lib/sourceImport";
   import { platformGroups, matchPlatform } from "../../lib/platforms";
   import { regionOf, regionsOn, regionByCode, isDefaultRegion, regionBadgeHtml, displayTitle, regionTag, regionSortKey, splitTitleRegion, regionFromPlatform, type Region } from "../../lib/regions";
 
@@ -958,6 +962,8 @@ const posData = {
     const note = document.getElementById("np-ebay-note") as HTMLElement | null; if (note) { note.hidden = true; note.innerHTML = ""; }
     pendingEbay = null;
     pendingSource = null;
+    pendingMarket = null;
+    npPriceTouched = false;
   }
   // The Add panel: open = the "＋ Add product" button turns into "✕ Cancel".
   // Closing with something typed asks first (also when Start entry closes it).
@@ -1474,6 +1480,7 @@ const posData = {
 
       <div class="m-section">
         <div class="m-label">Pricing &amp; web — per condition${conditionPricing ? ` <span class="cp-on">↻ condition pricing on</span>` : ""}</div>
+        ${p.marketPrices ? `<p class="muted m-market">📈 PriceCharting averages (${esc(p.marketPrices.at || "")}): ${marketLine(p.marketPrices)}${p.marketPrices.url ? ` <a href="${esc(p.marketPrices.url)}" target="_blank" rel="noopener noreferrer">↗</a>` : ""}</p>` : ""}
         <div class="cond-scroll">
           <table class="cond-table"${invTypes.length ? "" : ` style="min-width:660px;"`}>
             <thead><tr><th>Completeness</th><th>Grade</th><th>SKU</th><th>In‑store $</th><th>Online $</th><th>Qty</th>${data.isManager ? `<th title="Purchase price — what you paid per copy">Paid $</th>` : ""}<th>Web</th>${invTypes.length ? "<th>Type</th><th>Loc</th>" : ""}</tr></thead>
@@ -1943,8 +1950,9 @@ const posData = {
     const defComp = categories.find((c) => c.id === p.categoryId)?.default_completeness || "";
     const compLabel = completeness.find((c) => c.code === defComp)?.label || "New";
     try {
-      const j = await api({ action: "addVariant", productId: p.id, completenessCode: defComp, gradeCode: "3", condition: compLabel, priceCents: 0, quantity: 0 });
-      const nv: any = { id: j.variant.id, condition: compLabel, completeness: null, completenessCode: defComp, gradeCode: "3", sku: null, internalCode: j.variant.internal_code || "", labelCode: j.variant.label_code || "", priceCents: 0, onlinePriceCents: null, costCents: null, quantity: 0, onlineVisible: false, inventoryTypeId: retailTypeId, locationId: "", barcodes: [] };
+      const startPrice = marketPriceFor(p.marketPrices, defComp) ?? 0; // PriceCharting's average for it, when known
+      const j = await api({ action: "addVariant", productId: p.id, completenessCode: defComp, gradeCode: "3", condition: compLabel, priceCents: startPrice, quantity: 0 });
+      const nv: any = { id: j.variant.id, condition: compLabel, completeness: null, completenessCode: defComp, gradeCode: "3", sku: null, internalCode: j.variant.internal_code || "", labelCode: j.variant.label_code || "", priceCents: startPrice, onlinePriceCents: null, costCents: null, quantity: 0, onlineVisible: false, inventoryTypeId: retailTypeId, locationId: "", barcodes: [] };
       p.variants.push(nv);
       $("cond-body").insertAdjacentHTML("beforeend", condRowHtml(nv));
       $("bc-blocks").insertAdjacentHTML("beforeend", bcBlockHtml(nv));
@@ -2781,8 +2789,14 @@ const posData = {
       const f = (k: string) => tr.querySelector(`[data-rf="${k}"]`) as HTMLInputElement;
       const onCond = () => {
         r.comp = f("comp").value; r.grade = f("grade").value;
-        // The price follows the condition (that condition's own price) until you type one.
-        if (!r.priceTouched) { const t = recvTarget(r); if (t) r.price = (t.priceCents / 100).toFixed(2); }
+        // The price follows the condition (that condition's own price — or, for
+        // a condition the listing doesn't have yet, PriceCharting's average) until you type one.
+        if (!r.priceTouched) {
+          const t = recvTarget(r);
+          const m = t ? null : marketPriceFor(r.p.marketPrices, r.comp);
+          if (t) r.price = (t.priceCents / 100).toFixed(2);
+          else if (m != null) r.price = (m / 100).toFixed(2);
+        }
         renderRecv();
       };
       f("comp").addEventListener("change", onCond);
@@ -3455,11 +3469,13 @@ const posData = {
           toast(`✓ Added${where} — copying the photo…`);
           try {
             const r = await fetch("/api/pos/source-import", { method: "POST", headers: { "content-type": "application/json" },
-              body: JSON.stringify({ mode: "attach", productId: newItem.id, source: ps }) });
+              body: JSON.stringify({ mode: "attach", productId: newItem.id, source: ps, market: ps.market || undefined }) });
             const e = await r.json();
             if (r.ok && e.ok) {
               if (e.imageUrl) newItem.imageUrl = e.imageUrl;
               if (e.supplier) newItem.supplierLinks = [...(newItem.supplierLinks || []), e.supplier];
+              if (e.market) newItem.marketPrices = e.market;
+              if (e.market?.id) newItem.pcId = e.market.id;
               render();
             }
           } catch { /* the listing is saved; the photo can be added by hand */ }
@@ -3484,6 +3500,30 @@ const posData = {
 
   /* ---------- eBay import ---------- */
   let pendingEbay: any = null;
+
+  /* ---------- Market prices (PriceCharting) ----------
+     Saved on a listing when it's added from its PriceCharting page. A copy's
+     price follows its condition: Loose / Complete / New… → that average. */
+  const marketPriceFor = (m: any, compCode: string): number | null => {
+    if (!m) return null;
+    const key = marketKeyFor(completeness.find((c: any) => c.code === compCode)?.label || compCode);
+    const v = key ? Number(m[key]) : NaN;
+    return Number.isFinite(v) && v > 0 ? v : null;
+  };
+  const marketLine = (m: any, clickable = false) => !m ? "" : MARKET_KEYS.filter((k) => Number(m[k]) > 0 && k !== "graded")
+    .map((k) => clickable ? `<button type="button" class="link-btn" data-mkt="${k}">${MARKET_LABELS[k]} ${money(m[k])}</button>` : `${MARKET_LABELS[k]} ${money(m[k])}`).join(" · ");
+  // The Add form: a PriceCharting import's prices, and whether a price was typed by hand.
+  let pendingMarket: any = null;
+  let npPriceTouched = false;
+  function priceFromMarket() {
+    if (!pendingMarket || npPriceTouched) return;
+    const c = marketPriceFor(pendingMarket, compVal($("np-comp") as HTMLInputElement));
+    if (c != null) ($("np-price") as HTMLInputElement).value = (c / 100).toFixed(2);
+  }
+  $("np-price")?.addEventListener("input", () => { npPriceTouched = true; });
+  $("np-comp")?.addEventListener("input", priceFromMarket);
+  $("np-comp")?.addEventListener("change", priceFromMarket);
+  $("np-comp")?.addEventListener("blur", () => setTimeout(priceFromMarket, 0));
 
   /* ---------- 🔖 Send to TimeLag: a product from another shop's page ----------
      The bookmark reads the page in the browser it's open in (Suruga-ya etc.
@@ -3590,12 +3630,27 @@ const posData = {
     ($("np-barcode") as HTMLInputElement).value = f.barcode || "";
     ($("np-cost") as HTMLInputElement).value = f.costCents != null ? (f.costCents / 100).toFixed(2) : "";
     ($("np-qty") as HTMLInputElement).value = "1";
-    pendingSource = { url: so.url, priceText: so.priceText, titleOriginal: so.titleOriginal, images: so.images };
+    pendingSource = { url: so.url, priceText: so.priceText, titleOriginal: so.titleOriginal, images: so.images, market: j.market || null };
+    pendingMarket = j.market || null;
+    npPriceTouched = false;
     const rate = j.money?.jpyPerUsd, fee = j.money?.feePct;
     const paid = f.costCents != null
       ? `Paid <strong>${money(f.costCents)}</strong> = ${esc(so.priceText)}${so.currency === "JPY" ? ` at ¥${rate}/$${fee ? ` + ${fee}% fees` : ""}` : fee ? ` + ${fee}% fees` : ""}`
       : so.priceText ? `price ${esc(so.priceText)}` : "no price found";
     const img = so.images?.[0] ? `<img src="${esc(so.images[0])}" alt="" referrerpolicy="no-referrer" style="width:54px;height:54px;object-fit:cover;border:1px solid var(--line);">` : "";
+    if (j.market) {
+      // A price guide: its averages are what copies SELL for — the price
+      // follows the condition you pick (until you type one); nothing is "paid".
+      note.innerHTML = `${img}<div><strong>📈 From PriceCharting</strong>${f.barcode ? ` · UPC ${esc(f.barcode)}` : ""}${f.regionCode && f.regionCode !== "US" ? ` · ${esc(f.regionCode)} release` : ""}
+        <br>${marketLine(j.market, true) || "no prices on the page"} <span style="color:var(--muted-2);">(averages, ${esc(j.market.at)})</span>
+        <br><span style="color:var(--muted-2);">Pick the condition — the price follows it (or click one). On Save: these averages are kept on the listing, plus its PriceCharting photo and link.</span>
+        ${j.existing ? `<br><span style="color:var(--magenta);">Already in the POS: <strong>${esc(j.existing.title)}</strong> — <button type="button" class="link-btn" id="src-existing">add copies to it instead</button></span>` : ""}
+        ${j.openEntry && !entryMode ? `<br><button type="button" class="link-btn" id="src-entry">📥 Put it on your open Entry #${esc(j.openEntry.human_id)} instead</button>` : ""}</div>`;
+      note.querySelectorAll<HTMLElement>("[data-mkt]").forEach((b) => b.addEventListener("click", () => {
+        ($("np-price") as HTMLInputElement).value = (Number(j.market[b.dataset.mkt!]) / 100).toFixed(2);
+        npPriceTouched = true;
+      }));
+    } else
     note.innerHTML = `${img}<div><strong>🔖 From ${esc(so.label)}</strong> · ${paid}${f.barcode ? ` · JAN ${esc(f.barcode)}` : ""}${f.regionCode === "JP" ? " · 🇯🇵 Japan" : ""}
       ${so.titleOriginal ? `<br><span style="color:var(--muted-2);">Original: ${esc(so.titleOriginal)}</span>` : so.pageTitle && so.pageTitle !== f.title ? `<br><span style="color:var(--muted-2);">On the page: ${esc(so.pageTitle)}</span>` : ""}
       ${f.note ? `<br><span style="color:var(--muted-2);">Condition note: ${esc(f.note)}</span>` : ""}
@@ -3617,7 +3672,8 @@ const posData = {
       else alert("That draft isn't open anymore.");
     });
     ($("np-price") as HTMLInputElement).value = "";
-    ($("np-price") as HTMLInputElement).focus();
+    priceFromMarket(); // PriceCharting: the current condition's average
+    (j.market ? $("np-comp") : $("np-price") as HTMLInputElement).focus();
   }
 
   // Pasting a listing link (or pressing Enter) pulls it — no extra click.
