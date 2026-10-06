@@ -1,15 +1,14 @@
 import type { APIRoute } from "astro";
 import { lookup } from "node:dns/promises";
 import { attachUpcs, upcTablesReady } from "../../../lib/upcFinder";
-import { canonicalUpc } from "../../../lib/upcMatch";
+import { canonicalUpc, upcForms } from "../../../lib/upcMatch";
 import { norm } from "../../../lib/collectionImport";
-import { fetchAll } from "../../../lib/fetchAll";
 import { galleryFolder } from "../../../lib/storage";
 import { createSupabaseAdminClient } from "../../../lib/supabase";
 import { aiSettings, aiStatus, callAI } from "../../../lib/ai";
 import { PLATFORM_ALIASES, resolveStaticPlatform } from "../../../lib/smartSearch";
 import { lbPlatform } from "../../../lib/launchbox";
-import { regionsOn, loadRegions, regionByCode, regionFromPlatform } from "../../../lib/regions";
+import { regionsOn, loadRegions, regionByCode, regionFromPlatform, splitTitleRegion } from "../../../lib/regions";
 import {
   sanitizeCaptured, pageFacts, sourceOf, sourceItemId, publicUrl, canonicalUrl, sourceImportSettings, costCentsFor, priceText, parseJsonObject,
   priceChartingFacts, isPriceCharting, MARKET_KEYS,
@@ -179,55 +178,102 @@ export const POST: APIRoute = async ({ locals, request }) => {
     const pcf = priceChartingFacts(page, new Date().toISOString().slice(0, 10));
     if (!pcf || !pcf.name) return json({ error: "That PriceCharting page didn't come through — reload it, then click the bookmark again." }, 400);
     const regions = await loadRegions(sb);
+    const rOn = regionsOn(regions);
     const rg = regionFromPlatform(pcf.console, regions);
     const platform = resolveStaticPlatform(rg.platform) ?? rg.platform;
-    const regionCode = regionsOn(regions) && rg.code && regionByCode(rg.code, regions) ? rg.code : "";
-    const rgCol = regionsOn(regions) ? ", region_code" : "";
-    const { data: all } = await fetchAll((from, to) => sb.from("products")
-      .select(`id, title, platform, tags, image_url, deleted_at${rgCol}, product_variants(quantity)`).is("deleted_at", null).order("id").range(from, to));
-    const rows = (all ?? []) as any[];
-    const home = regionsOn(regions) ? (regions.find((r) => r.isDefault)?.code ?? "") : "";
-    const regionOfRow = (r: any) => (regionsOn(regions) ? (r.region_code || home) : "");
+    const regionCode = rOn && rg.code && regionByCode(rg.code, regions) ? rg.code : "";
+    // A PAL / JP page whose region this store can't record (regions off, or
+    // not in its list): never matched to a listing automatically.
+    const regionUnusable = !!rg.code && !regionCode;
+    const home = rOn ? (regions.find((r) => r.isDefault)?.code ?? "") : "";
     const want = { platform: platform.toLowerCase(), region: regionCode || home };
-    const samePlatform = (r: any) => (resolveStaticPlatform(r.platform) ?? r.platform ?? "").toLowerCase() === want.platform;
-    const sameRegion = (r: any) => !regionsOn(regions) || regionOfRow(r) === want.region;
-    const card = (r: any, by: string) => ({ id: r.id, title: r.title, platform: r.platform ?? "", regionCode: r.region_code ?? "", stock: (r.product_variants ?? []).reduce((n: number, v: any) => n + (v.quantity || 0), 0), by });
-    const seen = new Set<string>();
-    const matches: any[] = [];
-    const add = (r: any, by: string) => { if (r && !seen.has(r.id)) { seen.add(r.id); matches.push(card(r, by)); } };
+    // Only the columns that exist (soft delete / regions ship in later migrations).
+    const hasDel = !(await sb.from("products").select("deleted_at").limit(1)).error;
+    const rgCol = rOn ? ", region_code" : "";
+    const cols = `id, title, platform, tags${rgCol}`;
+    const live = (q: any) => (hasDel ? q.is("deleted_at", null) : q);
+    const regionOfRow = (r: any) => (rOn ? (r.region_code || home) : (splitTitleRegion(r.title, regions).code || regionFromPlatform(r.platform, regions).code || ""));
+    const platOf = (r: any) => (resolveStaticPlatform(r.platform) ?? r.platform ?? "").toLowerCase();
+    const samePlatform = (r: any) => platOf(r) === want.platform;
+    const sameRegion = (r: any) => regionOfRow(r) === (rOn ? want.region : rg.code);
+    const linkedPc = (r: any) => ((r.tags ?? []).find((t: string) => t.startsWith("pricecharting:") && t !== `pricecharting:${pcf.market.id}`) ?? "").slice("pricecharting:".length);
+    const nt = (t: string) => norm(rOn ? t : splitTitleRegion(t, regions).title).replace(/\b(the|and|a|of)\b/g, " ").replace(/\s+/g, " ").trim();
+    const byId = new Map<string, any>();
+    const found: { r: any; by: string }[] = [];
+    const add = (r: any, by: string) => { if (r && !found.some((f) => f.r.id === r.id)) { found.push({ r, by }); byId.set(r.id, r); } };
     // 1) its PriceCharting id tag
-    if (pcf.market.id) for (const r of rows) if ((r.tags ?? []).includes(`pricecharting:${pcf.market.id}`)) add(r, "PriceCharting id");
-    // 2) a barcode it lists
-    if (!matches.length && pcf.codes.length) {
-      const { data: hits } = await sb.from("product_upcs").select("product_id").in("upc", pcf.codes);
-      for (const h of (hits ?? []) as any[]) add(rows.find((r) => r.id === h.product_id), "barcode");
+    if (pcf.market.id) {
+      const { data, error } = await live(sb.from("products").select(cols).contains("tags", [`pricecharting:${pcf.market.id}`])).limit(10);
+      if (error) return json({ error: "Couldn't read the catalog — try again." }, 502);
+      for (const r of (data ?? []) as any[]) add(r, "PriceCharting id");
     }
-    // 3) the same title on the same platform + region
-    const nt = (t: string) => norm(t).replace(/\b(the|and|a|of)\b/g, " ").replace(/\s+/g, " ").trim();
+    // 2) a barcode it lists — listing UPCs, stock-row barcodes, extra barcodes
+    if (!found.length && pcf.codes.length) {
+      const forms = [...new Set(pcf.codes.flatMap(upcForms))];
+      const ids = new Set<string>();
+      const [{ data: u, error: e1 }, { data: v, error: e2 }, { data: pb, error: e3 }] = await Promise.all([
+        sb.from("product_upcs").select("product_id").in("upc", forms),
+        sb.from("product_variants").select("product_id").in("barcode", forms),
+        sb.from("product_barcodes").select("variant:product_variants(product_id)").in("barcode", forms),
+      ]);
+      if (e2) return json({ error: "Couldn't read the catalog — try again." }, 502);
+      if (!e1) for (const x of (u ?? []) as any[]) ids.add(x.product_id);
+      for (const x of (v ?? []) as any[]) ids.add(x.product_id);
+      if (!e3) for (const x of (pb ?? []) as any[]) if (x.variant?.product_id) ids.add(x.variant.product_id);
+      if (ids.size) {
+        const { data, error } = await live(sb.from("products").select(cols).in("id", [...ids].slice(0, 20)));
+        if (error) return json({ error: "Couldn't read the catalog — try again." }, 502);
+        for (const r of (data ?? []) as any[]) add(r, "barcode");
+      }
+    }
+    // 3) titles sharing the name's longest word (one targeted query, no full scan)
+    const word = nt(pcf.name).split(" ").filter((w) => w.length >= 3).sort((a, b) => b.length - a.length)[0] || nt(pcf.name);
+    const { data: cand, error: cErr } = await live(sb.from("products").select(cols).ilike("title", `%${word.replace(/[%_\\]/g, "")}%`)).limit(300);
+    if (cErr) return json({ error: "Couldn't read the catalog — try again." }, 502);
     const name = nt(pcf.name);
-    if (!matches.length) for (const r of rows) if (samePlatform(r) && sameRegion(r) && nt(r.title) === name) add(r, "same title");
-    // A listing tagged with a DIFFERENT PriceCharting id is another product — never auto-updated.
-    const otherPc = (m: any) => (rows.find((r) => r.id === m.id)?.tags ?? []).some((t: string) => t.startsWith("pricecharting:") && t !== `pricecharting:${pcf.market.id}`);
-    const sure = matches.filter((m) => !otherPc(m));
-    // Near misses (no sure match): same platform + region, most of the title's words.
-    const words = (t: string) => new Set(nt(t).split(" ").filter((w) => w.length > 1));
+    const sameTitle = ((cand ?? []) as any[]).filter((r) => nt(r.title) === name);
+    if (!found.length) for (const r of sameTitle) if (samePlatform(r) && sameRegion(r)) add(r, "same title");
+    // Sure = one listing, the same platform + region, not linked to another
+    // PriceCharting product, and a region the store can record.
+    const sure = found.length === 1 && !regionUnusable && samePlatform(found[0].r) && sameRegion(found[0].r) && !linkedPc(found[0].r) ? found[0] : null;
+    // Near misses — any platform / region (a listing with no or an unusual
+    // platform is still offered), the same ones first. Numbers count as words
+    // ("Mega Man 2" isn't "Mega Man 3").
+    const words = (t: string) => new Set(nt(t).split(" ").filter((w) => w.length > 1 || /\d/.test(w)));
     const W = words(pcf.name);
-    const near = matches.length ? [] : rows.filter((r) => samePlatform(r) && sameRegion(r)).map((r) => {
+    const near = sure ? [] : ((cand ?? []) as any[]).filter((r) => !found.some((f) => f.r.id === r.id)).map((r) => {
       const R = words(r.title);
       const inter = [...W].filter((w) => R.has(w)).length;
-      return { r, sim: inter / Math.max(1, new Set([...W, ...R]).size) };
-    }).filter((x) => x.sim >= 0.55).sort((a, b) => b.sim - a.sim).slice(0, 5).map((x) => card(x.r, `similar title (${Math.round(x.sim * 100)}%)`));
+      const sim = inter / Math.max(1, new Set([...W, ...R]).size);
+      return { r, sim, same: samePlatform(r) && sameRegion(r) };
+    }).filter((x) => x.sim >= 0.55).sort((a, b) => Number(b.same) - Number(a.same) || b.sim - a.sim).slice(0, 6);
+    for (const x of near) byId.set(x.r.id, x.r);
+    // Stock counts, only for the listings shown.
+    const showIds = [...byId.keys()];
+    const stock = new Map<string, number>();
+    if (showIds.length) {
+      const { data: vs } = await sb.from("product_variants").select("product_id, quantity").in("product_id", showIds);
+      for (const x of (vs ?? []) as any[]) stock.set(x.product_id, (stock.get(x.product_id) ?? 0) + (x.quantity || 0));
+    }
+    const card = (r: any, by: string) => {
+      const notes = [by];
+      if (!samePlatform(r)) notes.push(r.platform ? `listed on ${r.platform}` : "no platform");
+      else if (!sameRegion(r)) notes.push(`listed as ${regionOfRow(r) || "no region"}`);
+      return { id: r.id, title: r.title, platform: r.platform ?? "", regionCode: r.region_code ?? "", stock: stock.get(r.id) ?? 0, by: notes.join(" · "), linkedPc: linkedPc(r) };
+    };
     const { data: cats } = await sb.from("categories").select("id, name, default_completeness").order("sort_order");
     const isSystem = pcf.kind === "system";
     const isAccessory = !isSystem && /\b(controller|adapter|memory card|cable|charger|power supply|ac adapter|stylus)\b/i.test(pcf.name);
     const wantCat = isSystem ? /console|hardware|system/i : isAccessory ? /accessor/i : /game/i;
     const cat = ((cats ?? []) as any[]).find((c) => wantCat.test(c.name)) ?? ((cats ?? []) as any[]).find((c) => /game/i.test(c.name));
+    // Regions off: an import keeps the old "[JP]" title tag on a new listing.
+    const tag = !rOn && rg.code ? ` [${rg.code}]` : "";
     return json({
       ok: true,
-      match: sure.length === 1 && matches.length === 1 ? sure[0] : null,
-      choices: sure.length === 1 && matches.length === 1 ? [] : [...matches, ...near],
+      match: sure ? card(sure.r, sure.by) : null,
+      choices: sure ? [] : [...found.map((f) => card(f.r, f.by)), ...near.map((x) => card(x.r, `similar title (${Math.min(99, Math.round(x.sim * 100))}%)`))],
       fields: {
-        title: pcf.name.slice(0, 200), platform, regionCode, categoryId: cat?.id ?? "", defaultCompleteness: cat?.default_completeness ?? "",
+        title: (pcf.name + tag).slice(0, 200), platform, regionCode, categoryId: cat?.id ?? "", defaultCompleteness: cat?.default_completeness ?? "",
         barcode: pcf.upc, releaseYear: pcf.year,
         genre: pcf.genre && !/^none$/i.test(pcf.genre) ? pcf.genre.slice(0, 80) : "", publisher: pcf.publisher && !/^none$/i.test(pcf.publisher) ? pcf.publisher.slice(0, 80) : "",
       },
@@ -262,7 +308,11 @@ export const POST: APIRoute = async ({ locals, request }) => {
     const marker = reference ? (pcId ? `pricecharting:${pcId}` : "") : `src:${src.host}${itemId ? ":" + itemId : ""}`.slice(0, 120);
     const tags: string[] = Array.isArray(prod.tags) ? prod.tags : [];
     const patch: Record<string, unknown> = {};
-    if (marker && !tags.includes(marker)) patch.tags = [...tags, marker];
+    // Already linked to ANOTHER PriceCharting product: no second link and no
+    // overwriting its averages — unless the person chose to relink it.
+    const otherPc = reference ? tags.find((t) => t.startsWith("pricecharting:") && t !== marker) : undefined;
+    if (otherPc && !b.replaceLink) return json({ error: `This listing is linked to another PriceCharting product (#${otherPc.slice("pricecharting:".length)}).`, linkedPc: otherPc.slice("pricecharting:".length) }, 409);
+    if (marker && !tags.includes(marker)) patch.tags = [...tags.filter((t) => !(otherPc && t === otherPc)), marker];
     // Market prices (migration 20261006000003): only PriceCharting's numbers, as cents.
     let market: any = null;
     let marketError = "";
@@ -272,7 +322,9 @@ export const POST: APIRoute = async ({ locals, request }) => {
       // The PriceCharting picture already added (as the main or a gallery photo) stays remembered.
       const prevImg = typeof prod.market_prices?.img === "string" ? prod.market_prices.img : "";
       if (prevImg) market.img = prevImg;
-      if (!(await admin.from("products").select("market_prices").limit(1)).error) patch.market_prices = market;
+      // No prices on the page (a ¥ / € setting, a card page): the saved ones stay.
+      if (MARKET_KEYS.every((k) => market[k] == null)) market = null;
+      else if (!(await admin.from("products").select("market_prices").limit(1)).error) patch.market_prices = market;
       else { market = null; marketError = "The PriceCharting averages weren't kept — run supabase/migrations/20261006000003_market_prices.sql in the Supabase SQL editor."; }
     }
     // A price guide fills details the listing doesn't have yet (never overwrites).
@@ -312,18 +364,26 @@ export const POST: APIRoute = async ({ locals, request }) => {
     // picture: market_prices remembers which it added).
     let imageUrl: string | null = prod.image_url || null;
     let galleryAdded: string | null = null;
-    const pcImg = reference ? (Array.isArray(s.images) ? s.images : []).map(publicUrl).find(Boolean) : "";
+    // (PriceCharting's own image server only — never a picture from elsewhere.)
+    const pcImg = reference ? (Array.isArray(s.images) ? s.images : []).map(publicUrl).find((u: string) => u && isPriceChartingImage(u)) : "";
     if (imageUrl && pcImg && market && mpCol && market.img !== pcImg) {
-      const next = await nextGalleryName(admin, productId);
-      galleryAdded = await copyExternalImage(admin, pcImg, (ext) => `${galleryFolder(productId)}/${next}.${ext}`);
-      if (galleryAdded) {
-        market.img = pcImg;
-        await admin.from("products").update({ market_prices: market }).eq("id", productId);
+      // The shop shows the gallery INSTEAD of the main photo once there is one:
+      // an empty gallery first gets the listing's own photo as #00, so the
+      // PriceCharting one is truly the second. (Can't copy it → no gallery add.)
+      const have = (await admin.storage.from("product-images").list(galleryFolder(productId), { limit: 100 })).data ?? [];
+      const ready = have.length > 0 || !!(await copyIntoGallery(admin, imageUrl, productId, "00"));
+      if (ready) {
+        const next = await nextGalleryName(admin, productId);
+        galleryAdded = await copyExternalImage(admin, pcImg, (ext) => `${galleryFolder(productId)}/${next}.${ext}`);
+        if (galleryAdded) {
+          market.img = pcImg;
+          await admin.from("products").update({ market_prices: market }).eq("id", productId);
+        }
       }
     }
     if (!imageUrl) {
       const deadline = Date.now() + 20_000;
-      for (const img of (Array.isArray(s.images) ? s.images : [s.image]).map(publicUrl).filter(Boolean).slice(0, 3)) {
+      for (const img of (Array.isArray(s.images) ? s.images : [s.image]).map(publicUrl).filter((u: string) => u && (!reference || isPriceChartingImage(u))).slice(0, 3)) {
         if (Date.now() > deadline) break;
         imageUrl = await copyExternalImage(admin, img);
         if (imageUrl) {
@@ -432,6 +492,28 @@ async function copyExternalImage(admin: any, url: string, pathFor?: (ext: string
     }
     return null;
   } catch { return null; }
+}
+
+/** PriceCharting's own picture hosts. */
+function isPriceChartingImage(u: string): boolean {
+  try {
+    const x = new URL(u);
+    return x.protocol === "https:" && ((x.hostname === "storage.googleapis.com" && x.pathname.startsWith("/images.pricecharting.com/")) || /(^|\.)pricecharting\.com$/i.test(x.hostname));
+  } catch { return false; }
+}
+
+// The listing's own main photo into its gallery as `name` — copied inside our
+// bucket when it's ours, else fetched (same checks as any image).
+async function copyIntoGallery(admin: any, imageUrl: string, productId: string, name: string): Promise<boolean> {
+  const marker = "/storage/v1/object/public/product-images/";
+  const i = imageUrl.indexOf(marker);
+  if (i >= 0) {
+    const from = decodeURIComponent(imageUrl.slice(i + marker.length).split("?")[0]);
+    const ext = (from.match(/\.(jpe?g|png|webp|gif)$/i)?.[1] || "jpg").toLowerCase();
+    const { error } = await admin.storage.from("product-images").copy(from, `${galleryFolder(productId)}/${name}.${ext}`);
+    if (!error) return true;
+  }
+  return !!(await copyExternalImage(admin, imageUrl, (ext) => `${galleryFolder(productId)}/${name}.${ext}`));
 }
 
 // The next gallery file name ("00", "01"…) — the shop lists the folder by name.

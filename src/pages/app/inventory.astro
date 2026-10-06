@@ -130,7 +130,7 @@ const allRows = (products ?? []).map((p: any) => ({
   ebayId: (p.tags ?? []).find((t: string) => t.startsWith("ebay:"))?.slice(5) ?? "",
   // Sell Similar: the other seller's listing it was copied from (never synced).
   ebayRefId: (p.tags ?? []).find((t: string) => t.startsWith("ebay-ref:"))?.slice(9) ?? "",
-  pcId: (p.tags ?? []).find((t: string) => t.startsWith("pricecharting:"))?.slice(13) ?? "",
+  pcId: (p.tags ?? []).find((t: string) => t.startsWith("pricecharting:"))?.slice("pricecharting:".length) ?? "",
   // Plain tags ("plush") — the "kind:value" ones above are internal markers.
   tags: (p.tags ?? []).filter((t: string) => !t.includes(":")),
   supplierLinks: p.product_suppliers ?? [], // manager-only via RLS (staff get [])
@@ -3761,6 +3761,10 @@ const posData = {
 
   // The page the bookmark sent: the full copy from the shop tab, else the
   // compact one in the address. Forgotten from the address bar right away.
+  // How the page arrived: "message" = posted by the bookmark from the shop tab
+  // itself (origin = that site); "fragment" = only the copy in the address
+  // (pop-up blocked — or a link someone else made, so never acted on unasked).
+  let receivedVia: { via: "message" | "fragment"; origin: string } = { via: "fragment", origin: "" };
   async function receivePage(): Promise<any | null> {
     let compact: any = null;
     const m = location.hash.match(/[#&]tl=([^&]*)/);
@@ -3783,6 +3787,7 @@ const posData = {
         if (e.source !== opener || (from && e.origin !== from) || e.data?.type !== "tl-page" || !e.data.page) return;
         // The page this tab was opened for (not one an older click still holds).
         if (compact?.url && e.data.page.url !== compact.url) return;
+        receivedVia = { via: "message", origin: e.origin };
         finish(e.data.page);
       };
       window.addEventListener("message", on);
@@ -3814,37 +3819,50 @@ const posData = {
       if (!r.ok || !j.ok) throw new Error(j.error || "Couldn't read that page");
     } catch (e: any) { pcuOpen(`<p>⚠ ${esc(e.message)}</p>`); return; }
     const head = `<p style="margin:0 0 0.5rem;"><strong>${esc(j.fields.title)}</strong> <span class="muted">${esc(j.fields.platform)}${j.fields.regionCode && j.fields.regionCode !== "US" ? ` · ${esc(j.fields.regionCode)}` : ""}</span><br>${marketLine(j.market) || "no prices taken"} <span class="muted">(averages, ${esc(j.market.at)})</span>${j.priceNote ? `<br><span style="color:var(--magenta);">⚠ ${esc(j.priceNote)}</span>` : ""}${j.marketReady ? "" : `<br><span style="color:var(--magenta);">⚠ Averages can't be kept until the market-prices migration is run.</span>`}</p>`;
-    if (j.match) { await pcApply(j, j.match.id, head, false); return; }
-    const choices: any[] = j.choices || [];
-    if (!choices.length) { await pcCreate(j, head); return; }
-    pcuOpen(`${head}<p class="muted" style="margin:0.6rem 0 0.3rem;">Which listing is this?</p>${choices.map((c, i) => `
-      <div class="pcu-row"><div><strong>${esc(c.title)}</strong>${badge(c.regionCode)} <span class="muted">${esc(c.platform)} · ${c.stock} in stock · ${esc(c.by)}</span></div>
-        <button type="button" class="btn btn-ghost btn-sm" data-pcuse="${i}">Update this one</button></div>`).join("")}
-      <div class="pcu-acts"><button type="button" class="btn btn-ghost btn-sm" data-pcuclose2>Cancel</button><button type="button" class="btn btn-primary btn-sm" id="pcu-create">＋ Create a new listing (0 in stock)</button></div>`);
-    $("pcu-body").querySelectorAll<HTMLElement>("[data-pcuse]").forEach((b) => b.addEventListener("click", () => pcApply(j, choices[+b.dataset.pcuse!].id, head, false)));
+    // Hands-free only when the page really came from PriceCharting through the
+    // bookmark (not just a link with data in it): else one click to confirm.
+    const trusted = receivedVia.via === "message" && /^https:\/\/([a-z0-9-]+\.)*pricecharting\.com$/i.test(receivedVia.origin);
+    if (j.match && trusted) { await pcApply(j, j.match.id, head, false); return; }
+    const choices: any[] = j.match ? [j.match] : j.choices || [];
+    const noPrice = marketPriceFor(j.market, j.fields.defaultCompleteness || "") == null;
+    pcuOpen(`${head}<p class="muted" style="margin:0.6rem 0 0.3rem;">${j.match ? "Update this listing?" : choices.length ? "Which listing is this?" : "No listing for it yet."}</p>${choices.map((c, i) => `
+      <div class="pcu-row"><div><strong>${esc(c.title)}</strong>${badge(c.regionCode)} <span class="muted">${esc(c.platform)} · ${c.stock} in stock · ${esc(c.by)}</span>${c.linkedPc ? `<br><span style="color:var(--magenta);font-size:0.8rem;">linked to another PriceCharting product (#${esc(c.linkedPc)})</span>` : ""}</div>
+        <button type="button" class="btn ${j.match ? "btn-primary" : "btn-ghost"} btn-sm" data-pcuse="${i}">Update this one</button></div>`).join("")}
+      <div class="pcu-acts"><button type="button" class="btn btn-ghost btn-sm" data-pcuclose2>Cancel</button><button type="button" class="btn ${choices.length ? "btn-ghost" : "btn-primary"} btn-sm" id="pcu-create">＋ Create a new listing (0 in stock)</button></div>
+      ${noPrice ? `<p class="muted" style="font-size:0.8rem;">A new listing would start at $0 (no average for its usual condition) — set its price after.</p>` : ""}`);
+    $("pcu-body").querySelectorAll<HTMLElement>("[data-pcuse]").forEach((b) => b.addEventListener("click", () => {
+      const c = choices[+b.dataset.pcuse!];
+      if (c.linkedPc && !confirm(`“${c.title}” is linked to another PriceCharting product (#${c.linkedPc}). Link it to this page instead? Its averages are replaced.`)) return;
+      pcApply(j, c.id, head, false, !!c.linkedPc);
+    }));
     document.getElementById("pcu-create")?.addEventListener("click", () => pcCreate(j, head));
     $("pcu-body").querySelector("[data-pcuclose2]")?.addEventListener("click", () => { ($("pcu-modal") as HTMLElement).hidden = true; });
   }
   // Today's averages / barcodes / photo / blank details onto a listing.
-  async function pcApply(j: any, productId: string, head: string, created: boolean) {
+  async function pcApply(j: any, productId: string, head: string, created: boolean, replaceLink = false) {
     pcuOpen(`${head}<p>Saving…</p>`);
     let e: any;
     try {
       const r = await fetch("/api/pos/source-import", { method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ mode: "attach", productId, source: j.source, market: j.market, facts: j.fields }) });
+        body: JSON.stringify({ mode: "attach", productId, source: j.source, market: j.market, facts: j.fields, replaceLink }) });
       e = await r.json();
+      if (r.status === 409 && e.linkedPc && !replaceLink) {
+        const t = items.find((x: any) => x.id === productId)?.title || "This listing";
+        if (confirm(`${t} is linked to another PriceCharting product (#${e.linkedPc}). Link it to this page instead? Its averages are replaced.`)) return pcApply(j, productId, head, created, true);
+        pcuOpen(`${head}<p>Left as it is.</p>`); return;
+      }
       if (!r.ok || !e.ok) throw new Error(e.error || "Couldn't update the listing");
     } catch (err: any) { pcuOpen(`${head}<p>⚠ ${esc(err.message)}</p>`); return; }
     const p = items.find((x: any) => x.id === productId);
     if (p) {
       if (e.market) p.marketPrices = e.market;
-      if (e.market?.id) p.pcId = e.market.id;
+      if (j.market?.id) p.pcId = j.market.id;
       if (e.imageUrl && !p.imageUrl) p.imageUrl = e.imageUrl;
       for (const a of e.codes?.added || []) if (!(p.upcs || []).some((u: any) => u.upc === a.upc)) p.upcs = [...(p.upcs || []), { ...a, evidence: "From PriceCharting" }];
       render();
     }
     const did = [
-      e.market ? "today's averages" : "",
+      e.market ? "today's averages" : j.priceNote ? "no averages (see above) — the saved ones stay" : "",
       e.codes?.added?.length ? `${e.codes.added.length} barcode${e.codes.added.length === 1 ? "" : "s"} (${e.codes.added.map((a: any) => esc(a.upc)).join(", ")})` : "",
       e.galleryAdded ? "its photo (extra, in the gallery)" : e.imageUrl && created ? "its photo" : "",
       (e.filled || []).length ? `blank details (${(e.filled as string[]).map((f) => f === "brand" ? "publisher" : f === "release_year" ? "release year" : f).join(", ")})` : "",
