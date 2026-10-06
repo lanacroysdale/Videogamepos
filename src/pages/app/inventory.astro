@@ -643,7 +643,8 @@ const posData = {
   .upc-pick-row > div { flex:1; min-width:0; display:flex; flex-direction:column; gap:0.15rem; font-size:0.84rem; }
   .upc-pick-row strong { font-size:0.95rem; }
   .upc-pick-warn { color:var(--magenta); font-size:0.78rem; }
-  .upc-pick-foot { display:flex; justify-content:flex-end; margin-top:0.4rem; }
+  .upc-pick-foot { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:0.4rem; margin-top:0.4rem; }
+  .upc-pick-step { font-size:0.78rem; color:var(--muted); margin-bottom:0.3rem; }
   .upc-pick-row button:disabled { opacity:0.4; cursor:not-allowed; filter:none; }
   .m-pricelinks { padding:0.45rem 1.1rem; border-bottom:1px solid var(--border); font-size:0.8rem; display:flex; flex-wrap:wrap; align-items:center; gap:0.4rem; }
 
@@ -1539,7 +1540,11 @@ const posData = {
   // A lookup's answer for one listing → the loaded item.
   // "Is this the same game?" — the lookup's possible matches next to this
   // listing, each with eBay's catalog photo. Picking one attaches its UPC.
-  function chooseUpcCandidate(p: any, res: any): Promise<void> {
+  // Used one listing at a time (🔎 Find on eBay) and as a QUEUE after "Fill
+  // missing UPCs" (step = "3 of 12", plus Stop). Resolves with what staff did:
+  // picked one / none of these (remembered — not suggested again) / skip.
+  type PickResult = "picked" | "none" | "skip" | "stop";
+  function chooseUpcCandidate(p: any, res: any, step?: { i: number; n: number }): Promise<PickResult> {
     return new Promise((done) => {
       const cands: any[] = res.candidates || [];
       const ov = document.createElement("div");
@@ -1547,6 +1552,7 @@ const posData = {
       ov.setAttribute("role", "dialog");
       ov.setAttribute("aria-modal", "true");
       ov.innerHTML = `<div class="upc-pick-card">
+        ${step ? `<div class="upc-pick-step">Confirm UPCs · <strong>${step.i} of ${step.n}</strong></div>` : ""}
         <h3>Is this the same game?</h3>
         <p class="muted">eBay's catalog didn't match this listing exactly${res.status === "ambiguous" ? " (more than one release fits)" : ""}. Compare the covers — pick the right one, or none.</p>
         <div class="upc-pick-row upc-pick-ours">
@@ -1560,18 +1566,35 @@ const posData = {
             ${c.owner ? `<span class="upc-pick-warn">⚠ That UPC is already on “${esc(c.owner)}”</span>` : ""}</div>
           <button class="btn btn-primary btn-sm" type="button" data-pick="${i}"${c.owner ? " disabled" : ""}>✓ Use this</button>
         </div>`).join("")}
-        <div class="upc-pick-foot"><button class="btn btn-ghost btn-sm" type="button" data-none>None of these</button></div>
+        <div class="upc-pick-foot">
+          ${step ? `<button class="btn btn-ghost btn-sm" type="button" data-stop title="End the review — the rest stay for later">Stop reviewing</button>` : ""}
+          <button class="btn btn-ghost btn-sm" type="button" data-skip title="Decide later — nothing is saved">Skip</button>
+          <button class="btn btn-ghost btn-sm" type="button" data-none title="None of these is this game — they won't be suggested for it again">None of these</button>
+        </div>
       </div>`;
       let saving = false; // a pick being saved: the dialog can't close under it
-      const close = () => { if (saving) return; ov.remove(); document.removeEventListener("keydown", onKey, true); done(); };
+      const close = (r: PickResult) => { if (saving) return; ov.remove(); document.removeEventListener("keydown", onKey, true); done(r); };
       const onKey = (e: KeyboardEvent) => {
-        if (e.key === "Escape") { e.stopPropagation(); close(); }
+        if (e.key === "Escape") { e.stopPropagation(); close("skip"); }
         // Only a deliberate click picks one — a scanner's trailing Enter must not.
         else if ((e.key === "Enter" || e.key === " ") && (e.target as HTMLElement)?.matches?.("[data-pick]")) { e.preventDefault(); e.stopPropagation(); }
       };
       document.addEventListener("keydown", onKey, true);
-      ov.addEventListener("click", (e) => { if (e.target === ov) close(); });
-      ov.querySelector("[data-none]")!.addEventListener("click", close);
+      ov.addEventListener("click", (e) => { if (e.target === ov) close("skip"); });
+      ov.querySelector("[data-skip]")!.addEventListener("click", () => close("skip"));
+      ov.querySelector("[data-stop]")?.addEventListener("click", () => close("stop"));
+      // None of these: remember the shown codes as wrong for this listing.
+      ov.querySelector("[data-none]")!.addEventListener("click", async () => {
+        if (saving) return;
+        const codes = [...new Set(cands.flatMap((c) => c.upcs || []))];
+        if (codes.length) {
+          saving = true;
+          try { await upcApi({ action: "rejectCandidates", productId: p.id, upcs: codes }); }
+          catch (e: any) { saving = false; alert(e.message); return; }
+          saving = false;
+        }
+        close("none");
+      });
       ov.querySelectorAll<HTMLButtonElement>("[data-pick]").forEach((b) => b.addEventListener("click", async () => {
         if (saving) return;
         const c = cands[Number(b.dataset.pick)];
@@ -1586,7 +1609,7 @@ const posData = {
           const skipped: string[] = j.skipped || [];
           const added = (j.upcs || []).map((u: any) => u.upc).filter((u: string) => c.upcs.includes(u));
           toast(`🏷 UPC ${added.join(", ") || "—"} added to ${rgTitle(p)}${skipped.length ? ` — skipped ${skipped.join("; ")}` : ""}`);
-          saving = false; close();
+          saving = false; close("picked");
         } catch (e: any) {
           saving = false;
           btns.forEach((x, k) => (x.disabled = was[k]));
@@ -1595,8 +1618,8 @@ const posData = {
         }
       }));
       document.body.appendChild(ov);
-      // Focus the safe choice: a stray Enter closes it, never attaches anything.
-      (ov.querySelector("[data-none]") as HTMLElement | null)?.focus();
+      // Focus the safe choice: a stray Enter skips — never attaches or rejects.
+      (ov.querySelector("[data-skip]") as HTMLElement | null)?.focus();
     });
   }
   function applyUpcResult(res: any) {
@@ -2500,20 +2523,39 @@ const posData = {
       if (!todo.length) { toast("Every game that can get a UPC automatically has one (or was checked today)"); return; }
       if (!confirm(`Look up UPCs on eBay's product catalog for ${todo.length} game${todo.length === 1 ? "" : "s"}? Only sure matches are attached; the rest stay under "Needs UPC". Takes about ${Math.max(1, Math.round(todo.length * 3 / 60))} min — keep this tab open.`)) return;
       const tally = { found: 0, none: 0, unsure: 0, review: 0 };
+      const toReview: { p: any; res: any }[] = [];
       for (let i = 0; i < todo.length; i += 3) {
         btn.textContent = `UPCs ${Math.min(i + 3, todo.length)}/${todo.length}…`;
         const r = await upcApi({ action: "fill", productIds: todo.slice(i, i + 3).map((x) => x.id) });
         for (const res of r.results || []) {
           applyUpcResult(res);
           if (res.status === "found") tally.found++;
-          else if (res.candidates?.length) tally.review++;
+          else if (res.candidates?.length) {
+            tally.review++;
+            const p = items.find((x: any) => x.id === res.id);
+            if (p) toReview.push({ p, res });
+          }
           else if (res.status === "not_found") tally.none++;
           else if (res.status === "ambiguous" || res.status === "conflict") tally.unsure++;
         }
         render();
         if (r.stopped) { alert(r.stopped); break; }
       }
-      toast(`🏷 UPCs: ${tally.found} attached · ${tally.none} not on eBay · ${tally.unsure} unsure${tally.review ? ` · ${tally.review} with a possible match to confirm (open the listing → 🔎 Find on eBay)` : ""} — see "Needs UPC"`);
+      toast(`🏷 UPCs: ${tally.found} attached · ${tally.none} not on eBay · ${tally.unsure} unsure${tally.review ? ` · ${tally.review} to confirm` : ""} — see "Needs UPC"`);
+      // Then the close calls, one by one: "Is this the same game?"
+      if (toReview.length) {
+        btn.textContent = "Confirming…";
+        const done = { picked: 0, none: 0, skip: 0 };
+        let stoppedAt = -1;
+        for (let k = 0; k < toReview.length; k++) {
+          const r = await chooseUpcCandidate(toReview[k].p, toReview[k].res, { i: k + 1, n: toReview.length });
+          if (r === "stop") { stoppedAt = k; break; }
+          done[r]++;
+          render();
+        }
+        const left = stoppedAt >= 0 ? toReview.length - stoppedAt : 0;
+        toast(`🏷 Confirmed ${done.picked} · none ${done.none} · skipped ${done.skip}${left ? ` · ${left} left for later (🔎 Find on eBay on each listing)` : ""}`);
+      }
     } catch (e: any) { alert(e.message); }
     finally { btn.disabled = false; btn.textContent = orig; }
   });
