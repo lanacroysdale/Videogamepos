@@ -7,7 +7,7 @@ import { labelTemplates } from "../../lib/labels";
 import { MARKETING_HOSTS } from "../../consts";
 import { createSupabaseAdminClient } from "../../lib/supabase";
 import { loadRegions, regionsOn, regionBadgeHtml } from "../../lib/regions";
-import { activeVirtualCategories } from "../../lib/virtualCategories";
+import { activeVirtualCategories, virtualHint, virtualTag } from "../../lib/virtualCategories";
 
 const supabase = Astro.locals.supabase;
 const [{ data: categories }, { data: settings }, { data: completeness }, { data: grades }] = await Promise.all([
@@ -72,7 +72,10 @@ const { error: rgProbeErr } = await supabase.from("products").select("region_cod
 const regions = rgProbeErr ? [] : await loadRegions(supabase);
 const rgOn = regionsOn(regions);
 // Virtual categories ("🇯🇵 Japanese Imports" = the Japan region) in the category filter.
-const vCats = rgOn ? activeVirtualCategories(regions) : [];
+// (Region ones only while regions are on.)
+const vCats = activeVirtualCategories(regions).filter((v) => !v.region || rgOn);
+// Ones a person tags by hand (🧸 Plush) — edit window + bulk bar.
+const tagCats = vCats.filter((v) => virtualTag(v)).map((v) => ({ key: v.key, icon: v.icon, label: v.label, tag: virtualTag(v) }));
 // Paged — one request stops at 1,000 listings (later titles silently vanished).
 const { data: products } = await fetchAll((from, to) => supabase
   .from("products")
@@ -125,6 +128,8 @@ const allRows = (products ?? []).map((p: any) => ({
   // Sell Similar: the other seller's listing it was copied from (never synced).
   ebayRefId: (p.tags ?? []).find((t: string) => t.startsWith("ebay-ref:"))?.slice(9) ?? "",
   pcId: (p.tags ?? []).find((t: string) => t.startsWith("pricecharting:"))?.slice(13) ?? "",
+  // Plain tags ("plush") — the "kind:value" ones above are internal markers.
+  tags: (p.tags ?? []).filter((t: string) => !t.includes(":")),
   supplierLinks: p.product_suppliers ?? [], // manager-only via RLS (staff get [])
   upcs: (p.product_upcs ?? []).map((u: any) => ({ id: u.id, upc: u.upc, source: u.source, evidence: u.evidence ?? "" })),
   upcStatus: p.upc_status ?? "",
@@ -323,7 +328,7 @@ const posData = {
         <span class="mag" aria-hidden="true">🔎</span>
         <input id="inv-search" type="search" placeholder="Search or add — e.g. zelda botw switch cib good" autocomplete="off" />
       </div>
-      <select id="inv-cat"><option value="">All categories</option>{categories?.map((c) => <option value={c.id}>{c.name}</option>)}{vCats.map((v) => <option value={`v:${v.key}`} title={`Every listing with the ${v.region} region, whatever its category`}>{v.icon} {v.label}</option>)}</select>
+      <select id="inv-cat"><option value="">All categories</option>{categories?.map((c) => <option value={c.id}>{c.name}</option>)}{vCats.map((v) => <option value={`v:${v.key}`} title={virtualHint(v)}>{v.icon} {v.label}</option>)}</select>
       <select id="inv-plat" title="Only one platform (Nintendo Switch, 3DS…)"><option value="">All platforms</option></select>
       {rgOn && (
         <select id="inv-region" title="Only listings from one region (market)"><option value="">All regions</option>{regions.filter((r) => r.isActive).map((r) => <option value={r.code} title={r.name}>{r.flag} {r.short}</option>)}</select>
@@ -357,6 +362,9 @@ const posData = {
       <button id="bulk-online" class="btn btn-primary btn-sm" type="button">🌐 Publish to web</button>
       {rgOn && (
         <select id="bulk-region" class="bulk-region" title="Move the selected listings to another region (market)"><option value="">Set region…</option>{regions.filter((r) => r.isActive).map((r) => <option value={r.code}>{r.flag} {r.name}</option>)}</select>
+      )}
+      {tagCats.length > 0 && (
+        <select id="bulk-vtag" class="bulk-region" title="Put the selected listings in (or take them out of) a tag category"><option value="">Tag…</option>{tagCats.flatMap((t) => [<option value={`+${t.tag}`}>{t.icon} Mark as {t.label}</option>, <option value={`-${t.tag}`}>{t.icon} Not {t.label}</option>])}</select>
       )}
       {isManager && !delProbeErr && <button id="bulk-delete" class="btn btn-ghost btn-sm bulk-del" type="button" title="Move to Recently deleted (kept 7 days, then purged)">🗑 Delete</button>}
       <button id="bulk-clear" class="btn btn-ghost btn-sm" type="button">✕ Clear</button>
@@ -503,6 +511,9 @@ const posData = {
   .bulk-count strong { color:var(--cyan); font-family:var(--font-mono); }
   .bulk-actions { display:flex; flex-wrap:wrap; gap:0.5rem; }
   .bulk-region { width:auto; padding:0.3rem 0.45rem; font-size:0.84rem; }
+  .m-vtag { display:flex; flex-direction:column; justify-content:flex-end; gap:0.2rem; }
+  .m-vtag span { display:flex; align-items:center; gap:0.4rem; font-weight:600; }
+  .m-vtag input { width:auto; }
   .upc-note.m-region-warn { color:var(--yellow,#ffd23f); margin-top:0.5rem; }
   .inv-warn { margin-top:0.5rem; font-size:0.76rem; color:var(--yellow,#ffd23f); font-weight:600; }
   .chip.warn-chip.active { border-color:var(--yellow,#ffd23f); color:var(--yellow,#ffd23f); }
@@ -702,13 +713,15 @@ const posData = {
   import { barcodeEq } from "../../lib/gtin";
   import { openImportDialog, importPrice } from "../../lib/importDialog";
   import { openEbayImportDialog } from "../../lib/ebayImportDialog";
-  import { VIRTUAL_CATEGORIES } from "../../lib/virtualCategories";
+  import { VIRTUAL_CATEGORIES, inVirtualCategory, virtualTag } from "../../lib/virtualCategories";
   import { newListingKey, officialTitleFor, itemKind, norm as normImport } from "../../lib/collectionImport";
   import { upcEligible } from "../../lib/upcMatch";
   import { upcLike, identifyUpc } from "../../lib/upcClient";
   import { regionOf, regionsOn, regionByCode, isDefaultRegion, regionBadgeHtml, displayTitle, regionTag, regionSortKey, splitTitleRegion, regionFromPlatform, type Region } from "../../lib/regions";
 
   const data = JSON.parse(document.getElementById("pos-data")!.textContent!);
+  // Tag categories a person sets by hand (🧸 Plush): edit window + bulk bar.
+  const TAG_CATS = VIRTUAL_CATEGORIES.filter((v) => virtualTag(v));
   let items: any[] = data.items;
   const categories: any[] = data.categories;
   // "＋ New category…" at the end of a category dropdown (managers): asks for a
@@ -1142,7 +1155,7 @@ const posData = {
       if (state.cat.startsWith("v:")) {
         // Virtual category: a field, not the listing's one category.
         const v = VIRTUAL_CATEGORIES.find((x) => `v:${x.key}` === state.cat);
-        if (v && regionOf(p.regionCode, regions) !== v.region) return false;
+        if (v && !inVirtualCategory(v, p, regions)) return false;
       } else if (state.cat && p.categoryId !== state.cat) return false;
       if (state.plat && platKey(p) !== (state.plat === NO_PLAT ? "" : state.plat)) return false;
       if (state.region && regionOf(p.regionCode, regions) !== state.region) return false;
@@ -1248,6 +1261,31 @@ const posData = {
   $("bulk-offline").addEventListener("click", () => bulkSetOnline(false));
 
   // Bulk "Set region" (regions on only): fix many listings' market at once.
+  // Tag categories in bulk: "+plush" puts the selected listings in 🧸 Plush, "-plush" takes them out.
+  document.getElementById("bulk-vtag")?.addEventListener("change", async (e) => {
+    const sel = e.currentTarget as HTMLSelectElement;
+    const v = sel.value; sel.value = "";
+    const ids = [...selected];
+    if (!v || !ids.length) return;
+    const on = v.startsWith("+"), tag = v.slice(1);
+    const cat = TAG_CATS.find((c) => virtualTag(c) === tag);
+    const name = cat ? `${cat.icon} ${cat.label}` : tag;
+    sel.disabled = true;
+    try {
+      const j = await api({ action: "bulkSetTag", productIds: ids, tag, on });
+      items.forEach((p) => {
+        if (!selected.has(p.id)) return;
+        const t = new Set<string>(p.tags || []);
+        if (on) t.add(tag); else t.delete(tag);
+        p.tags = [...t];
+      });
+      selected.clear();
+      render();
+      const n = j.updated ?? ids.length;
+      toast(on ? `✓ ${n} listing${n === 1 ? "" : "s"} → ${name}` : `✓ ${n} listing${n === 1 ? "" : "s"} taken out of ${name}${cat ? " (a title that says so still counts)" : ""}`);
+    } catch (err: any) { alert(err.message); }
+    finally { sel.disabled = false; }
+  });
   document.getElementById("bulk-region")?.addEventListener("change", async (e) => {
     const sel = e.currentTarget as HTMLSelectElement;
     const code = sel.value; sel.value = "";
@@ -1350,6 +1388,13 @@ const posData = {
           <label>Genre / set<input id="m-genre" value="${esc(p.genre)}"></label>
           <label>Franchise<input id="m-franchise" value="${esc(p.franchise)}"></label>
           <label>Category<select id="m-category">${catOpts}</select></label>
+          ${TAG_CATS.map((v) => {
+            const on = (p.tags || []).includes(virtualTag(v));
+            const byTitle = !on && inVirtualCategory(v, { ...p, tags: [] }, regions);
+            return `<label class="m-vtag" title="Shows under ${esc(v.icon + " " + v.label)} in the category filter and on the shop, whatever its category">
+              <span><input type="checkbox" data-vtag="${esc(virtualTag(v))}"${on ? " checked" : ""}> ${esc(v.icon + " " + v.label)}</span>
+              ${byTitle ? `<small class="muted">already — its title says so</small>` : ""}</label>`;
+          }).join("")}
           <label class="m-span2">Image<div class="img-field"><input id="m-image" value="${esc(p.imageUrl)}" placeholder="https://… or upload →"><label class="btn btn-ghost btn-sm img-up">📷 Upload<input type="file" id="m-imgfile" accept="image/*" hidden></label></div></label>
         </div>
         ${rgOn ? `<div id="m-region-warn" class="upc-note m-region-warn" hidden></div>` : ""}
@@ -1853,6 +1898,8 @@ const posData = {
         franchise: get("m-franchise").trim(), categoryId: get("m-category"), imageUrl: get("m-image").trim(),
         description: ($("m-desc") as HTMLTextAreaElement).value.trim(),
         ...(regionSel ? { regionCode: regionSel.value } : {}),
+        // Tag categories (🧸 Plush): on / off per tag.
+        ...(document.querySelector("[data-vtag]") ? { tags: Object.fromEntries([...document.querySelectorAll<HTMLInputElement>("[data-vtag]")].map((c) => [c.dataset.vtag!, c.checked])) } : {}),
       });
       Object.assign(p, {
         title: get("m-title").trim(), platform: get("m-platform").trim(), genre: get("m-genre").trim(),
@@ -1864,6 +1911,7 @@ const posData = {
       // What the server stored: a typed "[JP]" title tag becomes the region.
       if (typeof pj.title === "string") p.title = pj.title;
       if (typeof pj.regionCode === "string") p.regionCode = pj.regionCode;
+      if (Array.isArray(pj.tags)) p.tags = pj.tags;
       if (pj.upcReset) { p.upcs = (p.upcs || []).filter((u: any) => u.source !== "ebay"); p.upcStatus = ""; p.upcCheckedAt = null; }
 
       for (const row of Array.from(document.querySelectorAll<HTMLElement>("[data-vrow]"))) {

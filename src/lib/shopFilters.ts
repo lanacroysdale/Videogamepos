@@ -20,6 +20,7 @@ export interface ShopItem {
   category?: string | null;
   description?: string | null;
   regionCode?: string | null; // products.region_code ("" / null = the default region)
+  tags?: string[] | null;     // products.tags — a department's tag puts it there whatever the title says
 }
 
 export interface Rule {
@@ -27,6 +28,7 @@ export interface Rule {
   label: string;
   icon?: string;
   test: RegExp;
+  tag?: string; // departments: a listing tagged this belongs here even when its title doesn't say so
 }
 
 const text = (i: ShopItem) =>
@@ -36,7 +38,7 @@ const text = (i: ShopItem) =>
 // last entry, "games", is the broad residual: anything that names a platform or
 // reads like software but isn't a plush / collectible / accessory / merch / unit.
 export const DEPARTMENTS: Rule[] = [
-  { key: "plushies", label: "Plushies", icon: "🧸",
+  { key: "plushies", label: "Plushies", icon: "🧸", tag: "plush",
     test: /\b(plush|plushie|plushy|plushies|stuffed|amigurumi|beanie baby|soft toy)\b/ },
   { key: "collectibles", label: "Collectibles", icon: "🏆",
     test: /\b(figure|figurine|figures|statue|amiibo|funko|gashapon|re-?ment|nendoroid|nanoblock|diorama|trading ?cards?|tcg|model kit|mini ?figure|minifigure|plaque|medallion)\b/ },
@@ -106,9 +108,22 @@ export interface ItemFacets {
   franchise: string;
 }
 
+// A department a listing is TAGGED into (e.g. "plush") beats the title words.
+const taggedDept = (i: ShopItem): string =>
+  DEPARTMENTS.find((r) => r.tag && (i.tags ?? []).includes(r.tag))?.key ?? "";
+
+/** Is the listing in this department — its tag, or the title says so (the shop's own rule)? */
+export function inDepartment(key: string, i: ShopItem): boolean {
+  const r = DEPARTMENTS.find((d) => d.key === key);
+  return !!r && (!!(r.tag && (i.tags ?? []).includes(r.tag)) || r.test.test(text(i)));
+}
+
+/** The tags a person may set by hand (one per tagged department: "plush"). */
+export const DEPARTMENT_TAGS: string[] = DEPARTMENTS.flatMap((d) => (d.tag ? [d.tag] : []));
+
 export function classify(i: ShopItem, regions?: Region[] | null): ItemFacets {
   return {
-    dept: firstMatch(DEPARTMENTS, i) || "other",
+    dept: taggedDept(i) || firstMatch(DEPARTMENTS, i) || "other",
     platform: firstMatch(PLATFORMS, i),
     cond: firstMatch(CONDITIONS, i),
     region: regionsOn(regions) ? regionOf(i.regionCode, regions).toLowerCase() : "",

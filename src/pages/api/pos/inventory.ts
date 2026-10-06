@@ -2,6 +2,7 @@ import type { APIRoute } from "astro";
 import { createSupabaseAdminClient } from "../../../lib/supabase";
 import { attachUpcs } from "../../../lib/upcFinder";
 import { canonicalUpc } from "../../../lib/upcMatch";
+import { DEPARTMENT_TAGS } from "../../../lib/shopFilters";
 import { loadRegions, regionsOn, regionOf, regionByCode, isDefaultRegion, defaultRegionCode, regionFromPlatform, type Region } from "../../../lib/regions";
 
 export const prerender = false;
@@ -913,6 +914,17 @@ export const POST: APIRoute = async ({ locals, request }) => {
       const regions = await getRegions();
       const rgOn = regionsOn(regions);
       if (b.regionCode !== undefined && rgOn) patch.region_code = regionOf(String(b.regionCode ?? ""), regions);
+      // Tag categories (🧸 Plush): { plush: true|false }. Only those tags;
+      // every other tag (eBay / PriceCharting markers…) is kept as it is.
+      if (b.tags && typeof b.tags === "object") {
+        const want = Object.entries(b.tags as Record<string, unknown>).filter(([t]) => DEPARTMENT_TAGS.includes(t));
+        if (want.length) {
+          const { data: cur } = await sb.from("products").select("tags").eq("id", b.id).maybeSingle();
+          const tags = new Set<string>(Array.isArray(cur?.tags) ? cur!.tags : []);
+          for (const [t, on] of want) { if (on) tags.add(t); else tags.delete(t); }
+          patch.tags = [...tags];
+        }
+      }
       if (!Object.keys(patch).length) return json({ error: "Nothing to update" }, 400);
       // The region before, to see whether this save moved the listing (a
       // typed "[JP]" title tag moves it too — the database guard does that).
@@ -927,7 +939,8 @@ export const POST: APIRoute = async ({ locals, request }) => {
       const upcReset = !!(rgOn && before && saved?.region_code && saved.region_code !== before && saved.region_code !== "US");
       if (upcReset) await resetUpcsForRegion([b.id]);
       // What was stored (the guard may have moved a title tag into the region).
-      return json({ ok: true, ...(saved ? { title: saved.title, ...(rgOn ? { regionCode: saved.region_code ?? "" } : {}) } : {}), upcReset });
+      return json({ ok: true, ...(saved ? { title: saved.title, ...(rgOn ? { regionCode: saved.region_code ?? "" } : {}),
+        tags: (Array.isArray(saved.tags) ? saved.tags : []).filter((t: string) => !t.includes(":")) } : {}), upcReset });
     }
     case "addBarcode": {
       if (!b.variantId || !String(b.barcode ?? "").trim()) return json({ error: "Variant and barcode required" }, 400);
@@ -1085,6 +1098,25 @@ export const POST: APIRoute = async ({ locals, request }) => {
       const upcReset = code !== "US" ? moved : [];
       await resetUpcsForRegion(upcReset);
       return json({ ok: true, updated: data?.length ?? 0, regionCode: code, upcReset });
+    }
+    case "bulkSetTag": {
+      // Put many listings in (or out of) a tag category (🧸 Plush). Other tags stay.
+      const ids: string[] = Array.isArray(b.productIds) ? b.productIds.filter(Boolean).map(String) : [];
+      const tag = String(b.tag ?? "");
+      if (!ids.length) return json({ error: "No items selected" }, 400);
+      if (!DEPARTMENT_TAGS.includes(tag)) return json({ error: "Unknown tag" }, 400);
+      const { data: cur, error: rErr } = await sb.from("products").select("id, tags").in("id", ids);
+      if (rErr) return json({ error: rErr.message }, 500);
+      let updated = 0;
+      for (const p of (cur ?? []) as any[]) {
+        const tags = new Set<string>(Array.isArray(p.tags) ? p.tags : []);
+        if (b.on ? tags.has(tag) : !tags.has(tag)) { updated++; continue; }
+        if (b.on) tags.add(tag); else tags.delete(tag);
+        const { error } = await sb.from("products").update({ tags: [...tags] }).eq("id", p.id);
+        if (error) return json({ error: error.message }, 500);
+        updated++;
+      }
+      return json({ ok: true, updated });
     }
     case "bulkDelete": {
       // Soft-delete: stamp deleted_at → items move to "Recently deleted" for
