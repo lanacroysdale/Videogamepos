@@ -140,12 +140,25 @@ export function cleanGameTitle(title: string, platform: string): string {
   return out.length >= 2 ? out : title.trim();
 }
 
-/** Merch / accessories keep their words (platform, "Japan" — they describe the
- *  item); only the seller's search noise comes off. */
-export function cleanItemTitle(title: string): string {
+// Words a merch title can END with that only say who made / sold it or where
+// it came from ("… Pochette Nintendo Japan Hobonichi") — they come off the end;
+// the brand / Japanese Imports category / description keep that information.
+const TAIL_WORDS = new Set(["nintendo", "sega", "sony", "bandai", "namco", "banpresto", "sanei", "san", "ei", "taito", "tomy", "takara", "japan", "jpn", "japanese", "import", "imported", "official", "authentic", "exclusive", "genuine", "oem", "store", "club", "x"]);
+
+/** Merch / accessories keep their words (platform, character, edition); the
+ *  seller's search noise comes off, and so do maker / brand / "Japan Import"
+ *  words at the very end (`brand` = eBay's Brand, e.g. "hobonichi"). */
+export function cleanItemTitle(title: string, brand = ""): string {
   const t = ` ${title} `.replace(/\s+/g, " ").replace(NOISE_ANY, " ").replace(NOISE_CAPS, " ")
     .replace(/\s(new( with tags?)?|nwt|used|open box)\s*$/i, " "); // a closing condition word ("… Nintendo Tokyo New")
-  const out = tidy(t);
+  const brandWords = new Set(fold(brand).split(" ").filter((w) => w.length >= 2));
+  const words = tidy(t).split(" ");
+  // Strip from the end, but always keep at least 3 words.
+  while (words.length > 3) {
+    const w = fold(words[words.length - 1]);
+    if (!w || TAIL_WORDS.has(w) || brandWords.has(w)) words.pop(); else break;
+  }
+  const out = tidy(words.join(" "));
   return out.length >= 2 ? out : title.trim();
 }
 
@@ -376,7 +389,7 @@ export function buildEbayRows(listings: EbayListing[], details: Map<string, Ebay
         const base = name.length >= 2 && !generic ? name : cleanGameTitle(split.title, platform);
         const eds = editionTags(l.title, base);
         title = base + eds.map((t) => ` [${t}]`).join("");
-      } else title = (o.shortMerch !== false && (group === "merch" || group === "toys") && merchTitle(split.title, d?.merch ? { ...d.merch, series: d.series } : undefined)) || cleanItemTitle(split.title);
+      } else title = (o.shortMerch !== false && (group === "merch" || group === "toys") && merchTitle(split.title, d?.merch ? { ...d.merch, series: d.series } : undefined)) || cleanItemTitle(split.title, d?.merch?.brand || d?.brand || "");
     } else title = split.title || title;
     const kind: ImportRow["kind"] = group === "consoles" ? "console" : group === "accessories" ? "accessory"
       : group === "merch" || group === "toys" ? "collectible" : group === "games" ? "" : itemKind(title, platform);
@@ -410,7 +423,7 @@ export function buildEbayRows(listings: EbayListing[], details: Map<string, Ebay
     for (const g of byTitle.values()) {
       if (new Set(g.map((r) => fold(r.ebay.title))).size < 2) continue;
       for (const r of g) {
-        r.title = cleanItemTitle(splitTitleRegion(r.ebay.title, o.regions).title);
+        r.title = cleanItemTitle(splitTitleRegion(r.ebay.title, o.regions).title, details.get(r.ebay.id)?.brand || "");
         if (r.title === r.ebay.title.trim()) delete r.titleFrom; else r.titleFrom = r.ebay.title.trim();
       }
     }

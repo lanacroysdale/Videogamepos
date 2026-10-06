@@ -56,6 +56,7 @@ const notifyTasks = !!(row?.settings as any)?.notifyTaskComplete;
 const menuEnabled = (row?.settings as any)?.menuEnabled === true;
 const leadNotifyEnabled = (row?.settings as any)?.leadNotifyEnabled !== false;
 const ebayAutoSync = (row?.settings as any)?.ebayAutoSync !== false;
+const ebayShipZip = String((row?.settings as any)?.ebayShipZip ?? "");
 const leadNotifyEmail = String((row?.settings as any)?.leadNotifyEmail ?? "");
 const bar = barSettings(row?.settings);
 const deptLocked = (row?.settings as any)?.departmentsLocked === true;
@@ -723,6 +724,11 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       <span><strong>Run the nightly eBay stock sync</strong><br />
         <span class="muted">Turn off while eBay quantities don't match the shelf, like at an expo where eBay is set to 0 but the items are on the table. “Sync eBay stock” on the Inventory page still works when you press it.</span></span>
     </label>
+    <label class="set-row">
+      <span><strong>ZIP for shipping quotes</strong><br />
+        <span class="muted">🛒 Sell similar adds the listing's shipping to its price. Many listings only quote shipping to a ZIP, so enter the store's.</span></span>
+      <input type="text" id="ebay-zip" inputmode="numeric" maxlength="5" placeholder="97201" value={ebayShipZip} style="width:6rem;text-align:left;" />
+    </label>
     <div class="set-actions">
       <button id="ebay-save" class="btn btn-primary">Save</button>
       <span id="ebay-status" class="muted"></span>
@@ -1135,6 +1141,7 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
 
   document.getElementById("ebay-save")!.addEventListener("click", (e) => save({
     ebayAutoSync: ($("ebay-autosync") as HTMLInputElement).checked,
+    ebayShipZip: ($("ebay-zip") as HTMLInputElement).value.trim(),
   }, document.getElementById("ebay-status")!, e.currentTarget as HTMLButtonElement));
 
   document.getElementById("lead-save")!.addEventListener("click", (e) => save({
