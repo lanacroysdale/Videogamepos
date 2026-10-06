@@ -38,6 +38,14 @@ export const POST: APIRoute = async ({ locals, request }) => {
   if (b.labelTemplates !== undefined) settings.labelTemplates = sanitizeLabelTemplates(b.labelTemplates);
   if (b.ebayAutoSync !== undefined) settings.ebayAutoSync = !!b.ebayAutoSync;
   if (b.ebayShipZip !== undefined) settings.ebayShipZip = /^\d{5}$/.test(String(b.ebayShipZip).trim()) ? String(b.ebayShipZip).trim() : "";
+  // 🔖 Send to TimeLag: yen → dollars for what you paid (+ proxy / shipping fees %).
+  if (b.sourceImport !== undefined && b.sourceImport && typeof b.sourceImport === "object") {
+    const rate = Number(b.sourceImport.jpyPerUsd), fee = Number(b.sourceImport.feePct);
+    settings.sourceImport = {
+      jpyPerUsd: Number.isFinite(rate) && rate >= 1 && rate <= 10000 ? Math.round(rate * 100) / 100 : 150,
+      feePct: Number.isFinite(fee) && fee >= 0 && fee <= 500 ? Math.round(fee * 10) / 10 : 0,
+    };
+  }
   if (b.leadNotifyEnabled !== undefined) settings.leadNotifyEnabled = !!b.leadNotifyEnabled;
   if (b.leadNotifyEmail !== undefined) settings.leadNotifyEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(b.leadNotifyEmail).trim()) ? String(b.leadNotifyEmail).trim().slice(0, 200) : "";
   if (b.aiProvider !== undefined && AI_PROVIDERS.some((p) => p.key === String(b.aiProvider))) settings.aiProvider = String(b.aiProvider);

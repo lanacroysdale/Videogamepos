@@ -294,6 +294,7 @@ const posData = {
         <span class="ebay-tag" title="Fill this form from any eBay listing of the same item — title, platform, region, condition, category, price, UPC/EAN. On Save: its cover photo + details (brand, year, series, character). Never synced with eBay.">🛒 Sell similar</span>
         <input id="np-ebay" placeholder="Paste any eBay listing (URL or item #) of the same item to fill this form…" />
         <button type="button" id="np-ebay-go" class="btn btn-ghost btn-sm">⬇ Pull data</button>
+        <button type="button" id="np-bookmark" class="link-btn" title="Suruga-ya, Buyee, Mercari, Amazon JP… — add a product from any shop page with the 🔖 Send to TimeLag bookmark">🔖 Other shops</button>
       </div>
       <div id="np-ebay-note" class="ebay-note" hidden></div>
     </div>
@@ -645,6 +646,12 @@ const posData = {
   .sup-row a { color:var(--cyan); }
   .sup-row .link-btn { margin-left:auto; }
   .ent-add { display:flex; gap:0.6rem; align-items:center; margin-bottom:0.9rem; }
+  /* 🔖 Send to TimeLag */
+  .bm-card { max-width:560px; }
+  .bm-steps { margin:0.6rem 0; padding-left:1.2rem; display:grid; gap:0.5rem; font-size:0.9rem; }
+  .bm-link { display:inline-block; padding:0.3rem 0.7rem; border:1px dashed var(--cyan); color:var(--cyan); font-weight:700; text-decoration:none; cursor:grab; }
+  .bm-small { font-size:0.78rem; }
+  .bm-card .upc-pick-acts { display:flex; justify-content:flex-end; margin-top:0.4rem; }
   /* Quick add: find it first. */
   .np-find { margin-bottom:0.85rem; padding-bottom:0.85rem; border-bottom:1px solid var(--border); }
   .np-find .ti-desc-cell { position:relative; }
@@ -717,6 +724,7 @@ const posData = {
   import { newListingKey, officialTitleFor, itemKind, norm as normImport } from "../../lib/collectionImport";
   import { upcEligible } from "../../lib/upcMatch";
   import { upcLike, identifyUpc } from "../../lib/upcClient";
+  import { bookmarkletHref, sourceOf } from "../../lib/sourceImport";
   import { regionOf, regionsOn, regionByCode, isDefaultRegion, regionBadgeHtml, displayTitle, regionTag, regionSortKey, splitTitleRegion, regionFromPlatform, type Region } from "../../lib/regions";
 
   const data = JSON.parse(document.getElementById("pos-data")!.textContent!);
@@ -888,6 +896,7 @@ const posData = {
     const q = document.getElementById("np-qty") as HTMLInputElement | null; if (q) q.value = "1";
     const note = document.getElementById("np-ebay-note") as HTMLElement | null; if (note) { note.hidden = true; note.innerHTML = ""; }
     pendingEbay = null;
+    pendingSource = null;
   }
   // The Add panel: open = the "＋ Add product" button turns into "✕ Cancel".
   // Closing with something typed asks first (also when Start entry closes it).
@@ -1356,7 +1365,7 @@ const posData = {
   /* ---------- Edit modal ---------- */
   // Manager-only restock links shown in the modal (staff never receive the data).
   function supRowHtml(l: any) {
-    return `<div class="sup-row" data-supid="${l.id}">${l.url ? `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)} ↗</a>` : `<span>${esc(l.label)}</span>`}<button class="link-btn" data-supdel="${l.id}" type="button">✕</button></div>`;
+    return `<div class="sup-row" data-supid="${l.id}">${l.url ? `<a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(l.label)} ↗</a>` : `<span>${esc(l.label)}</span>`}<button class="link-btn" data-supdel="${l.id}" type="button">✕</button></div>`;
   }
   const modal = $("edit-modal");
   function closeModal() { modal.hidden = true; }
@@ -2663,6 +2672,7 @@ const posData = {
      labels. Not listed yet → ＋ New product fills in the form below. */
   type RecvRow = { key: number; p: any; v: any; comp: string; grade: string; qty: number; cost: string; price: string; priceTouched: boolean };
   let recvRows: RecvRow[] = [];
+  let pendingRecvCost = ""; // a 🔖 import's cost, for the row "add copies to it instead" picks
   let recvKey = 0;
   const npFind = $("np-find") as HTMLInputElement;
   const sameType = (a: any, b: any) => (a.inventoryTypeId || retailTypeId) === (b.inventoryTypeId || retailTypeId);
@@ -2677,7 +2687,7 @@ const posData = {
     // The same stock row scanned again = one more copy.
     const same = recvRows.find((r) => recvTarget(r) === v);
     if (same) same.qty += 1;
-    else recvRows.push({ key: ++recvKey, p, v, comp: v.completenessCode || "", grade: v.gradeCode || "", qty: 1, cost: "", price: (v.priceCents / 100).toFixed(2), priceTouched: false });
+    else { recvRows.push({ key: ++recvKey, p, v, comp: v.completenessCode || "", grade: v.gradeCode || "", qty: 1, cost: pendingRecvCost, price: (v.priceCents / 100).toFixed(2), priceTouched: false }); pendingRecvCost = ""; }
     renderRecv();
     npFind.focus(); // the next scan lands here too
   }
@@ -3327,6 +3337,7 @@ const posData = {
       // Ready for the next one: title, price, barcode and the eBay paste
       // clear; platform, region, category, condition and type stay.
       const pe = pendingEbay; // this product's eBay listing (attached below)
+      const ps = pendingSource; // …or the shop page it came from (🔖 Send to TimeLag)
       clearProductFields();
       addSaved = true;
       setAddOpen(true);
@@ -3373,6 +3384,22 @@ const posData = {
           } catch { /* the eBay photo + details are already on */ }
         }
       } else {
+        if (ps) {
+          // 🔖 From another shop: its photo (copied to our storage, renamed) and
+          // the page as a supplier link with the shop's title (managers only).
+          // Before the game database fills the rest.
+          toast(`✓ Added${where} — copying the photo…`);
+          try {
+            const r = await fetch("/api/pos/source-import", { method: "POST", headers: { "content-type": "application/json" },
+              body: JSON.stringify({ mode: "attach", productId: newItem.id, source: ps }) });
+            const e = await r.json();
+            if (r.ok && e.ok) {
+              if (e.imageUrl) newItem.imageUrl = e.imageUrl;
+              if (e.supplier) newItem.supplierLinks = [...(newItem.supplierLinks || []), e.supplier];
+              render();
+            }
+          } catch { /* the listing is saved; the photo can be added by hand */ }
+        }
         toast(`✓ Added${where} — fetching cover…`);
         // Auto-enrich from IGDB: cover art, description, trailer, alt-names.
         try {
@@ -3394,6 +3421,141 @@ const posData = {
   /* ---------- eBay import ---------- */
   let pendingEbay: any = null;
 
+  /* ---------- 🔖 Send to TimeLag: a product from another shop's page ----------
+     The bookmark reads the page in the browser it's open in (Suruga-ya etc.
+     can't be read from our server) and opens /inventory?import=page here:
+     the full page arrives by postMessage, a compact copy in the #fragment.
+     The server cleans it into Add-form fields; on Save the photo, the page
+     (as a supplier link, managers only) and the original title are attached. */
+  let pendingSource: any = null;
+  function openBookmarkDialog() {
+    document.getElementById("bm-dialog")?.remove();
+    const ov = document.createElement("div");
+    ov.id = "bm-dialog";
+    ov.className = "upc-pick";
+    ov.setAttribute("role", "dialog");
+    ov.setAttribute("aria-modal", "true");
+    ov.innerHTML = `<div class="upc-pick-card bm-card">
+      <h3>🔖 Send to TimeLag</h3>
+      <p class="muted">Add products from <strong>Suruga-ya</strong>, <strong>Buyee</strong> (Yahoo! Auctions, Mercari…), Amazon JP or any shop. The bookmark reads the page you're looking at, in your own browser, so nothing visits that shop from our server.</p>
+      <ol class="bm-steps">
+        <li><strong>Drag this button</strong> onto your bookmarks bar: <a class="bm-link" id="bm-link" draggable="true">🔖 Send to TimeLag</a></li>
+        <li>On a product page, <strong>click the bookmark</strong>. A POS tab opens with this form filled in: a clean English title, platform, region, condition, JAN and what you paid in dollars.</li>
+        <li><strong>Check it, set your price, Save.</strong> The photo is copied into our own storage under a new name; the page is kept as the item's source (managers only, never on the website).</li>
+      </ol>
+      <p class="muted bm-small">No bookmarks bar? Chrome / Edge / Firefox: ⌘⇧B (Ctrl+Shift+B) · Safari: View → Show Favorites Bar. Can't drag it? <button type="button" class="link-btn" id="bm-copy">Copy the code</button>, make a new bookmark and paste it as its address (URL).</p>
+      <div class="upc-pick-acts"><button type="button" class="btn btn-ghost btn-sm" id="bm-close">Close</button></div>
+    </div>`;
+    document.body.appendChild(ov);
+    const href = bookmarkletHref(location.origin);
+    const link = ov.querySelector<HTMLAnchorElement>("#bm-link")!;
+    link.href = href;
+    // Clicked here (not dragged) it would just run on the POS.
+    link.addEventListener("click", (e) => { e.preventDefault(); toast("Drag it to your bookmarks bar — then click it on a shop's product page"); });
+    ov.querySelector("#bm-copy")!.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(href); toast("📋 Copied — paste it as a new bookmark's URL"); }
+      catch { prompt("Copy this, then paste it as a new bookmark's URL:", href); }
+    });
+    const close = () => ov.remove();
+    ov.querySelector("#bm-close")!.addEventListener("click", close);
+    ov.addEventListener("click", (e) => { if (e.target === ov) close(); });
+  }
+  $("np-bookmark")?.addEventListener("click", openBookmarkDialog);
+
+  // The page the bookmark sent: the full copy from the shop tab, else the
+  // compact one in the address. Forgotten from the address bar right away.
+  async function receivePage(): Promise<any | null> {
+    let compact: any = null;
+    const m = location.hash.match(/[#&]tl=([^&]*)/);
+    if (m) { try { compact = JSON.parse(decodeURIComponent(m[1])); } catch { /* cut off */ } }
+    history.replaceState(null, "", location.pathname);
+    const opener = window.opener as Window | null;
+    if (!opener) return compact;
+    let from = "";
+    try { from = compact?.url ? new URL(compact.url).origin : ""; } catch { /* no compact copy */ }
+    return await new Promise((done) => {
+      let finished = false;
+      const finish = (page: any) => {
+        if (finished) return;
+        finished = true;
+        window.removeEventListener("message", on);
+        clearInterval(timer);
+        done(page);
+      };
+      const on = (e: MessageEvent) => {
+        if (e.source !== opener || (from && e.origin !== from) || e.data?.type !== "tl-page" || !e.data.page) return;
+        // The page this tab was opened for (not one an older click still holds).
+        if (compact?.url && e.data.page.url !== compact.url) return;
+        finish(e.data.page);
+      };
+      window.addEventListener("message", on);
+      // "Ready" (no data in it) until the shop tab answers.
+      const ping = () => { try { opener.postMessage({ type: "tl-ready" }, "*"); } catch { /* tab gone */ } };
+      ping();
+      const timer = setInterval(ping, 400);
+      setTimeout(() => finish(compact), 3500);
+    });
+  }
+
+  async function importFromPage() {
+    const page = await receivePage();
+    if (!page?.url) { alert("The page didn't come through — click the 🔖 bookmark again on the product page."); return; }
+    const src = sourceOf(page.url);
+    if (entryMode) closeAddPanel();
+    clearProductFields();
+    clearRecv();
+    setNpKind("stock");
+    setAddOpen(true);
+    const note = $("np-ebay-note") as HTMLElement;
+    note.hidden = false;
+    note.innerHTML = `<div><strong>🔖 Reading the ${esc(src.label || "shop")} page…</strong> <span class="muted">(cleaning up the title, finding the platform and condition)</span></div>`;
+    ($("add-panel") as HTMLElement).scrollIntoView({ behavior: "smooth", block: "start" });
+    let j: any;
+    try {
+      const r = await fetch("/api/pos/source-import", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode: "parse", page }) });
+      j = await r.json();
+      if (!r.ok || !j.ok) throw new Error(j.error || "Couldn't read that page");
+    } catch (e: any) { note.innerHTML = `<div>⚠ ${esc(e.message)}</div>`; return; }
+    const f = j.fields, so = j.source;
+    ($("np-title") as HTMLInputElement).value = f.title || "";
+    ($("np-platform") as HTMLInputElement).value = f.platform || "";
+    setNpRegion(f.regionCode || "");
+    if (f.categoryId) ($("np-cat") as HTMLSelectElement).value = f.categoryId;
+    const newCode = completeness.find((c: any) => /^(new|sealed)/i.test(c.label) || c.code === "NEW")?.code || "";
+    setComp($("np-comp") as HTMLInputElement, f.completenessCode || (f.isNew ? newCode : ""), $("np-comp-abbr"));
+    ($("np-barcode") as HTMLInputElement).value = f.barcode || "";
+    ($("np-cost") as HTMLInputElement).value = f.costCents != null ? (f.costCents / 100).toFixed(2) : "";
+    ($("np-qty") as HTMLInputElement).value = "1";
+    pendingSource = { url: so.url, priceText: so.priceText, titleOriginal: so.titleOriginal, images: so.images };
+    const rate = j.money?.jpyPerUsd, fee = j.money?.feePct;
+    const paid = f.costCents != null
+      ? `Paid <strong>${money(f.costCents)}</strong> = ${esc(so.priceText)}${so.currency === "JPY" ? ` at ¥${rate}/$${fee ? ` + ${fee}% fees` : ""}` : fee ? ` + ${fee}% fees` : ""}`
+      : so.priceText ? `price ${esc(so.priceText)}` : "no price found";
+    const img = so.images?.[0] ? `<img src="${esc(so.images[0])}" alt="" referrerpolicy="no-referrer" style="width:54px;height:54px;object-fit:cover;border:1px solid var(--line);">` : "";
+    note.innerHTML = `${img}<div><strong>🔖 From ${esc(so.label)}</strong> · ${paid}${f.barcode ? ` · JAN ${esc(f.barcode)}` : ""}${f.regionCode === "JP" ? " · 🇯🇵 Japan" : ""}
+      ${so.titleOriginal ? `<br><span style="color:var(--muted-2);">Original: ${esc(so.titleOriginal)}</span>` : so.pageTitle && so.pageTitle !== f.title ? `<br><span style="color:var(--muted-2);">On the page: ${esc(so.pageTitle)}</span>` : ""}
+      ${f.note ? `<br><span style="color:var(--muted-2);">Condition note: ${esc(f.note)}</span>` : ""}
+      <br><span style="color:var(--muted-2);">${j.ai ? (j.official ? "✓ Title from the game database" : "✨ Title cleaned up by AI — check it") : `⚠ ${esc(j.aiError || "No AI")} — check the title`} · set your price, then Save. On Save: the photo + this page as the item's source (managers only).</span>
+      ${j.existing ? `<br><span style="color:var(--magenta);">Already in the POS from this page: <strong>${esc(j.existing.title)}</strong> — <button type="button" class="link-btn" id="src-existing">add copies to it instead</button></span>` : ""}
+      ${j.openEntry && !entryMode ? `<br><button type="button" class="link-btn" id="src-entry">📥 Put it on your open Entry #${esc(j.openEntry.human_id)} instead</button>` : ""}</div>`;
+    document.getElementById("src-existing")?.addEventListener("click", () => {
+      const t = j.existing.title;
+      // What this copy cost goes onto the row you pick.
+      pendingRecvCost = f.costCents != null ? (f.costCents / 100).toFixed(2) : "";
+      clearProductFields();
+      npFind.value = t;
+      findSuggest(quickFind);
+      npFind.focus();
+    });
+    document.getElementById("src-entry")?.addEventListener("click", async () => {
+      // The open draft takes it: the form (still filled) moves into the entry.
+      if (await loadEntry(j.openEntry.id)) { setEntryMode(true); toast(`📥 Entry #${j.openEntry.human_id} — Save puts it on the entry`); }
+      else alert("That draft isn't open anymore.");
+    });
+    ($("np-price") as HTMLInputElement).value = "";
+    ($("np-price") as HTMLInputElement).focus();
+  }
+
   // Pasting a listing link (or pressing Enter) pulls it — no extra click.
   $("np-ebay")?.addEventListener("paste", () => setTimeout(() => {
     if (/\d{9,15}/.test(($("np-ebay") as HTMLInputElement).value)) ($("np-ebay-go") as HTMLButtonElement).click();
@@ -3404,6 +3566,15 @@ const posData = {
   $("np-ebay-go")?.addEventListener("click", async () => {
     const input = ($("np-ebay") as HTMLInputElement).value.trim();
     if (!input) { alert("Paste an eBay item number or listing URL first"); return; }
+    // Another shop's link (Suruga-ya, Buyee…): our server can't open those
+    // pages — the 🔖 bookmark reads them in your own browser instead.
+    if (/^https?:\/\//i.test(input) && !/(^|\.)ebay\.[a-z.]+\//i.test(input.replace(/^https?:\/\//i, "").split("/")[0] + "/")) {
+      const note = $("np-ebay-note") as HTMLElement; note.hidden = false;
+      const src = sourceOf(input);
+      note.innerHTML = `<div><strong>🔖 ${esc(src.label || "That shop")} pages can't be opened from here.</strong> Open the page in your browser and click the <strong>Send to TimeLag</strong> bookmark there — it fills this form. <button type="button" class="link-btn" id="np-bm-open">Get the bookmark</button></div>`;
+      document.getElementById("np-bm-open")?.addEventListener("click", openBookmarkDialog);
+      return;
+    }
     const btn = $("np-ebay-go") as HTMLButtonElement; btn.disabled = true; const o = btn.textContent; btn.textContent = "Pulling…";
     try {
       const r = await fetch("/api/pos/ebay-import", { method: "POST", headers: { "content-type": "application/json" },
@@ -3551,4 +3722,6 @@ const posData = {
   });
 
   render();
+  // Opened by the 🔖 Send to TimeLag bookmark.
+  if (new URLSearchParams(location.search).get("import") === "page") importFromPage();
 </script>

@@ -64,20 +64,21 @@ export function aiStatus(pref = "auto"): { configured: boolean; provider: "gemin
   return { configured: !!p, provider: p };
 }
 
-export async function callAI(opts: { system: string; user: string; settings: AiSettings; maxTokens?: number }): Promise<string> {
+// temperature: lower = steadier answers (0.2 for extracting facts; default 0.7 for writing).
+export async function callAI(opts: { system: string; user: string; settings: AiSettings; maxTokens?: number; temperature?: number }): Promise<string> {
   const provider = resolveProvider(opts.settings.provider);
   if (!provider) throw new Error("AI isn't set up yet — add GEMINI_API_KEY or ANTHROPIC_API_KEY to your environment.");
   const model = MODELS[provider][opts.settings.quality] || MODELS[provider].balanced;
   return provider === "anthropic"
-    ? callClaude({ system: opts.system, user: opts.user, model, maxTokens: opts.maxTokens })
-    : callGemini({ system: opts.system, user: opts.user, model, maxTokens: opts.maxTokens });
+    ? callClaude({ system: opts.system, user: opts.user, model, maxTokens: opts.maxTokens, temperature: opts.temperature })
+    : callGemini({ system: opts.system, user: opts.user, model, maxTokens: opts.maxTokens, temperature: opts.temperature });
 }
 
-async function callClaude(o: { system: string; user: string; model: string; maxTokens?: number }): Promise<string> {
+async function callClaude(o: { system: string; user: string; model: string; maxTokens?: number; temperature?: number }): Promise<string> {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "x-api-key": ANTHROPIC_KEY!, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-    body: JSON.stringify({ model: o.model, max_tokens: o.maxTokens ?? 600, system: o.system, messages: [{ role: "user", content: o.user }] }),
+    body: JSON.stringify({ model: o.model, max_tokens: o.maxTokens ?? 600, system: o.system, messages: [{ role: "user", content: o.user }], ...(o.temperature != null ? { temperature: o.temperature } : {}) }),
   });
   const j: any = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(j?.error?.message || `Claude request failed (${res.status})`);
@@ -86,7 +87,7 @@ async function callClaude(o: { system: string; user: string; model: string; maxT
   return text;
 }
 
-async function callGemini(o: { system: string; user: string; model: string; maxTokens?: number }): Promise<string> {
+async function callGemini(o: { system: string; user: string; model: string; maxTokens?: number; temperature?: number }): Promise<string> {
   const i = GEMINI_LADDER.indexOf(o.model);
   const ladder = i < 0 ? [o.model] : GEMINI_LADDER.slice(i);
   let lastErr = "";
@@ -99,7 +100,7 @@ async function callGemini(o: { system: string; user: string; model: string; maxT
         contents: [{ role: "user", parts: [{ text: o.user }] }],
         // Gemini 3 "thinks" first and those tokens count toward maxOutputTokens
         // (~575 at "low") — keep it low + add headroom so the answer isn't cut off.
-        generationConfig: { maxOutputTokens: (o.maxTokens ?? 600) + 2048, temperature: 0.7, thinkingConfig: { thinkingLevel: "low" } },
+        generationConfig: { maxOutputTokens: (o.maxTokens ?? 600) + 2048, temperature: o.temperature ?? 0.7, thinkingConfig: { thinkingLevel: "low" } },
       }),
     });
     const j: any = await res.json().catch(() => ({}));
