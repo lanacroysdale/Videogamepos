@@ -870,6 +870,18 @@ const posData = {
   const storeName: string = (data as any).storeName || "TimeLag";
   const webBase: string = (data as any).webBase || "";
 
+  // Stock rows made on this page (quick add, + condition, import…) don't know
+  // the short label code the DB gave them — without it a label falls back to
+  // the wide internal code, whose barcode runs across the spine. Fetch the
+  // missing ones right before printing.
+  async function fillLabelCodes(vs: any[]) {
+    const need = vs.filter((v: any) => v && !v.labelCode && v.id);
+    if (!need.length) return;
+    try {
+      const j = await api({ action: "labelCodes", variantIds: need.map((v: any) => v.id) });
+      for (const v of need) if (j.codes?.[v.id]) v.labelCode = j.codes[v.id];
+    } catch { /* the wide code still scans */ }
+  }
   // Everything a printed label needs for one variant.
   function labelItemOf(p: any, v: any) {
     const loc = locations.find((l: any) => l.id === v.locationId) || locations.find((l: any) => l.is_default);
@@ -1188,7 +1200,8 @@ const posData = {
   });
   // Print labels for every condition of the selected items (1 each by default,
   // with the per-line "all N" escape hatch for full re-tags).
-  $("bulk-print").addEventListener("click", () => {
+  $("bulk-print").addEventListener("click", async () => {
+    await fillLabelCodes(items.filter((p) => selected.has(p.id)).flatMap((p) => p.variants));
     const lines: any[] = [];
     items.filter((p) => selected.has(p.id)).forEach((p) => p.variants.forEach((v: any) => {
       if (v.internalCode || v.labelCode) lines.push({ item: labelItemOf(p, v), defaultCopies: 1, allCopies: v.quantity > 1 ? v.quantity : null });
@@ -1326,9 +1339,10 @@ const posData = {
     }
 
     // Label printing (per-condition buttons live in the Barcodes section).
-    document.querySelectorAll<HTMLButtonElement>("[data-printlabel]").forEach((b) => b.addEventListener("click", () => {
+    document.querySelectorAll<HTMLButtonElement>("[data-printlabel]").forEach((b) => b.addEventListener("click", async () => {
       const v = p.variants.find((x: any) => x.id === b.dataset.printlabel);
       if (!v) return;
+      await fillLabelCodes([v]);
       if (!v.internalCode) { alert("This condition has no label code yet — reload the page and try again."); return; }
       openPrintDialog([{ item: labelItemOf(p, v), defaultCopies: 1, allCopies: v.quantity }], lblTemplates, { title: `Print · ${rgTitle(p)}` });
     }));
@@ -1612,7 +1626,7 @@ const posData = {
     const compLabel = completeness.find((c) => c.code === defComp)?.label || "New";
     try {
       const j = await api({ action: "addVariant", productId: p.id, completenessCode: defComp, gradeCode: "3", condition: compLabel, priceCents: 0, quantity: 0 });
-      const nv: any = { id: j.variant.id, condition: compLabel, completeness: null, completenessCode: defComp, gradeCode: "3", sku: null, internalCode: j.variant.internal_code || "", priceCents: 0, onlinePriceCents: null, costCents: null, quantity: 0, onlineVisible: false, inventoryTypeId: retailTypeId, locationId: "", barcodes: [] };
+      const nv: any = { id: j.variant.id, condition: compLabel, completeness: null, completenessCode: defComp, gradeCode: "3", sku: null, internalCode: j.variant.internal_code || "", labelCode: j.variant.label_code || "", priceCents: 0, onlinePriceCents: null, costCents: null, quantity: 0, onlineVisible: false, inventoryTypeId: retailTypeId, locationId: "", barcodes: [] };
       p.variants.push(nv);
       $("cond-body").insertAdjacentHTML("beforeend", condRowHtml(nv));
       $("bc-blocks").insertAdjacentHTML("beforeend", bcBlockHtml(nv));
@@ -1764,7 +1778,7 @@ const posData = {
     if (!dest && (j.mode === "created" || j.mode === "moved")) {
       dest = {
         id: j.variantId, condition, completeness: null, completenessCode: comp, gradeCode: grade, sku: null,
-        internalCode: j.internalCode || "", labelCode: "", priceCents: j.priceCents ?? 0, onlinePriceCents: null, costCents: null,
+        internalCode: j.internalCode || "", labelCode: j.labelCode || "", priceCents: j.priceCents ?? 0, onlinePriceCents: null, costCents: null,
         quantity: 0, onlineVisible: false, inventoryTypeId: serverType, locationId: src?.locationId || "", barcodes: [],
         pendingEntryId: j.mode === "created" ? entryId : "", // a row made for a draft stays hidden until Finish
       };
@@ -2774,7 +2788,7 @@ const posData = {
       // Title / platform / region as STORED (a "PAL …" platform prefix or a
       // typed "[JP]" tag becomes the region).
       const newItem: any = { id: j.productId, title: j.title ?? body.title, slug: j.slug || body.title.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""), platform: j.platform ?? body.platform, regionCode: j.regionCode ?? "", franchise: "", genre: "", description: "", imageUrl: "", altNames: [], categoryId: body.categoryId, categoryName: cat?.name ?? "", categoryColor: cat?.color ?? "#2ce6e0",
-        variants: [{ id: j.variantId, condition, completeness: null, completenessCode: comp, gradeCode: grade, sku: null, internalCode: j.internalCode || "", priceCents: body.priceCents, onlinePriceCents: null, costCents: null, quantity: body.quantity, onlineVisible: false, inventoryTypeId: body.inventoryTypeId || retailTypeId, locationId: "", barcodes: body.barcode ? [{ id: "primary:" + j.variantId, barcode: body.barcode, label: "Primary", primary: true }] : [] }] };
+        variants: [{ id: j.variantId, condition, completeness: null, completenessCode: comp, gradeCode: grade, sku: null, internalCode: j.internalCode || "", labelCode: j.labelCode || "", priceCents: body.priceCents, onlinePriceCents: null, costCents: null, quantity: body.quantity, onlineVisible: false, inventoryTypeId: body.inventoryTypeId || retailTypeId, locationId: "", barcodes: body.barcode ? [{ id: "primary:" + j.variantId, barcode: body.barcode, label: "Primary", primary: true }] : [] }] };
       items.push(newItem);
       if (entryMode && j.itemId) {
         // Staged: server created the variant at qty 0; the qty lands on Finish.
