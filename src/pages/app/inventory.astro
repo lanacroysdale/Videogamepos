@@ -3484,6 +3484,9 @@ const posData = {
               if (e.imageUrl) newItem.imageUrl = e.imageUrl;
               if (e.supplier) newItem.supplierLinks = [...(newItem.supplierLinks || []), e.supplier];
               if (e.market) newItem.marketPrices = e.market;
+              // Every code PriceCharting lists is the listing's now.
+              for (const c of e.codes?.added || []) if (!(newItem.upcs || []).some((u: any) => u.upc === c)) newItem.upcs = [...(newItem.upcs || []), { id: "pc:" + c, upc: c, source: "import", evidence: "From PriceCharting" }];
+              if (e.codes?.conflicts?.length) toast(`Some codes are already on other listings: ${e.codes.conflicts.slice(0, 2).join("; ")}`);
               if (e.marketError) alert(e.marketError);
               if (e.market?.id) newItem.pcId = e.market.id;
               render();
@@ -3641,7 +3644,7 @@ const posData = {
     ($("np-barcode") as HTMLInputElement).value = f.barcode || "";
     ($("np-cost") as HTMLInputElement).value = f.costCents != null ? (f.costCents / 100).toFixed(2) : "";
     ($("np-qty") as HTMLInputElement).value = "1";
-    pendingSource = { url: so.url, priceText: so.priceText, titleOriginal: so.titleOriginal, images: so.images, market: j.market || null };
+    pendingSource = { url: so.url, priceText: so.priceText, titleOriginal: so.titleOriginal, images: so.images, market: j.market || null, codes: so.codes || [] };
     pendingMarket = j.market || null;
     npPriceTouched = false;
     const rate = j.money?.jpyPerUsd, fee = j.money?.feePct;
@@ -3652,7 +3655,8 @@ const posData = {
     if (j.market) {
       // A price guide: its averages are what copies SELL for — the price
       // follows the condition you pick (until you type one); nothing is "paid".
-      note.innerHTML = `${img}<div><strong>📈 From PriceCharting</strong>${f.barcode ? ` · UPC ${esc(f.barcode)}` : ""}${f.regionCode && f.regionCode !== "US" ? ` · ${esc(f.regionCode)} release` : ""}
+      const codes: string[] = so.codes || (f.barcode ? [f.barcode] : []);
+      note.innerHTML = `${img}<div><strong>📈 From PriceCharting</strong>${codes.length ? ` · ${codes.length > 1 ? "UPC / EAN codes" : codes[0].length === 13 ? "EAN" : "UPC"} ${codes.map(esc).join(", ")}${codes.length > 1 ? " (all go on the listing)" : ""}` : " · no UPC / EAN on the page"}${f.regionCode && f.regionCode !== "US" ? ` · ${esc(f.regionCode)} release` : ""}
         <br>${marketLine(j.market, true) || "no prices taken"} <span style="color:var(--muted-2);">(averages, ${esc(j.market.at)})</span>
         ${j.priceNote ? `<br><span style="color:var(--magenta);">⚠ ${esc(j.priceNote)}</span>` : ""}
         <br><span style="color:var(--muted-2);">Pick the condition — the price follows it (or click one). On Save: ${j.marketReady ? "these averages are kept on the listing, plus" : "<span style='color:var(--magenta);'>(averages can't be kept until the market-prices migration is run)</span>"} its PriceCharting photo and link.</span>

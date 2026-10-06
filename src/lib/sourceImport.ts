@@ -11,6 +11,8 @@
 //
 // Pure helpers, shared by the browser (inventory page) and the server.
 
+import { canonicalUpc } from "./upcMatch";
+
 export interface CapturedPage {
   v: 1;
   url: string;
@@ -130,10 +132,19 @@ export function priceChartingFacts(p: CapturedPage, today: string) {
   };
   const priceNote = !usd ? `PriceCharting is set to ${cur} — switch it to US dollars and click the bookmark again to get the averages.`
     : kind === "card" || kind === "comic" ? "A card / comic page — its prices are by grade, so none were taken." : "";
-  // "045496830014, 045496830021" → the first real UPC / EAN.
-  const upc = (pc.upc || "").split(/[^\d]+/).find((d) => /^\d{12,13}$/.test(d)) ?? "";
+  // Every barcode it lists — "UPC", "EAN / GTIN" (Japanese / PAL releases),
+  // JAN, ISBN — real check-digit codes only, each once ("0045…" = "045…").
+  const codes: string[] = [];
+  for (const [k, v] of Object.entries(pc)) {
+    if (!/^(upc|ean|gtin|jan|isbn)/.test(k)) continue;
+    for (const d of String(v).split(/[^\d]+/)) {
+      const c = canonicalUpc(d);
+      if (c && !codes.includes(c)) codes.push(c);
+    }
+  }
+  const upc = codes[0] ?? "";
   const year = Number((pc["release date"] || "").match(/\b(19[7-9]\d|20\d\d)\b/)?.[1]) || null;
-  return { name: (pc.name || "").trim(), console: (pc.console || "").trim(), upc, year, genre: pc.genre || "", publisher: pc.publisher || "", image: publicUrl(pc.image || ""), market, kind, priceNote };
+  return { name: (pc.name || "").trim(), console: (pc.console || "").trim(), upc, codes, year, genre: pc.genre || "", publisher: pc.publisher || "", image: publicUrl(pc.image || ""), market, kind, priceNote };
 }
 /** The market price key a completeness means ("Complete In Box" → cib), by its label. */
 export function marketKeyFor(label: string): MarketKey | null {
@@ -357,7 +368,7 @@ E("img").filter(function(i){return i.naturalWidth>=160&&i.naturalHeight>=160}).s
 E("a.js-smartPhoto[href],li[data-thumb],img[data-src],img[data-original],img[data-lazy-src]").forEach(function(e){var x=e.getAttribute("href")||e.getAttribute("data-thumb")||e.getAttribute("data-src")||e.getAttribute("data-original")||e.getAttribute("data-lazy-src")||"";if(/\\.(jpe?g|png|webp|gif)([?@#]|$)/i.test(x)&&!/@webp/i.test(x))add(x)});
 var offers=[];E("input[name=grade][data-zaiko]").forEach(function(i){try{var z=JSON.parse(i.getAttribute("data-zaiko"));offers.push({label:T(i.closest("label")||i.parentNode).slice(0,60),price:z.price_sale||z.baika,stock:z.zaiko,checked:!!i.checked})}catch(x){}});
 E("input[name=variation][data-price]").forEach(function(i){offers.push({label:String(i.getAttribute("data-name")||"").slice(0,60),price:i.getAttribute("data-price"),stock:i.getAttribute("data-stock"),checked:!!i.checked})});
-var pc=null;if(/(^|\\.)pricecharting\\.com$/i.test(location.hostname)){pc={};var h=d.querySelector("h1#product_name");if(h){pc.id=h.getAttribute("title")||"";var hc=h.cloneNode(true);[].forEach.call(hc.querySelectorAll("a"),function(x){pc.console=T(x);x.remove()});pc.name=T(hc)}["used","complete","new","graded","box_only","manual_only"].forEach(function(k){var e=d.querySelector("#"+k+"_price .price");if(e)pc[k]=T(e)});E("td.title").forEach(function(td){var k=T(td).replace(/:$/,"").toLowerCase();if(/^(upc|asin|epid|pricecharting id|release date|genre|publisher|model number)$/.test(k)&&td.nextElementSibling)pc[k]=T(td.nextElementSibling).slice(0,200)});var vp=window.VGPC&&window.VGPC.product;if(vp)pc.kind=vp.is_card?"card":vp.is_comic?"comic":vp.is_system?"system":"";pc.currency=T(d.getElementById("dropdown_selected_currency"))||(function(){try{return localStorage.getItem("currency")||""}catch(x){return""}})()||"USD";var im=d.querySelector("img[itemprop=image]");if(im)pc.image=A(String(im.getAttribute("src")||"").replace(/\\/240\\.jpg$/,"/1600.jpg"))}
+var pc=null;if(/(^|\\.)pricecharting\\.com$/i.test(location.hostname)){pc={};var h=d.querySelector("h1#product_name");if(h){pc.id=h.getAttribute("title")||"";var hc=h.cloneNode(true);[].forEach.call(hc.querySelectorAll("a"),function(x){pc.console=T(x);x.remove()});pc.name=T(hc)}["used","complete","new","graded","box_only","manual_only"].forEach(function(k){var e=d.querySelector("#"+k+"_price .price");if(e)pc[k]=T(e)});E("td.title").forEach(function(td){var k=T(td).replace(/:$/,"").toLowerCase();if(/^(upc|ean.{0,12}|gtin|jan|isbn.{0,8}|asin.{0,12}|epid.{0,8}|pricecharting id|release date|genre|publisher|model number)$/.test(k)&&td.nextElementSibling)pc[k]=T(td.nextElementSibling).slice(0,200)});var vp=window.VGPC&&window.VGPC.product;if(vp)pc.kind=vp.is_card?"card":vp.is_comic?"comic":vp.is_system?"system":"";pc.currency=T(d.getElementById("dropdown_selected_currency"))||(function(){try{return localStorage.getItem("currency")||""}catch(x){return""}})()||"USD";var im=d.querySelector("img[itemprop=image]");if(im)pc.image=A(String(im.getAttribute("src")||"").replace(/\\/240\\.jpg$/,"/1600.jpg"))}
 var vars={};["gaItemDetailData","itemData"].forEach(function(k){try{var v=window[k];if(v&&typeof v==="object"){var j=JSON.stringify(v);if(j.length<20000)vars[k]=JSON.parse(j)}}catch(x){}});
 var main=d.querySelector("main,#main,[role=main],#content,#item,#itemDetail")||d.body,text=String(main.innerText||"").replace(/[ \\t]+/g," ").replace(/\\n\\s*\\n+/g,"\\n").slice(0,6000);
 var p={v:2,url:location.href,title:String(d.title||"").slice(0,300),meta:meta,ld:ld,heads:heads,crumbs:crumbs,images:imgs,text:text,lang:d.documentElement.lang||"",offers:offers.slice(0,12),vars:vars,pc:pc};

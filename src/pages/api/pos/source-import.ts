@@ -1,5 +1,7 @@
 import type { APIRoute } from "astro";
 import { lookup } from "node:dns/promises";
+import { attachUpcs, upcTablesReady } from "../../../lib/upcFinder";
+import { canonicalUpc } from "../../../lib/upcMatch";
 import { createSupabaseAdminClient } from "../../../lib/supabase";
 import { aiSettings, aiStatus, callAI } from "../../../lib/ai";
 import { PLATFORM_ALIASES, resolveStaticPlatform } from "../../../lib/smartSearch";
@@ -78,7 +80,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
           completenessCode: "", isNew: false, barcode: pcf.upc, costCents: null, franchise: "", releaseYear: pcf.year, note: "",
         },
         source: {
-          kind: "reference", url: pcf.market.url, label: "PriceCharting", host: "pricecharting.com", itemId: pcf.market.id,
+          kind: "reference", url: pcf.market.url, label: "PriceCharting", host: "pricecharting.com", itemId: pcf.market.id, codes: pcf.codes,
           price: null, currency: "USD", priceText: "", titleOriginal: "", pageTitle: pcf.name, images: pcf.image ? [pcf.image] : facts.images.slice(0, 3),
         },
         market: pcf.market, marketReady, priceNote: pcf.priceNote,
@@ -213,6 +215,16 @@ export const POST: APIRoute = async ({ locals, request }) => {
       const { data } = await admin.from("product_suppliers").insert({ product_id: productId, label, url }).select("id, label, url").single();
       supplier = data ?? null;
     }
+    // A price guide's barcodes (UPC + EAN / GTIN…): all of them onto the
+    // listing's UPCs — any already on another listing are skipped.
+    let codes: { added: string[]; conflicts: string[] } = { added: [], conflicts: [] };
+    if (reference && Array.isArray(s.codes) && s.codes.length && (await upcTablesReady(admin))) {
+      const list = [...new Set((s.codes as unknown[]).map((c) => canonicalUpc(String(c ?? ""))).filter(Boolean) as string[])].slice(0, 10);
+      try {
+        const r = await attachUpcs(admin, productId, list, "import", "From PriceCharting");
+        codes = { added: r.added.map((a: any) => a.upc), conflicts: r.conflicts };
+      } catch (e: any) { codes.conflicts.push(String(e?.message || e)); }
+    }
     // Last: the photo, when the listing has none (its own deadline).
     let imageUrl: string | null = prod.image_url || null;
     if (!imageUrl) {
@@ -226,7 +238,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
         }
       }
     }
-    return json({ ok: true, imageUrl, supplier, market, marketError });
+    return json({ ok: true, imageUrl, supplier, market, marketError, codes });
   }
 
   return json({ error: "Unknown mode" }, 400);
