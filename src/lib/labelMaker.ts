@@ -33,6 +33,13 @@ export const WORD_SIZES = [
 const CAP: Record<TextSize, number> = { fill: Infinity, large: 0.34, medium: 0.22, small: 0.14 }; // × label height
 const LINE = 1.16;   // line pitch, × the line's biggest text
 const ASC = 0.8;     // baseline below the line top, × the line's biggest text
+// Baseline to baseline: the line above's share below its baseline + this
+// line's share above its own — a Huge line over a Small one gets room for its
+// descenders. Same as LINE × size when the sizes match.
+const step = (prev: number, cur: number) => (LINE - ASC) * prev + ASC * cur;
+/** Height of a block of lines (× text size), first ascent to last descent. */
+const blockOf = (ms: number[]) =>
+  ms.length ? ms.reduce((a, m, i) => a + (i === 0 ? ASC * m : step(ms[i - 1], m)), 0) + (1 - ASC) * ms[ms.length - 1] : 0;
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
 
@@ -50,14 +57,16 @@ export function linesFromText(text: string, bold = false): RichLine[] {
   return String(text ?? "").replace(/\r/g, "").split("\n").map((l) => (l ? [{ text: l, bold, italic: false, scale: 1 }] : []));
 }
 export const plainText = (lines: RichLine[]) => lines.map((l) => l.map((r) => r.text).join("")).join("\n");
+/** What a label holds — more is cut (the page says so). */
+export const MAX_LINES = 40, MAX_CHARS = 1000;
 /** Trust boundary for stored / pasted runs: sizes, counts, lengths. */
 export function sanitizeLines(raw: any): RichLine[] {
   if (!Array.isArray(raw)) return [];
-  let budget = 600;
+  let budget = MAX_CHARS;
   const out: RichLine[] = [];
-  for (const line of raw.slice(0, 20)) {
+  for (const line of raw.slice(0, MAX_LINES)) {
     const runs: Run[] = [];
-    for (const r of Array.isArray(line) ? line.slice(0, 60) : []) {
+    for (const r of Array.isArray(line) ? line.slice(0, 400) : []) {
       const text = String(r?.text ?? "").replace(/[\r\n\t]/g, " ").slice(0, Math.max(0, budget));
       if (!text) continue;
       budget -= text.length;
@@ -68,7 +77,7 @@ export function sanitizeLines(raw: any): RichLine[] {
       if (prev && prev.bold === st.bold && prev.italic === st.italic && prev.scale === st.scale) prev.text += text;
       else runs.push({ text, ...st });
     }
-    out.push(runs);
+    out.push(runs.slice(0, 60)); // after merging, so per-word toggles don't eat the tail
   }
   while (out.length && !out[out.length - 1].length) out.pop(); // trailing blank lines
   return out;
@@ -148,7 +157,7 @@ export function layoutTextLabel(spec: TextLabelSpec, measure?: MeasureFn): TextL
     }
     return out;
   };
-  const blockH = (ls: Word[][], s: number) => ls.reduce((a, l, i) => a + s * scaleOf(l) * (i === 0 ? 1 : LINE), 0);
+  const blockH = (ls: Word[][], s: number) => s * blockOf(ls.map(scaleOf));
   const fitsAt = (s: number, keepLines: boolean, breakWords = false) => {
     const ls = wrap(s, keepLines, breakWords);
     return blockH(ls, s) <= innerH && ls.every((l) => lineW(l, s) <= innerW + 1e-6) ? ls : null;
@@ -186,7 +195,7 @@ export function renderTextLabelSvg(spec: TextLabelSpec, measure?: MeasureFn): st
     parts.push(`<rect x="${o.toFixed(2)}" y="${o.toFixed(2)}" width="${(W - o * 2).toFixed(2)}" height="${(H - o * 2).toFixed(2)}" fill="none" stroke="#000" stroke-width="${L.borderW.toFixed(2)}"/>`);
   }
   const scaleOf = (ws: Word[]) => (ws.length ? Math.max(...ws.flatMap((w) => w.pieces.map((p) => p.st.scale))) : 1);
-  const blockH = L.lines.reduce((a, l, i) => a + s * scaleOf(l) * (i === 0 ? 1 : LINE), 0);
+  const blockH = s * blockOf(L.lines.map(scaleOf));
   const x = spec.align === "center" ? W / 2 : L.pad;
   const anchor = spec.align === "center" ? "middle" : "start";
   const tspan = (t: string, st: Style) => {
@@ -197,7 +206,7 @@ export function renderTextLabelSvg(spec: TextLabelSpec, measure?: MeasureFn): st
   let y = L.pad + (H - L.pad * 2 - blockH) / 2;
   L.lines.forEach((ws, i) => {
     const m = scaleOf(ws);
-    y += i === 0 ? s * m * ASC : s * m * LINE;
+    y += i === 0 ? s * m * ASC : s * step(scaleOf(L.lines[i - 1]), m);
     if (!ws.length) return;
     const spans = ws.map((w, j) => w.pieces.map((p) => tspan(p.text, p.st)).join("") + (j < ws.length - 1 && w.space ? tspan(" ", w.space) : "")).join("");
     parts.push(`<text x="${x.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="${anchor}" font-family="${family}" fill="#000" xml:space="preserve">${spans}</text>`);
@@ -226,7 +235,7 @@ export function sanitizeSaved(raw: any): SavedLabel[] {
   const out: SavedLabel[] = [];
   for (const r of arr) {
     // Labels saved before formatting existed: plain text + an all-bold flag.
-    const lines = Array.isArray(r?.lines) ? sanitizeLines(r.lines) : sanitizeLines(linesFromText(String(r?.text ?? "").slice(0, 400), r?.bold !== false));
+    const lines = Array.isArray(r?.lines) ? sanitizeLines(r.lines) : sanitizeLines(linesFromText(String(r?.text ?? "").slice(0, MAX_CHARS), r?.bold !== false));
     const text = plainText(lines);
     if (!text.trim()) continue;
     const num = (v: any) => (Number.isFinite(Number(v)) ? Math.min(300, Math.max(10, Number(v))) : undefined);

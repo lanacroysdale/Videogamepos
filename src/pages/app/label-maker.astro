@@ -105,6 +105,13 @@ const blob = { sizes, saved: sanitizeSaved((row?.settings as any)?.labelMakerSav
   .lm-editor { min-height:5.5rem; max-height:16rem; overflow:auto; padding:0.55rem 0.7rem; font-size:16px; font-weight:400; line-height:1.3; background:var(--bg); color:var(--text); border:1px solid var(--border-strong); outline:none; white-space:pre-wrap; overflow-wrap:anywhere; }
   .lm-editor:focus { border-color:var(--cyan); }
   .lm-editor:empty::before { content:attr(data-placeholder); color:var(--muted-2); }
+  /* The size buttons make <font size> — pin those to the 16px base so they read
+     back as × 0.81 / 1 / 1.5 / 2 whatever the browser's own font-size setting. */
+  .lm-editor :global(font[size="2"]) { font-size:13px; }
+  .lm-editor :global(font[size="3"]) { font-size:16px; }
+  .lm-editor :global(font[size="5"]) { font-size:24px; }
+  .lm-editor :global(font[size="6"]) { font-size:32px; }
+  .lm-tools button:disabled { opacity:0.4; cursor:not-allowed; }
   .lm-row { display:flex; flex-wrap:wrap; gap:0.6rem; align-items:flex-end; }
   .lm-row > label { flex:1 1 9rem; }
   .lm-controls label.lm-check { flex-direction:row; align-items:center; gap:0.4rem; flex:0 0 auto; color:var(--text); font-weight:600; }
@@ -134,7 +141,7 @@ const blob = { sizes, saved: sanitizeSaved((row?.settings as any)?.labelMakerSav
 </style>
 
 <script>
-  import { renderTextLabelSvg, layoutTextLabel, inches, plainText, sanitizeLines, linesFromText, fontOf, type TextLabelSpec, type SavedLabel, type TextSize, type RichLine } from "../../lib/labelMaker";
+  import { renderTextLabelSvg, layoutTextLabel, inches, plainText, sanitizeLines, linesFromText, fontOf, MAX_LINES, MAX_CHARS, type TextLabelSpec, type SavedLabel, type TextSize, type RichLine } from "../../lib/labelMaker";
   import { ensureLabelFont, type LabelTemplate } from "../../lib/labels";
   import { fontStyleTag, svgsToPdf } from "../../lib/labelPdf";
   import { storedRotDeg, type RotateDeg } from "../../lib/labelPrint";
@@ -179,11 +186,14 @@ const blob = { sizes, saved: sanitizeSaved((row?.settings as any)?.labelMakerSav
     const walk = (node: Node) => {
       node.childNodes.forEach((ch) => {
         if (ch.nodeType === Node.TEXT_NODE) {
-          const text = (ch.nodeValue || "").replace(/\u00a0/g, " ").replace(/[\r\n]+/g, " ");
-          if (!text) return;
           const cs = getComputedStyle(ch.parentElement || ed);
           const w = cs.fontWeight === "bold" ? 700 : Number(cs.fontWeight) || 400;
-          cur().push({ text, bold: w >= 600, italic: cs.fontStyle === "italic" || cs.fontStyle.startsWith("oblique"), scale: parseFloat(cs.fontSize) / BASE_PX || 1 });
+          const st = { bold: w >= 600, italic: cs.fontStyle === "italic" || cs.fontStyle.startsWith("oblique"), scale: parseFloat(cs.fontSize) / BASE_PX || 1 };
+          // Shift+Enter puts a "\n" in the text itself (pre-wrap box) — a line break.
+          (ch.nodeValue || "").replace(/\u00a0/g, " ").split(/\r\n?|\n/).forEach((text, i) => {
+            if (i) lines.push([]);
+            if (text) cur().push({ text, ...st });
+          });
         } else if (ch.nodeName === "BR") lines.push([]);
         else if (ch.nodeType === Node.ELEMENT_NODE) {
           const block = BLOCK.test(ch.nodeName);
@@ -194,8 +204,13 @@ const blob = { sizes, saved: sanitizeSaved((row?.settings as any)?.labelMakerSav
       });
     };
     walk(ed);
-    return sanitizeLines(lines);
+    const out = sanitizeLines(lines);
+    // Anything past the label's limit is cut — say so (the box still shows it).
+    const squash = (x: string) => x.replace(/\s+/g, "");
+    truncated = squash(lines.map((l) => l.map((r) => r.text).join("")).join("")) !== squash(plainText(out));
+    return out;
   }
+  let truncated = false;
   function writeEditor(lines: RichLine[]) {
     ed.replaceChildren(...lines.map((line) => {
       const div = document.createElement("div");
@@ -254,8 +269,18 @@ const blob = { sizes, saved: sanitizeSaved((row?.settings as any)?.labelMakerSav
     // The preview box keeps the label's shape (a tall 4×6 isn't stretched wide).
     const pv = $("lm-preview").querySelector("svg");
     if (pv) pv.style.width = `min(100%, ${((62 * s.widthMm) / s.heightMm).toFixed(2)}vh)`;
-    $("lm-overflow").hidden = !plainText(s.lines).trim() || layoutTextLabel(s, measure).fits;
-    ed.style.fontFamily = fontOf(s.fontKey).f.family; // the box shows the label's font
+    const empty = !plainText(s.lines).trim();
+    $("lm-overflow").hidden = empty || (!truncated && layoutTextLabel(s, measure).fits);
+    $("lm-overflow").textContent = truncated
+      ? `⚠ Too long — a label holds ${MAX_LINES} lines / ${MAX_CHARS} characters; the rest won't print. Shorten it.`
+      : "⚠ Too much text for this label — it's at the smallest size and may be cut off. Shorten it or pick a bigger label.";
+    // The box shows the label's font. A font with no bold (League Gothic,
+    // Pixel) never prints bold — so the box doesn't fake one and B is off.
+    const lf = fontOf(s.fontKey).f;
+    ed.style.fontFamily = lf.family;
+    ed.style.fontSynthesis = lf.noBold ? "style" : "";
+    const bBtn = document.querySelector<HTMLButtonElement>('.lm-tools [data-cmd="bold"]');
+    if (bBtn) { bBtn.disabled = !!lf.noBold; bBtn.title = lf.noBold ? "This font has no bold" : "Bold (Ctrl/⌘+B)"; }
     $("lm-sizecap").textContent = `${inches(s.widthMm)} × ${inches(s.heightMm)}″`;
     const canZebra = !!zebra && sizeOf()?.zebra;
     $("lm-zebra").hidden = !canZebra;
