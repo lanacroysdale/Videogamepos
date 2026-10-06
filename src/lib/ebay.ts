@@ -185,6 +185,8 @@ export interface StoreListingDetails {
   gameName: string;
   /** Video Game Series aspect ("Pokemon") — a Game Name equal to it is too generic. */
   series: string;
+  /** Merch specifics, for a short built title ("Splatoon 3 Judd & Li'l Judd Alarm Clock"). */
+  merch: { game: string; show: string; character: string; type: string; brand: string };
   /** Region Code aspect ("NTSC-J (Japan)"). */
   regionAspect: string;
   /** Country of Origin / Country/Region of Manufacture aspect. */
@@ -207,6 +209,13 @@ export function storeListingDetails(item: any): StoreListingDetails {
     platform: aspects["Platform"] || "",
     gameName: aspects["Game Name"] || "",
     series: aspects["Video Game Series"] || aspects["Franchise"] || "",
+    merch: {
+      game: aspects["Video Game Name"] || "",
+      show: aspects["TV Show"] || aspects["Movie"] || "",
+      character: aspects["Character"] || "",
+      type: aspects["Type"] || "",
+      brand: aspects["Brand"] || "",
+    },
     regionAspect: aspects["Region Code"] || "",
     country: aspects["Country of Origin"] || aspects["Country/Region of Manufacture"] || "",
     qty: qty == null ? 1 : Math.max(0, Number(qty) || 0),

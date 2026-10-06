@@ -26,6 +26,7 @@ export interface EbayDetails {
   platform: string;
   gameName: string;
   series?: string;
+  merch?: { game: string; show: string; character: string; type: string; brand?: string };
   regionAspect: string;
   country: string;
   qty: number;
@@ -199,6 +200,78 @@ export function expoPrice(ebayCents: number, r: PriceRule): number {
   return c;
 }
 
+/* ---------------- Merch: a short title from the item specifics ---------------- */
+
+// An all-lowercase value ("pochette", "mr.saturn") gets capitals; anything
+// the seller already capitalised stays as typed ("Legend of Zelda").
+const capWords = (s: string) => /[A-Z]/.test(s) ? s : s.replace(/(^|[\s.\-/(])([a-z])/g, (_, a, b) => a + b.toUpperCase());
+const cleanPart = (s: string) => capWords(unshout(String(s || "").replace(/\s+/g, " ").trim()));
+// Types too vague to name an item by ("Klonoa Collectibles").
+const VAGUE_TYPE = /^(collectibles?|merch(andise)?|toys?|items?|replica items?|other|gashapon|capsule toys?|novelty|accessor(y|ies)|goods|misc(ellaneous)?|set|bundle|lot)$/i;
+
+/** A short merch title from eBay's item specifics: game (or show) + character
+ *  + type — "Splatoon 3 Judd & Li'l Judd Alarm Clock". No game? The words the
+ *  listing title has in front of the character ("Official Splatoon 3 Judd…"
+ *  → "Splatoon 3"). Only when it's safe: a specific type, a character, every
+ *  game / character word actually in the listing title (sellers' specifics
+ *  are sometimes vague or wrong), and shorter than the trimmed listing title.
+ *  Else null → the trimmed listing title. */
+export function merchTitle(ebayTitle: string, m: { game: string; show: string; character: string; type: string; series?: string; brand?: string } | undefined): string | null {
+  if (!m) return null;
+  // "Plush Item" → "Plush"; "Salmon Run Replica Item" → vague.
+  const type = cleanPart(m.type.split(/[,;]/)[0].replace(/\s+items?$/i, ""));
+  // "Pim - Smiling Friend" → "Pim"; "Inkling Squid, Octoling Octopus" → "Inkling Squid & Octoling Octopus".
+  const character = cleanPart(m.character.split(/\s[-–—]\s/)[0].split(/\s*,\s*/).slice(0, 2).join(" & "));
+  if (!type || VAGUE_TYPE.test(type) || !character) return null;
+  let game = cleanPart(m.game || m.series || m.show);
+  if (!game) {
+    const at = fold(ebayTitle).indexOf(fold(character).split(" ")[0]);
+    if (at > 0) {
+      const words = fold(ebayTitle).slice(0, at).trim().split(" ").filter(Boolean).length;
+      const before = cleanItemTitle(ebayTitle.split(/\s+/).slice(0, words).join(" "));
+      if (before && before.split(/\s+/).length <= 4) game = before;
+    }
+  }
+  // Every word that names the game / character must be in the listing title.
+  const titleWords = new Set(fold(ebayTitle).split(" "));
+  // Two-letter words count ("Aerospray MG" ≠ "Aerospray RG", "Mr Saturn").
+  const sigWords = (x: string) => fold(x).split(" ").filter((w) => /[a-z]/.test(w) && w.length >= 2 && !STOP.has(w));
+  const named = sigWords(`${game} ${character}`);
+  if (!named.length || !named.every((w) => titleWords.has(w))) return null;
+  // …and the type has to be what the title says it is (a fan listed as an
+  // "Action Figure" keeps its own title).
+  if (!sigWords(type).some((w) => titleWords.has(w) || titleWords.has(w + "s") || titleWords.has(w.replace(/s$/, "")))) return null;
+  // A set / pack / lot is more than one character + type.
+  if (/\b(set|sets|lot|bundle|pair|pack|[x×]\s?\d+|\d+\s?(pack|pcs|piece))\b/i.test(ebayTitle)) return null;
+  // The type minus the character's words must still say what it is
+  // ("Salmon Run Replica" → "Replica": too vague).
+  const charWords = new Set(sigWords(character));
+  const typeCore = type.split(/\s+/).filter((w) => !charWords.has(fold(w))).join(" ");
+  if (!typeCore || VAGUE_TYPE.test(typeCore) || /^replicas?$/i.test(typeCore)) return null;
+  // Up to 2 words the title puts right before the character ("Yawning
+  // Snorlax", "Wedding Peach", "Winter Holiday Pikachu") or between it and
+  // the type ("Isabelle Alarm Clock") — they say WHICH one it is.
+  const raw = ebayTitle.replace(/\s+/g, " ").trim().split(" ");
+  const rawF = raw.map((w) => fold(w));
+  const skip = new Set([...sigWords(`${game} ${m.brand || ""}`), ...sigWords(type), ...charWords, "center", "official", "authentic", "nintendo", "japan", "new", "the", "x", "and"]);
+  const isNoise = (i: number) => !rawF[i] || skip.has(rawF[i]) || /^\d/.test(rawF[i]) || cleanItemTitle(raw[i]) !== raw[i].replace(/\s+/g, "");
+  const cw = fold(character).split(" ").filter(Boolean);
+  const cFirst = rawF.indexOf(cw[0]);
+  const cLast = cFirst < 0 ? -1 : rawF.lastIndexOf(cw[cw.length - 1]);
+  const tAt = rawF.findIndex((w, i) => i > cLast && sigWords(type).includes(w));
+  const pre: string[] = [], mid: string[] = [];
+  if (cFirst > 0) for (let i = cFirst - 1; i >= 0 && pre.length < 3 && !isNoise(i); i--) pre.unshift(raw[i]);
+  if (pre.length > 2) pre.length = 0; // a longer run is a product line ("All Star Collection") — not a descriptor
+  if (cLast >= 0 && tAt > cLast + 1 && tAt - cLast - 1 <= 2) for (let i = cLast + 1; i < tAt; i++) if (!isNoise(i)) mid.push(raw[i]);
+  const who = [...pre, character, ...mid].join(" ");
+  // Drop a part another part already says ("Salmon Run" + "Salmon Run Replica Item").
+  const parts = [game, who, type].filter(Boolean);
+  const kept = parts.filter((p, i) => !parts.some((q, j) => j !== i && fold(q).includes(fold(p)) && (fold(q) !== fold(p) || j < i)));
+  if (!kept.includes(type)) return null; // the type must survive — it's what the item is
+  const t = kept.join(" ").replace(/\s+/g, " ").trim();
+  return t.length >= 4 && t.length < cleanItemTitle(ebayTitle).length ? t : null;
+}
+
 /* ---------------- Game Name sanity ---------------- */
 
 const fold = (x: string) => x.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
@@ -244,12 +317,14 @@ export interface EbayBuildOpts {
   defaultGrade: string;
   /** Use eBay's Game Name / a cleaned title instead of the listing title. */
   cleanTitles: boolean;
+  /** Merch: a short title built from the item specifics when it's safe. */
+  shortMerch?: boolean;
 }
 
 /** One import row per eBay listing (never merged: each carries its own eBay id). */
 export function buildEbayRows(listings: EbayListing[], details: Map<string, EbayDetails>, o: EbayBuildOpts): EbayImportRow[] {
   const jpCode = regionFromText("japan", o.regions) || "JP";
-  return listings.map((l, i) => {
+  const rows: EbayImportRow[] = listings.map((l, i) => {
     const d = details.get(l.id);
     const group = ebayGroup(l.categories);
     const warnings: string[] = [];
@@ -301,7 +376,7 @@ export function buildEbayRows(listings: EbayListing[], details: Map<string, Ebay
         const base = name.length >= 2 && !generic ? name : cleanGameTitle(split.title, platform);
         const eds = editionTags(l.title, base);
         title = base + eds.map((t) => ` [${t}]`).join("");
-      } else title = cleanItemTitle(split.title);
+      } else title = (o.shortMerch !== false && (group === "merch" || group === "toys") && merchTitle(split.title, d?.merch ? { ...d.merch, series: d.series } : undefined)) || cleanItemTitle(split.title);
     } else title = split.title || title;
     const kind: ImportRow["kind"] = group === "consoles" ? "console" : group === "accessories" ? "accessory"
       : group === "merch" || group === "toys" ? "collectible" : group === "games" ? "" : itemKind(title, platform);
@@ -322,4 +397,23 @@ export function buildEbayRows(listings: EbayListing[], details: Map<string, Ebay
       },
     };
   });
+  // Two DIFFERENT merch items with the same short title would land on one
+  // listing — those keep their (trimmed) listing titles instead. The same item
+  // listed twice (identical eBay titles) still shares one listing.
+  if (o.cleanTitles) {
+    const byTitle = new Map<string, EbayImportRow[]>();
+    for (const r of rows) {
+      if (r.ebay.group !== "merch" && r.ebay.group !== "toys") continue;
+      const k = `${fold(r.title)}|${r.platform}|${r.region}`;
+      byTitle.set(k, [...(byTitle.get(k) || []), r]);
+    }
+    for (const g of byTitle.values()) {
+      if (new Set(g.map((r) => fold(r.ebay.title))).size < 2) continue;
+      for (const r of g) {
+        r.title = cleanItemTitle(splitTitleRegion(r.ebay.title, o.regions).title);
+        if (r.title === r.ebay.title.trim()) delete r.titleFrom; else r.titleFrom = r.ebay.title.trim();
+      }
+    }
+  }
+  return rows;
 }

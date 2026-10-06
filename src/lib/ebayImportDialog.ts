@@ -115,6 +115,7 @@ export function openEbayImportDialog(o: EbayImportDialogOpts) {
     galleryMax: num("tl-ebay-photos", 1),
   };
   let cleanTitles = ls.get("tl-ebay-clean") !== "0";
+  let shortMerch = ls.get("tl-ebay-shortmerch") !== "0";
   const findComp = (re: RegExp) => o.completeness.find((c) => re.test(c.code + " " + c.label))?.code || "";
   let gameComp = findComp(/^CIB|complete/i) || o.completeness[0]?.code || "";
   let itemComp = findComp(/^L\b|loose/i) || gameComp;
@@ -226,7 +227,7 @@ export function openEbayImportDialog(o: EbayImportDialogOpts) {
   function rebuild() {
     const built = buildEbayRows(listings, details, {
       completeness: o.completeness, grades: o.grades, platforms: o.platforms, regions: o.regions,
-      defaultGameCompleteness: gameComp, defaultItemCompleteness: itemComp, defaultGrade: defGrade, cleanTitles,
+      defaultGameCompleteness: gameComp, defaultItemCompleteness: itemComp, defaultGrade: defGrade, cleanTitles, shortMerch,
     });
     rows = built.map((row) => {
       const id = row.ebay.id;
@@ -294,7 +295,8 @@ export function openEbayImportDialog(o: EbayImportDialogOpts) {
       + `<label class="chk" style="text-transform:none;letter-spacing:0;font-weight:600;" title="If rounding would land above the eBay price, round down instead"><input type="checkbox" id="tle-cap"${price.cap ? " checked" : ""} /> Never above the eBay price</label>`
       + sel("tle-photos", "Photos", [[1, "1 (cover only)"], [3, "3"], [6, "6"], [12, "All (up to 12)"]].map(([v, l]) => `<option value="${v}"${choices.galleryMax === v ? " selected" : ""}>${l}</option>`).join(""), "Photos copied from each eBay listing onto its new listing")
       + (o.invTypes?.length ? sel("tle-type", "Inventory type", o.invTypes.map((t) => `<option value="${esc(t.id)}"${t.id === choices.inventoryTypeId ? " selected" : ""}>${esc((t.icon ? t.icon + " " : "") + t.name)}</option>`).join("")) : "")
-      + `<label class="chk" style="text-transform:none;letter-spacing:0;font-weight:600;" title="Games take eBay's Game Name (plus any edition in the listing title); other items use the listing title less the seller's search words. Off = the eBay listing title as is. Either way the eBay listing title goes into the description."><input type="checkbox" id="tle-clean"${cleanTitles ? " checked" : ""} /> Titles from eBay's game data</label>`;
+      + `<label class="chk" style="text-transform:none;letter-spacing:0;font-weight:600;" title="Games take eBay's Game Name (plus any edition in the listing title); other items use the listing title less the seller's search words. Off = the eBay listing title as is. Either way the eBay listing title goes into the description."><input type="checkbox" id="tle-clean"${cleanTitles ? " checked" : ""} /> Titles from eBay's game data</label>`
+      + (cleanTitles ? `<label class="chk" style="text-transform:none;letter-spacing:0;font-weight:600;" title="Merch / toys: game + character + type from eBay's item specifics (“Splatoon 3 Judd & Li'l Judd Alarm Clock”) — only when those words are in the listing title and it isn't a set; otherwise the trimmed listing title"><input type="checkbox" id="tle-short"${shortMerch ? " checked" : ""} /> Short merch titles</label>` : "");
     const groupsHere = EBAY_GROUPS.filter((g) => rows.some((r) => r.row.ebay.group === g.key && (showImported || !isImported(r))));
     $("tle-cats").innerHTML = groupsHere.map((g) => sel(`tle-gc-${g.key}`, g.label, catOptions(groupCat.get(g.key) || ""))).join("")
       + sel("tle-jpcat", "🇯🇵 Japan items →", catOptions(japanCat, `<option value="${JP_KEEP}"${!japanCat ? " selected" : ""}>Keep the category above</option>`), "Games with a Japan region, plus merch / accessories made in or imported from Japan")
@@ -335,6 +337,7 @@ export function openEbayImportDialog(o: EbayImportDialogOpts) {
       case "tle-photos": choices.galleryMax = +t.value || 1; ls.set("tl-ebay-photos", String(choices.galleryMax)); return;
       case "tle-type": choices.inventoryTypeId = t.value; return rebuild();
       case "tle-clean": cleanTitles = t.checked; ls.set("tl-ebay-clean", t.checked ? "1" : "0"); return rebuild();
+      case "tle-short": shortMerch = t.checked; ls.set("tl-ebay-shortmerch", t.checked ? "1" : "0"); return rebuild();
       case "tle-gcomp": gameComp = t.value; return rebuild();
       case "tle-icomp": itemComp = t.value; return rebuild();
       case "tle-jpcat": japanCat = pickCategory(t.value, japanCat); return rerender();
