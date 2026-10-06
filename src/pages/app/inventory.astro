@@ -119,6 +119,8 @@ const allRows = (products ?? []).map((p: any) => ({
   categoryName: p.category?.name ?? "",
   categoryColor: p.category?.color ?? "#2ce6e0",
   ebayId: (p.tags ?? []).find((t: string) => t.startsWith("ebay:"))?.slice(5) ?? "",
+  // Sell Similar: the other seller's listing it was copied from (never synced).
+  ebayRefId: (p.tags ?? []).find((t: string) => t.startsWith("ebay-ref:"))?.slice(9) ?? "",
   pcId: (p.tags ?? []).find((t: string) => t.startsWith("pricecharting:"))?.slice(13) ?? "",
   supplierLinks: p.product_suppliers ?? [], // manager-only via RLS (staff get [])
   upcs: (p.product_upcs ?? []).map((u: any) => ({ id: u.id, upc: u.upc, source: u.source, evidence: u.evidence ?? "" })),
@@ -1339,7 +1341,13 @@ const posData = {
     const link = $("m-weblink") as HTMLAnchorElement;
     if (anyWeb(p)) { link.href = webBase + (p.slug ? `/shop/${p.slug}` : "/shop"); link.hidden = false; } else { link.hidden = true; }
     const ebayLink = $("m-ebaylink") as HTMLAnchorElement;
-    if (p.ebayId) { ebayLink.href = `https://www.ebay.com/itm/${p.ebayId}`; ebayLink.hidden = false; } else { ebayLink.hidden = true; }
+    // Our own eBay listing, else (Sell Similar) the listing it was copied from.
+    const ebayLinkId = p.ebayId || p.ebayRefId;
+    if (ebayLinkId) {
+      ebayLink.href = `https://www.ebay.com/itm/${ebayLinkId}`; ebayLink.hidden = false;
+      ebayLink.textContent = p.ebayId ? "🛒 View on eBay" : "🔗 Similar on eBay";
+      ebayLink.title = p.ebayId ? "This item's own eBay listing" : "The eBay listing this was added from (Sell similar) — not ours, never synced";
+    } else { ebayLink.hidden = true; }
 
     wireNewCategory(document.getElementById("m-category") as HTMLSelectElement | null);
     // A UPC names ONE release — moving a listing that has one to another
@@ -3011,6 +3019,8 @@ const posData = {
             if (e.imageUrl) newItem.imageUrl = e.imageUrl;
             for (const k of ["franchise", "genre", "brand", "description"]) if (e.fields?.[k]) newItem[k] = e.fields[k];
             if (String(e.tag || "").startsWith("ebay:")) newItem.ebayId = String(e.tag).slice(5);
+            else if (String(e.tag || "").startsWith("ebay-ref:")) newItem.ebayRefId = String(e.tag).slice(9);
+            if (e.supplier) newItem.supplierLinks = [...(newItem.supplierLinks || []), e.supplier];
             render();
             toast(e.imageUrl ? "🛒 Added with the eBay photo" : "✓ Added from eBay");
           } else { toast("✓ Added (eBay photo failed: " + (e.error || "?") + ")"); }
