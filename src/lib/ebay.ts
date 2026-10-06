@@ -66,7 +66,7 @@ export const getItem = (legacyItemId: string) =>
 // error returns "error" so callers can SKIP rather than wrongly zero stock.
 export async function checkAvailability(
   legacyItemId: string,
-): Promise<{ status: "in_stock" | "out_of_stock" | "ended" | "error"; quantity: number; priceCents?: number }> {
+): Promise<{ status: "in_stock" | "out_of_stock" | "ended" | "error"; quantity: number; priceCents?: number; seller?: string }> {
   try {
     const token = await appToken();
     const res = await fetch(`${API}/item/get_item_by_legacy_id?legacy_item_id=${encodeURIComponent(legacyItemId)}`, {
@@ -78,9 +78,10 @@ export async function checkAvailability(
     const av = item.estimatedAvailabilities?.[0];
     const qty = av?.estimatedAvailableQuantity ?? av?.estimatedRemainingQuantity ?? null;
     const priceCents = Math.round(parseFloat(item.price?.value || "0") * 100) || undefined;
+    const seller = String(item.seller?.username || "") || undefined;
     if (av?.estimatedAvailabilityStatus === "OUT_OF_STOCK" || qty === 0)
-      return { status: "out_of_stock", quantity: 0, priceCents };
-    return { status: "in_stock", quantity: qty ?? 1, priceCents };
+      return { status: "out_of_stock", quantity: 0, priceCents, seller };
+    return { status: "in_stock", quantity: qty ?? 1, priceCents, seller };
   } catch {
     return { status: "error", quantity: 0 };
   }
@@ -117,12 +118,11 @@ async function sellerPage(username: string, category: string, offset: number) {
   return { items: (j.itemSummaries || []) as any[], total: (j.total || 0) as number };
 }
 
-// Enumerate a seller's ENTIRE active store (all categories), deduped. Returns
-// lightweight summaries — call getItem(id) per row to fetch full detail.
-export async function listSellerItems(
-  username: string,
-): Promise<{ legacyItemId: string; title: string }[]> {
-  const seen = new Map<string, string>(); // id -> title (dedupes cross-listed)
+// Every active listing summary in the seller's store (all categories),
+// deduped. Search only returns listings that can be bought, so a listing set
+// to 0 on eBay (out of stock) isn't in here.
+async function sellerSummaries(username: string): Promise<any[]> {
+  const seen = new Map<string, any>(); // id -> summary (dedupes cross-listed)
   for (const cat of STORE_CATEGORIES) {
     let offset = 0;
     for (let page = 0; page < 60; page++) {
@@ -131,13 +131,100 @@ export async function listSellerItems(
       catch (e: any) { if (/recognise seller/.test(e.message)) throw e; break; }
       for (const it of res.items) {
         const id = String(it.legacyItemId || "");
-        if (id && !seen.has(id)) seen.set(id, it.title || "");
+        if (id && !seen.has(id)) seen.set(id, it);
       }
       offset += res.items.length;
       if (!res.items.length || offset >= res.total) break;
     }
   }
-  return [...seen.entries()].map(([legacyItemId, title]) => ({ legacyItemId, title }));
+  return [...seen.values()];
+}
+
+// Enumerate a seller's ENTIRE active store (all categories), deduped. Returns
+// lightweight summaries — call getItem(id) per row to fetch full detail.
+export async function listSellerItems(
+  username: string,
+): Promise<{ legacyItemId: string; title: string }[]> {
+  return (await sellerSummaries(username)).map((it) => ({ legacyItemId: String(it.legacyItemId), title: it.title || "" }));
+}
+
+/** One store listing as the eBay importer's table shows it (no item call). */
+export interface StoreListing {
+  id: string;
+  title: string;
+  priceCents: number;
+  conditionId: string;
+  condition: string;
+  /** eBay's category path, leaf first ("Video Games", "Video Games & Consoles"). */
+  categories: string[];
+  image: string;
+  imageCount: number;
+  url: string;
+}
+
+export async function listSellerStore(username: string): Promise<StoreListing[]> {
+  return (await sellerSummaries(username)).map((it) => ({
+    id: String(it.legacyItemId),
+    title: String(it.title || "").trim(),
+    priceCents: Math.round(parseFloat(it.price?.value || "0") * 100) || 0,
+    conditionId: String(it.conditionId || ""),
+    condition: String(it.condition || ""),
+    categories: (it.categories || []).map((c: any) => String(c?.categoryName || "")).filter(Boolean),
+    image: it.image?.imageUrl || it.thumbnailImages?.[0]?.imageUrl || "",
+    imageCount: (it.image?.imageUrl ? 1 : 0) + (it.additionalImages || []).length,
+    url: ebayItemUrl(String(it.legacyItemId)),
+  }));
+}
+
+/** What the importer needs from one listing's full record (item specifics). */
+export interface StoreListingDetails {
+  id: string;
+  /** eBay's Platform aspect ("Sony PlayStation 3"), "" when none. */
+  platform: string;
+  /** eBay's Game Name aspect — a clean title for games. */
+  gameName: string;
+  /** Video Game Series aspect ("Pokemon") — a Game Name equal to it is too generic. */
+  series: string;
+  /** Merch specifics, for a short built title ("Splatoon 3 Judd & Li'l Judd Alarm Clock"). */
+  merch: { game: string; show: string; character: string; type: string; brand: string };
+  /** Region Code aspect ("NTSC-J (Japan)"). */
+  regionAspect: string;
+  /** Country of Origin / Country/Region of Manufacture aspect. */
+  country: string;
+  qty: number;
+  inStock: boolean;
+  upc: string;
+  completenessCode: string;
+  gradeCode: string;
+  brand: string;
+}
+
+export function storeListingDetails(item: any): StoreListingDetails {
+  const aspects = aspectDict(item);
+  const title = String(item.title || "").trim();
+  const av = item.estimatedAvailabilities?.[0];
+  const qty = av?.estimatedAvailableQuantity ?? av?.estimatedRemainingQuantity ?? null;
+  return {
+    id: String(item.legacyItemId || ""),
+    platform: aspects["Platform"] || "",
+    gameName: aspects["Game Name"] || "",
+    series: aspects["Video Game Series"] || aspects["Franchise"] || "",
+    merch: {
+      game: aspects["Video Game Name"] || "",
+      show: aspects["TV Show"] || aspects["Movie"] || "",
+      character: aspects["Character"] || "",
+      type: aspects["Type"] || "",
+      brand: aspects["Brand"] || "",
+    },
+    regionAspect: aspects["Region Code"] || "",
+    country: aspects["Country of Origin"] || aspects["Country/Region of Manufacture"] || "",
+    qty: qty == null ? 1 : Math.max(0, Number(qty) || 0),
+    inStock: !(av?.estimatedAvailabilityStatus === "OUT_OF_STOCK" || qty === 0),
+    upc: cleanId(aspects["UPC"] || item.gtin || undefined) || "",
+    completenessCode: deriveCompleteness(title, aspects, String(item.conditionId || "")),
+    gradeCode: deriveGrade(String(item.conditionId || "")),
+    brand: item.brand || aspects["Brand"] || "",
+  };
 }
 
 // ===========================================================================
@@ -238,7 +325,7 @@ function deriveGrade(conditionId: string): string {
 }
 
 const cleanId = (v?: string) =>
-  v && !/does not apply|n\/?a|none/i.test(v) ? v.trim() : null;
+  v && !/does not apply|^\s*n\/?a\s*$|^\s*none\s*$|^\s*(unbranded|unknown|generic)\s*$/i.test(v) ? v.trim() : null;
 
 export interface MappedItem {
   ebayItemId: string;
@@ -253,6 +340,11 @@ export interface MappedItem {
   mpn: string | null;
   upc: string | null;
   releaseYear: number | null;
+  /** Series / franchise / show ("The Legend of Zelda", "Splatoon", "Smiling Friends"). */
+  franchise: string | null;
+  /** The character(s) a piece of merch is of ("Pikachu", "Judd & Li'l Judd"). */
+  character: string | null;
+  genre: string | null;
   conditionLabel: string;
   completenessCode: string;
   gradeCode: string;
@@ -267,7 +359,8 @@ export function mapItem(item: any): MappedItem {
   const aspects = aspectDict(item);
   const title = String(item.title || "").trim();
   const conditionId = String(item.conditionId || "");
-  const year = (aspects["Release Year"] || aspects["Year Manufactured"] || "").match(/\d{4}/);
+  const year = (aspects["Release Year"] || aspects["Year Manufactured"] || aspects["Year"] || "").match(/\b(19[5-9]\d|20[0-4]\d)\b/);
+  const meta = (...keys: string[]) => { for (const k of keys) { const v = cleanId(aspects[k]); if (v) return v.slice(0, 120); } return null; };
   const images = [
     item.image?.imageUrl,
     ...(item.additionalImages || []).map((i: any) => i?.imageUrl),
@@ -285,10 +378,14 @@ export function mapItem(item: any): MappedItem {
     // Japan-only platform ("Super Famicom"), else a bracket tag ("[PAL]") —
     // never loose title words: eBay titles are keyword soup.
     region: regionFromEbayAspect(aspects["Region Code"]) || regionFromPlatform(aspects["Platform"] || "").code || splitTitleRegion(title).code,
-    brand: item.brand || aspects["Brand"] || null,
+    // Merch has a Brand; a game's maker is its Publisher.
+    brand: meta("Brand") || item.brand || meta("Publisher"),
     mpn: cleanId(item.mpn || aspects["MPN"] || aspects["Model"] || undefined),
     upc: cleanId(aspects["UPC"] || item.gtin || undefined),
     releaseYear: year ? Number(year[0]) : null,
+    franchise: meta("Video Game Series", "Franchise", "Series", "TV Show", "Movie", "Video Game Name"),
+    character: meta("Character", "Character Family"),
+    genre: meta("Genre"),
     conditionLabel: item.condition || "",
     completenessCode: deriveCompleteness(title, aspects, conditionId),
     gradeCode: deriveGrade(conditionId),

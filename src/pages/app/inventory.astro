@@ -170,7 +170,8 @@ const posData = {
       <div class="inv-menu" id="inv-menu">
         <button id="inv-menu-btn" class="btn btn-ghost btn-sm" type="button" aria-haspopup="true" aria-expanded="false" title="Bulk tools: eBay import/sync, covers, titles, UPCs">🛠 Inventory updates ▾</button>
         <div class="inv-menu-pop" id="inv-menu-pop" role="menu" hidden>
-          <button id="ebay-bulk" class="btn btn-ghost btn-sm" role="menuitem" title="Import your eBay store listings as draft products (skips ones already imported)">🛒 Import eBay store</button>
+          <button id="ebay-bulk" class="btn btn-ghost btn-sm" role="menuitem" title="Pick listings from your eBay store (filter by platform, category, Japan…) and add them to a receiving draft — Finish prints the labels">🛒 Import from eBay store</button>
+          <button id="ebay-media" class="btn btn-ghost btn-sm" role="menuitem" title="For listings imported from eBay that are missing a photo or details (franchise / series, brand, year, character), copy them from the eBay listing">📷 Fill from eBay (photos &amp; details)</button>
           <button id="ebay-sync" class="btn btn-ghost btn-sm" role="menuitem" title="Check eBay for ended / out-of-stock listings and zero them on the website (never raises local stock)">🔁 Sync eBay stock</button>
           <button id="resync-img" class="btn btn-ghost btn-sm" role="menuitem" title="Fetch covers for items with no image (only fills empties)">🔄 Resync images</button>
           <button id="fix-titles" class="btn btn-ghost btn-sm" role="menuitem" title="Suggest official game titles (from the game database) for listings with typos — you approve each one">✎ Fix titles</button>
@@ -647,6 +648,7 @@ const posData = {
   import { initScanReceiver, openPairDialog } from "../../lib/scanReceive";
   import { barcodeEq } from "../../lib/gtin";
   import { openImportDialog, importPrice } from "../../lib/importDialog";
+  import { openEbayImportDialog } from "../../lib/ebayImportDialog";
   import { newListingKey, officialTitleFor, itemKind, norm as normImport } from "../../lib/collectionImport";
   import { upcEligible } from "../../lib/upcMatch";
   import { upcLike, identifyUpc } from "../../lib/upcClient";
@@ -2458,7 +2460,6 @@ const posData = {
       onImport: async (rows, ch, progress) => {
         const condText = (r: any) => [completeness.find((c) => c.code === r.row.completenessCode)?.label, grades.find((g) => g.code === r.row.gradeCode)?.label].filter(Boolean).join(" ") || "Used";
         const priceOf = (r: any) => (r.row.priceCents == null ? 0 : importPrice(r.row.priceCents, ch));
-        const newProducts: any[] = [];
         // A brand-new game with several conditions in the sheet (Loose + CIB)
         // is ONE listing: the first row creates it (ref), the rest become new
         // conditions on it (productRef). The server resolves refs within a
@@ -2502,78 +2503,98 @@ const posData = {
           // A corrected title keeps the sheet's spelling as a search name.
           return { kind: "newProduct", ref: g, title: r.row.title, platform: r.row.platform, regionCode: r.row.region, categoryId: r.categoryId || ch.categoryId, altNames: r.row.titleFrom ? [r.row.titleFrom] : undefined, ...v, ...base };
         });
-        const refToProduct = new Map<string, string>();
-        const results: any[] = [];
-        // Small batches: each new-listing row is ~7 database round trips, and
-        // a batch must finish well inside the serverless time limit.
-        const STEP = 10;
-        // Does the server have replay protection (migration 20260929000001)?
-        // Decides what we can promise the employee if a batch fails.
-        const idempotent = !!(await api({ action: "importStage", entryId, rows: [] }).catch(() => ({}))).idempotent;
-        try {
-          for (let i = 0; i < payload.length; i += STEP) {
-            progress(`Staging ${Math.min(i + STEP, payload.length)} / ${payload.length}…`);
-            const batch = payload.slice(i, i + STEP).map((p: any) => (p.productRef && refToProduct.has(p.productRef) ? { ...p, productId: refToProduct.get(p.productRef) } : p));
-            const j = await api({ action: "importStage", entryId, rows: batch });
-            results.push(...(j.results || []));
-            batch.forEach((p: any, k: number) => { if (p.ref && j.results?.[k]?.ok) refToProduct.set(p.ref, j.results[k].productId); });
-            // Staged → never re-sent if a later batch fails and the employee retries.
-            rows.slice(i, i + STEP).forEach((r: any, k: number) => { if (j.results?.[k]?.ok) r.skip = true; });
-          }
-        } catch (e) {
-          if (results.length) { await mirrorImported(results); await loadEntry(entryId); setEntryMode(true); render(); }
-          if (newProducts.length) enrichInBackground(newProducts); // covers for what DID get created
-          upcFillInBackground(touchedListings(results));
-          throw new Error(`${(e as any)?.message || "A batch failed"}. ${idempotent
-            ? "Press Import again: rows that already made it onto the draft are recognized and won't be added twice."
-            : "Rows from the failed batch MAY already be on the draft (look before pressing Import again, or apply migration 20260929000001 for automatic protection)."}`);
+        let staged: { results: any[]; newProducts: any[] };
+        try { staged = await stageOntoDraft(rows, payload, progress, `“${ch.fileName}”`); }
+        catch (e: any) {
+          // Covers + UPCs for what DID get created before the failure.
+          if (e?.staged?.newProducts?.length) enrichInBackground(e.staged.newProducts);
+          if (e?.staged) upcFillInBackground(touchedListings(e.staged.results));
+          throw e;
         }
-        await mirrorImported(results);
-        async function mirrorImported(results: any[]) {
-        // Mirror new listings/conditions into the loaded catalog so the
-        // typeahead (and a second import of the same sheet) sees them.
-        results.forEach((res, i) => {
-          if (!res?.ok) return;
-          const r: any = rows[i]; const p: any = payload[i];
-          if (res.newProduct) {
-            if (items.some((x) => x.id === res.productId)) return; // replayed row, already mirrored
-            const cat = categories.find((c: any) => c.id === p.categoryId);
-            const np: any = {
-              id: res.productId, title: r.row.title, slug: res.slug || r.row.title.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""),
-              platform: r.row.platform, regionCode: regionReady ? r.row.region || "" : "", franchise: "", genre: "", description: "", imageUrl: "", altNames: p.altNames || [], categoryId: p.categoryId,
-              categoryName: cat?.name ?? "", categoryColor: cat?.color ?? "#2ce6e0", ebayId: "", pcId: r.row.pcId || "", supplierLinks: [],
-              // Hidden from the grid until this draft is finished.
-              pendingEntryId: entryId, variants: [], pendingVariants: [mkImportedVariant(res, p)],
-            };
-            items.push(np); newProducts.push(np);
-          } else {
-            const lp = items.find((x) => x.id === res.productId);
-            // Only a row that CREATED the condition carries its fields — and a
-            // replay of one the grid already shows must not add it twice.
-            if (lp && res.newVariant && p.kind !== "variant" && !everyVariant(lp).some((x: any) => x.id === res.variantId)) (lp.pendingVariants ||= []).push(mkImportedVariant(res, p));
-            if (lp && p.tagPcId) lp.pcId = p.tagPcId;
-          }
-        });
-        }
-        const rowTitle = (i: number) => displayTitle(rows[i].row.title, rows[i].row.region, regions);
-        const failed = results.map((res, i) => (res?.ok ? null : `Row ${rows[i].row.n} “${rowTitle(i)}”: ${res?.error || "failed"}`)).filter(Boolean);
-        const replayed = results.map((res, i) => (res?.replay ? `Row ${rows[i].row.n} “${rowTitle(i)}”`
-          : res?.already ? `Row ${rows[i].row.n} “${rowTitle(i)}”: ${res.already} of ${rows[i].row.qty} copies (the rest were added)` : null)).filter(Boolean);
-        progress("Loading the draft…");
-        await loadEntry(entryId);
-        setEntryMode(true);
-        render();
-        const okN = results.filter((r) => r?.ok).length;
-        const replayN = results.filter((r) => r?.replay).length;
-        toast(`📄 Imported ${okN} line${okN === 1 ? "" : "s"} → Entry #${entryHuman}${replayN ? ` (${replayN} were already on this draft — not added again)` : ""}`);
-        if (failed.length) alert(`${failed.length} row(s) didn't import:\n\n${failed.slice(0, 15).join("\n")}${failed.length > 15 ? "\n…" : ""}`);
-        // Rows recognized as already on this draft (a retry, or the same sheet
-        // again) — say which, so a genuinely new identical row can be added by hand.
-        if (replayed.length) alert(`${replayed.length} row(s) were already on this draft from an earlier import of “${ch.fileName}”, so they weren't added again:\n\n${replayed.slice(0, 15).join("\n")}${replayed.length > 15 ? "\n…" : ""}\n\nIf any of these is a SECOND copy, raise its qty on the draft.`);
-        if (newProducts.length) enrichInBackground(newProducts);
-        upcFillInBackground(touchedListings(results));
+        if (staged.newProducts.length) enrichInBackground(staged.newProducts);
+        upcFillInBackground(touchedListings(staged.results));
       },
     });
+  }
+
+  /* Stage built import rows onto the open draft in small batches (shared by the
+     collection CSV import and the eBay store import). `payload[i]` is the
+     importStage row for `rows[i]`. Rows that land are marked skipped so a retry
+     only re-sends the rest. Mirrors new listings / stock rows into the loaded
+     catalog, reloads the draft, and reports failed / replayed rows. On a failed
+     batch it throws, with `.staged` = what made it. */
+  async function stageOntoDraft(rows: any[], payload: any[], progress: (m: string) => void, sourceName: string): Promise<{ results: any[]; newProducts: any[] }> {
+    const newProducts: any[] = [];
+    const refToProduct = new Map<string, string>();
+    const results: any[] = [];
+    // Small batches: each new-listing row is ~7 database round trips, and
+    // a batch must finish well inside the serverless time limit.
+    const STEP = 10;
+    // Does the server have replay protection (migration 20260929000001)?
+    // Decides what we can promise the employee if a batch fails.
+    const idempotent = !!(await api({ action: "importStage", entryId, rows: [] }).catch(() => ({}))).idempotent;
+    try {
+      for (let i = 0; i < payload.length; i += STEP) {
+        progress(`Staging ${Math.min(i + STEP, payload.length)} / ${payload.length}…`);
+        const batch = payload.slice(i, i + STEP).map((p: any) => (p.productRef && refToProduct.has(p.productRef) ? { ...p, productId: refToProduct.get(p.productRef) } : p));
+        const j = await api({ action: "importStage", entryId, rows: batch });
+        results.push(...(j.results || []));
+        batch.forEach((p: any, k: number) => { if (p.ref && j.results?.[k]?.ok) refToProduct.set(p.ref, j.results[k].productId); });
+        // Staged → never re-sent if a later batch fails and the employee retries.
+        rows.slice(i, i + STEP).forEach((r: any, k: number) => { if (j.results?.[k]?.ok) r.skip = true; });
+      }
+    } catch (e) {
+      if (results.length) { mirrorImported(); await loadEntry(entryId); setEntryMode(true); render(); }
+      const err: any = new Error(`${(e as any)?.message || "A batch failed"}. ${idempotent
+        ? "Press Import again: rows that already made it onto the draft are recognized and won't be added twice."
+        : "Rows from the failed batch MAY already be on the draft (look before pressing Import again, or apply migration 20260929000001 for automatic protection)."}`);
+      err.staged = { results, newProducts };
+      throw err;
+    }
+    mirrorImported();
+    function mirrorImported() {
+      // Mirror new listings/conditions into the loaded catalog so the
+      // typeahead (and a second import of the same sheet) sees them.
+      results.forEach((res, i) => {
+        if (!res?.ok) return;
+        const r: any = rows[i]; const p: any = payload[i];
+        if (res.newProduct) {
+          if (items.some((x) => x.id === res.productId)) return; // replayed row, already mirrored
+          const cat = categories.find((c: any) => c.id === p.categoryId);
+          const np: any = {
+            id: res.productId, title: r.row.title, slug: res.slug || r.row.title.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""),
+            platform: r.row.platform, regionCode: regionReady ? r.row.region || "" : "", franchise: "", genre: "", description: "", imageUrl: "", altNames: p.altNames || [], categoryId: p.categoryId,
+            categoryName: cat?.name ?? "", categoryColor: cat?.color ?? "#2ce6e0", ebayId: p.tagEbayId || "", pcId: r.row.pcId || "", supplierLinks: [],
+            // Hidden from the grid until this draft is finished.
+            pendingEntryId: entryId, variants: [], pendingVariants: [mkImportedVariant(res, p)],
+          };
+          items.push(np); newProducts.push(np);
+        } else {
+          const lp = items.find((x) => x.id === res.productId);
+          // Only a row that CREATED the condition carries its fields — and a
+          // replay of one the grid already shows must not add it twice.
+          if (lp && res.newVariant && p.kind !== "variant" && !everyVariant(lp).some((x: any) => x.id === res.variantId)) (lp.pendingVariants ||= []).push(mkImportedVariant(res, p));
+          if (lp && p.tagPcId) lp.pcId = p.tagPcId;
+          if (lp && p.tagEbayId && !lp.ebayId) lp.ebayId = p.tagEbayId;
+        }
+      });
+    }
+    const rowTitle = (i: number) => displayTitle(rows[i].row.title, rows[i].row.region, regions);
+    const failed = results.map((res, i) => (res?.ok ? null : `Row ${rows[i].row.n} “${rowTitle(i)}”: ${res?.error || "failed"}`)).filter(Boolean);
+    const replayed = results.map((res, i) => (res?.replay ? `Row ${rows[i].row.n} “${rowTitle(i)}”`
+      : res?.already ? `Row ${rows[i].row.n} “${rowTitle(i)}”: ${res.already} of ${rows[i].row.qty} copies (the rest were added)` : null)).filter(Boolean);
+    progress("Loading the draft…");
+    await loadEntry(entryId);
+    setEntryMode(true);
+    render();
+    const okN = results.filter((r) => r?.ok).length;
+    const replayN = results.filter((r) => r?.replay).length;
+    toast(`📄 Imported ${okN} line${okN === 1 ? "" : "s"} → Entry #${entryHuman}${replayN ? ` (${replayN} were already on this draft — not added again)` : ""}`);
+    if (failed.length) alert(`${failed.length} row(s) didn't import:\n\n${failed.slice(0, 15).join("\n")}${failed.length > 15 ? "\n…" : ""}`);
+    // Rows recognized as already on this draft (a retry, or the same sheet
+    // again) — say which, so a genuinely new identical row can be added by hand.
+    if (replayed.length) alert(`${replayed.length} row(s) were already on this draft from an earlier import of ${sourceName}, so they weren't added again:\n\n${replayed.slice(0, 15).join("\n")}${replayed.length > 15 ? "\n…" : ""}\n\nIf any of these is a SECOND copy, raise its qty on the draft.`);
+    return { results, newProducts };
   }
   $("inv-import")?.addEventListener("click", openCollectionImport);
   $("ent-import")?.addEventListener("click", openCollectionImport);
@@ -2895,37 +2916,97 @@ const posData = {
     } catch (e: any) { alert(e.message); } finally { btn.disabled = false; btn.textContent = o; }
   });
 
-  // Manager-only: import the WHOLE eBay store (all categories) as draft
-  // products. Two phases: scan the store for item ids, then import each one
-  // (a few at a time, with live progress). Skips already-imported listings;
-  // safe to re-run — it resumes where it left off.
-  document.getElementById("ebay-bulk")?.addEventListener("click", async () => {
-    if (!confirm("Import your ENTIRE eBay store (all categories) as draft products?\n\nA large store can take several minutes — keep this tab open; the button shows progress. Already-imported listings are skipped and nothing existing is overwritten.")) return;
-    const btn = document.getElementById("ebay-bulk") as HTMLButtonElement; btn.disabled = true; const o = btn.textContent;
-    try {
-      btn.textContent = "Scanning store…";
-      const lr = await fetch("/api/pos/ebay-import", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode: "bulk-list" }) });
-      const lj = await lr.json();
-      if (!lr.ok || !lj.ok) throw new Error(lj.error || "Couldn't scan your store");
-      const todo: { legacyItemId: string }[] = lj.items || [];
-      if (!todo.length) { toast(`✓ All ${lj.total} listings already imported`); btn.disabled = false; btn.textContent = o; return; }
-
-      let done = 0, created = 0, failed = 0;
-      const CONC = 4;
-      for (let i = 0; i < todo.length; i += CONC) {
-        await Promise.all(todo.slice(i, i + CONC).map(async (it) => {
-          try {
-            const r = await fetch("/api/pos/ebay-import", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode: "bulk-item", legacyItemId: it.legacyItemId }) });
-            const j = await r.json();
-            if (r.ok && j.ok && j.created) created++; else if (!j.ok) failed++;
-          } catch { failed++; }
-          done++;
-        }));
-        btn.textContent = `Importing ${done}/${todo.length}…`;
-      }
-      toast(`✓ eBay import done — ${created} added${failed ? `, ${failed} failed` : ""} · ${lj.alreadyImported} already present (of ${lj.total} total)`);
-      setTimeout(() => location.reload(), 2000);
-    } catch (e: any) { alert(e.message); btn.disabled = false; btn.textContent = o; }
+  // Manager-only: the eBay store importer. Pick listings (filters, expo price
+  // rule, photo count) → they're staged onto the open draft like a CSV import
+  // (matched to existing listings, own eBay stock row) → Finish prints labels.
+  // Photos + item specifics copy over in the background afterwards.
+  async function openEbayStoreImport() {
+    if (!closeAddPanel()) return; // the import opens a draft — the Add form can't straddle it
+    if (!draftsReady) { alert("Run supabase/migrations/20260801000002_entry_drafts.sql in the Supabase SQL editor first, then refresh."); return; }
+    try { await ensureEntry(); setEntryMode(true); } catch (e: any) { alert(e.message); return; }
+    openEbayImportDialog({
+      catalog: importCatalog(), completeness, grades, platforms: PLATFORMS, categories, invTypes, regions,
+      createCategory: async (name) => {
+        const r = await fetch("/api/pos/ebay-import", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode: "ensure-category", name }) });
+        const j = await r.json();
+        if (!r.ok || !j.ok) throw new Error(j.error || "Couldn't create the category");
+        if (!categories.some((c: any) => c.id === j.category.id)) categories.push({ ...j.category, default_completeness: null });
+        return j.category;
+      },
+      onImport: async (rows, ch, progress) => {
+        const condText = (r: any) => [completeness.find((c) => c.code === r.row.completenessCode)?.label, grades.find((g) => g.code === r.row.gradeCode)?.label].filter(Boolean).join(" ") || "Used";
+        // Two eBay listings of one game (same platform + region) → ONE new
+        // listing: the first creates it (ref), the next goes on it (productRef).
+        const firstOfGroup = new Set<string>();
+        const payload = rows.map((r: any) => {
+          // One import key per eBay listing (the server keys each copy #1, #2…):
+          // a retry, or the same listing picked again, replays instead of doubling.
+          const base = { qty: r.row.qty, costCents: null, importKey: `ebay:${r.row.ebay.id}`, tagEbayId: r.row.ebay.id };
+          if (r.product && r.variant) return { kind: "variant", variantId: r.variant.id, productId: r.product.id, ...base };
+          // The seller-typed UPC isn't trusted for the listing — the UPC lookup
+          // (eBay's catalog) runs after the import instead.
+          const v = { completenessCode: r.row.completenessCode, gradeCode: r.row.gradeCode, condition: condText(r), priceCents: r.row.priceCents ?? 0, barcode: null, inventoryTypeId: ch.inventoryTypeId || undefined };
+          if (r.product) return { kind: "newVariant", productId: r.product.id, ...v, ...base };
+          const g = newListingKey(r.row);
+          if (firstOfGroup.has(g)) return { kind: "newVariant", productRef: g, title: r.row.title, platform: r.row.platform, regionCode: r.row.region, ...v, ...base };
+          firstOfGroup.add(g);
+          return { kind: "newProduct", ref: g, title: r.row.title, platform: r.row.platform, regionCode: r.row.region, categoryId: r.categoryId, ...v, ...base };
+        });
+        let staged: { results: any[]; newProducts: any[] };
+        try { staged = await stageOntoDraft(rows, payload, progress, "your eBay store"); }
+        catch (e: any) {
+          if (e?.staged) { ebayMediaInBackground(ebayJobs(rows, e.staged.results), ch.galleryMax); upcFillInBackground(touchedListings(e.staged.results)); }
+          throw e;
+        }
+        ebayMediaInBackground(ebayJobs(rows, staged.results), ch.galleryMax);
+        upcFillInBackground(touchedListings(staged.results));
+      },
+    });
+  }
+  // One photo/details job per listing the import put stock on (a 2nd eBay
+  // copy of the same listing is already tagged by the import itself).
+  const ebayJobs = (rows: any[], results: any[]) => {
+    const seen = new Set<string>();
+    const jobs: { productId: string; legacyItemId: string }[] = [];
+    results.forEach((res, i) => {
+      if (!res?.ok || !res.productId || seen.has(res.productId) || !rows[i]?.row?.ebay?.id) return;
+      seen.add(res.productId);
+      jobs.push({ productId: String(res.productId), legacyItemId: String(rows[i].row.ebay.id) });
+    });
+    return jobs;
+  };
+  // Copy each listing's eBay photos (cover, + gallery when more than 1) and
+  // item specifics (brand, year, franchise / series, genre, character) — only
+  // what the listing is missing. A few at a time; if the tab closes, "📷 Fill
+  // from eBay" picks up the rest.
+  async function ebayMediaInBackground(jobs: { productId: string; legacyItemId: string }[], galleryMax: number) {
+    if (!jobs.length) return;
+    let done = 0, failed = 0;
+    const CONC = 3;
+    for (let i = 0; i < jobs.length; i += CONC) {
+      await Promise.all(jobs.slice(i, i + CONC).map(async (job) => {
+        try {
+          const r = await fetch("/api/pos/ebay-import", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode: "media", ...job, galleryMax }) });
+          const j = await r.json();
+          if (!r.ok || !j.ok) { failed++; return; }
+          const p = items.find((x: any) => x.id === job.productId);
+          if (p && j.imageUrl && !p.imageUrl) p.imageUrl = j.imageUrl;
+          if (p && !p.ebayId) p.ebayId = job.legacyItemId;
+          if (p && j.fields) for (const k of ["description", "franchise", "genre", "brand"]) if (j.fields[k] && !p[k]) p[k] = j.fields[k];
+        } catch { failed++; } finally { done++; }
+      }));
+      toast(`📷 Copying eBay photos & details ${done}/${jobs.length}…`);
+    }
+    render();
+    toast(`📷 eBay photos & details: ${done - failed} listing${done - failed === 1 ? "" : "s"}${failed ? ` · ${failed} failed (📷 Fill from eBay retries)` : ""}`);
+  }
+  document.getElementById("ebay-bulk")?.addEventListener("click", openEbayStoreImport);
+  document.getElementById("ebay-media")?.addEventListener("click", async () => {
+    const todo = items.filter((p: any) => p.ebayId && (!p.imageUrl || !p.franchise));
+    if (!todo.length) { toast("✓ Every eBay listing has a photo and details"); return; }
+    const photos = Number((() => { try { return localStorage.getItem("tl-ebay-photos"); } catch { return null; } })()) || 1;
+    if (!confirm(`Copy photos and details from eBay for ${todo.length} listing${todo.length === 1 ? "" : "s"} missing them? Only empty fields are filled (${photos === 1 ? "cover photo only" : `up to ${photos} photos`}). Keep this tab open.`)) return;
+    ebayMediaInBackground(todo.map((p: any) => ({ productId: p.id, legacyItemId: p.ebayId })), photos);
   });
 
   render();

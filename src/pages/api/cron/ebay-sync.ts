@@ -25,7 +25,13 @@ export const GET: APIRoute = async ({ request }) => {
 
   const t0 = Date.now();
   const admin = createSupabaseAdminClient();
-  const result = await syncEbayStock(admin);
+  // Settings → eBay can pause the stock sync (e.g. at an expo, where eBay is
+  // set to 0 but the copies are on the table). The UPC trickle still runs, and
+  // the manual "Sync eBay stock" button still works.
+  const { data: ss } = await admin.from("store_settings").select("settings").eq("id", 1).maybeSingle();
+  const result = (ss?.settings as any)?.ebayAutoSync === false
+    ? { skipped: "paused in Settings" }
+    : await syncEbayStock(admin);
   // Then a daily trickle of listing UPCs from eBay's catalog (the Hobby plan
   // allows only two crons, so it rides along here). Its own failure must
   // never hide the stock sync's result.

@@ -103,10 +103,15 @@ export function importPrice(sheetCents: number, ch: { pricePct: number; roundUp?
   return ch.roundUp && c > 0 ? Math.ceil(c / 100) * 100 : c;
 }
 
-export function openImportDialog(o: ImportDialogOpts) {
+/** The import dialogs' shared styles (the eBay importer uses them too). */
+export function ensureImportCss() {
   if (!document.getElementById("tli-css")) {
     const st = document.createElement("style"); st.id = "tli-css"; st.textContent = CSS; document.head.appendChild(st);
   }
+}
+
+export function openImportDialog(o: ImportDialogOpts) {
+  ensureImportCss();
   const prepared = prepareCatalog(o.catalog, o.platforms, o.regions);
   const rOn = regionsOn(o.regions);
   const regionName = (code: string) => { const g = regionByCode(code, o.regions); return g ? `${g.flag ? g.flag + " " : ""}${g.short}` : code; };

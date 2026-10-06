@@ -55,6 +55,7 @@ const ai = aiSettings(row?.settings);
 const notifyTasks = !!(row?.settings as any)?.notifyTaskComplete;
 const menuEnabled = (row?.settings as any)?.menuEnabled === true;
 const leadNotifyEnabled = (row?.settings as any)?.leadNotifyEnabled !== false;
+const ebayAutoSync = (row?.settings as any)?.ebayAutoSync !== false;
 const leadNotifyEmail = String((row?.settings as any)?.leadNotifyEmail ?? "");
 const bar = barSettings(row?.settings);
 const deptLocked = (row?.settings as any)?.departmentsLocked === true;
@@ -715,6 +716,20 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   </div>
 
   <div class="pos-panel set-panel" style="margin-top:1.25rem;">
+    <h2>eBay</h2>
+    <p class="muted set-desc">Each night the POS checks eBay for imported listings that sold out or ended, sets them to 0 here, and hides them on the website. It never adds stock back. (The nightly UPC lookup keeps running either way.)</p>
+    <label class="set-row set-toggle">
+      <input type="checkbox" id="ebay-autosync" checked={ebayAutoSync} />
+      <span><strong>Run the nightly eBay stock sync</strong><br />
+        <span class="muted">Turn off while eBay quantities don't match the shelf, like at an expo where eBay is set to 0 but the items are on the table. “Sync eBay stock” on the Inventory page still works when you press it.</span></span>
+    </label>
+    <div class="set-actions">
+      <button id="ebay-save" class="btn btn-primary">Save</button>
+      <span id="ebay-status" class="muted"></span>
+    </div>
+  </div>
+
+  <div class="pos-panel set-panel" style="margin-top:1.25rem;">
     <h2>Lead notifications</h2>
     <p class="muted set-desc">When someone submits the “Sell your games” form on the website, it always lands in the <strong>Leads</strong> tab (and pings staff in-app). This also emails you a copy.</p>
     <label class="set-row set-toggle">
@@ -1117,6 +1132,10 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   document.getElementById("notify-save")!.addEventListener("click", (e) => save({
     notifyTaskComplete: ($("notify-tasks") as HTMLInputElement).checked,
   }, document.getElementById("notify-status")!, e.currentTarget as HTMLButtonElement));
+
+  document.getElementById("ebay-save")!.addEventListener("click", (e) => save({
+    ebayAutoSync: ($("ebay-autosync") as HTMLInputElement).checked,
+  }, document.getElementById("ebay-status")!, e.currentTarget as HTMLButtonElement));
 
   document.getElementById("lead-save")!.addEventListener("click", (e) => save({
     leadNotifyEnabled: ($("lead-notify") as HTMLInputElement).checked,

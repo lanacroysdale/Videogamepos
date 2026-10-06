@@ -1,9 +1,9 @@
 import type { APIRoute } from "astro";
 import { createSupabaseAdminClient } from "../../../lib/supabase";
 import { fetchAll } from "../../../lib/fetchAll";
-import { copyImageToStorage, copyGallery } from "../../../lib/storage";
+import { copyImageToStorage, copyGallery, listGallery } from "../../../lib/storage";
 import {
-  ebayConfigured, ebaySeller, extractItemId, getItem, listSellerItems, mapItem, type MappedItem,
+  ebayConfigured, ebaySeller, extractItemId, getItem, listSellerItems, listSellerStore, mapItem, storeListingDetails, type MappedItem,
 } from "../../../lib/ebay";
 import { syncEbayStock } from "../../../lib/ebaySync";
 import { loadRegions, regionsOn, regionByCode } from "../../../lib/regions";
@@ -34,7 +34,10 @@ async function attachMedia(admin: any, productId: string, variantId: string | nu
   // Full gallery → per-product folder (the PDP lists it; no DB column needed).
   if (mi.images.length && galleryMax > 0) await copyGallery(admin, mi.images, productId, galleryMax);
 
-  const patch: Record<string, unknown> = { tags: [`ebay:${mi.ebayItemId}`] };
+  // Add the eBay tag; never drop the listing's other tags (pricecharting:…).
+  const { data: cur } = await admin.from("products").select("tags").eq("id", productId).maybeSingle();
+  const tags: string[] = Array.isArray(cur?.tags) ? cur!.tags : [];
+  const patch: Record<string, unknown> = { tags: tags.includes(`ebay:${mi.ebayItemId}`) ? tags : [...tags, `ebay:${mi.ebayItemId}`] };
   if (imageUrl) patch.image_url = imageUrl;
   if (mi.description) patch.description = mi.description;
   if (mi.brand) patch.brand = mi.brand;
@@ -117,6 +120,104 @@ export const POST: APIRoute = async ({ locals, request }) => {
     if (mode === "sync") {
       if (!isManager) return json({ error: "Managers only" }, 403);
       return json({ ok: true, ...(await syncEbayStock(admin)) });
+    }
+
+    // -- eBay importer: the whole store for the review table ----------------
+    // Listings already in the POS (any listing tagged ebay:<id>, drafts too)
+    // come back marked so the dialog can leave them out.
+    if (mode === "store-list") {
+      if (!isManager) return json({ error: "Managers only" }, 403);
+      const seller = ebaySeller();
+      if (!seller) return json({ error: "EBAY_SELLER not set" }, 400);
+      const listings = await listSellerStore(seller);
+      const { data: tagged } = await fetchAll((from, to) => admin.from("products").select("id, title, tags").not("tags", "is", null).order("id").range(from, to));
+      const have = new Map<string, { productId: string; title: string }>();
+      for (const p of tagged || [])
+        for (const t of p.tags || []) if (String(t).startsWith("ebay:")) have.set(String(t).slice(5), { productId: p.id, title: p.title });
+      return json({ ok: true, listings: listings.map((l) => ({ ...l, imported: have.get(l.id) ?? null })) });
+    }
+
+    // -- eBay importer: item specifics for up to 20 listings ----------------
+    // Platform / Game Name / Region Code / qty live only on the full record.
+    // A few at a time so a burst doesn't trip eBay's rate limit; a failed
+    // listing comes back with an error instead of failing the batch.
+    if (mode === "store-details") {
+      if (!isManager) return json({ error: "Managers only" }, 403);
+      const ids: string[] = (Array.isArray(b.ids) ? b.ids : []).map((x: unknown) => String(x)).filter((x: string) => /^\d{9,15}$/.test(x)).slice(0, 20);
+      const out: any[] = [];
+      const CONC = 4;
+      for (let i = 0; i < ids.length; i += CONC) {
+        out.push(...(await Promise.all(ids.slice(i, i + CONC).map(async (id) => {
+          try { return { ok: true, ...storeListingDetails(await getItem(id)) }; }
+          catch (e: any) { return { ok: false, id, ended: /not found|404|no longer available/i.test(String(e?.message)), error: String(e?.message || "eBay error") }; }
+        }))));
+      }
+      return json({ ok: true, details: out });
+    }
+
+    // -- eBay importer: photos + details onto a staged listing ---------------
+    // Photos, description (the eBay listing title, then its description) and
+    // item specifics (brand, year, franchise / series, genre, character) only
+    // fill what the listing doesn't have yet, so a
+    // listing that already existed keeps its own. Always adds the ebay:<id>
+    // tag (never removes other tags).
+    if (mode === "media") {
+      if (!isManager) return json({ error: "Managers only" }, 403);
+      const legacyId = String(b.legacyItemId || "");
+      if (!b.productId || !/^\d{9,15}$/.test(legacyId)) return json({ error: "productId and legacyItemId required" }, 400);
+      const galleryMax = Math.max(0, Math.min(12, Math.round(Number(b.galleryMax ?? 0)) || 0));
+      // products.character ships with migration 20261006000001 — left alone until then.
+      const hasCharacter = !(await admin.from("products").select("character").limit(1)).error;
+      const { data: prod } = await admin.from("products")
+        .select(`id, image_url, description, brand, release_year, franchise, genre, tags${hasCharacter ? ", character" : ""}`)
+        .eq("id", b.productId).maybeSingle() as { data: any };
+      if (!prod) return json({ error: "Listing not found" }, 404);
+      const mi = mapItem(await getItem(legacyId));
+      const patch: Record<string, unknown> = {};
+      const tags: string[] = Array.isArray(prod.tags) ? prod.tags : [];
+      if (!tags.includes(`ebay:${legacyId}`)) patch.tags = [...tags, `ebay:${legacyId}`];
+      let imageUrl: string | null = prod.image_url || null;
+      if (!imageUrl && mi.primaryImage) {
+        imageUrl = await copyImageToStorage(admin, mi.primaryImage, "ebay");
+        if (imageUrl) patch.image_url = imageUrl;
+      }
+      // "1 photo" = the cover only. More → the gallery (its first photo is the
+      // cover), unless the listing already has one.
+      let gallery = 0;
+      if (galleryMax > 1 && mi.images.length > 1 && !(await listGallery(admin, prod.id)).length)
+        gallery = await copyGallery(admin, mi.images, prod.id, galleryMax);
+      // The listing's title is eBay's game data (Game Name); the eBay listing
+      // title leads the description, then the eBay description itself.
+      const desc = [mi.title, mi.description].filter(Boolean).join("\n\n").slice(0, 3200);
+      if (!prod.description && desc) patch.description = desc;
+      if (!prod.brand && mi.brand) patch.brand = mi.brand;
+      if (!prod.release_year && mi.releaseYear) patch.release_year = mi.releaseYear;
+      if (!prod.franchise && mi.franchise) patch.franchise = mi.franchise;
+      if (!prod.genre && mi.genre) patch.genre = mi.genre;
+      if (hasCharacter && !prod.character && mi.character) patch.character = mi.character;
+      if (Object.keys(patch).length) {
+        const { error } = await admin.from("products").update(patch).eq("id", prod.id);
+        if (error) return json({ error: error.message }, 500);
+      }
+      const { tags: _t, ...fields } = patch;
+      return json({ ok: true, imageUrl, gallery, fields });
+    }
+
+    // -- eBay importer: a category picked as "＋ New category…" --------------
+    if (mode === "ensure-category") {
+      if (!isManager) return json({ error: "Managers only" }, 403);
+      const name = String(b.name || "").replace(/\s+/g, " ").trim().slice(0, 40);
+      if (!name) return json({ error: "Category name required" }, 400);
+      const { data: cats } = await admin.from("categories").select("id, name, color, sort_order");
+      const hit = (cats || []).find((c: any) => String(c.name).toLowerCase() === name.toLowerCase());
+      if (hit) return json({ ok: true, category: { id: hit.id, name: hit.name, color: hit.color } });
+      const PALETTE = ["#ff6b6b", "#f7b801", "#7bdff2", "#b388eb", "#80ff72", "#ff9f1c", "#4cc9f0"];
+      const sort = Math.max(0, ...(cats || []).map((c: any) => Number(c.sort_order) || 0)) + 1;
+      const { data: made, error } = await admin.from("categories")
+        .insert({ name, color: PALETTE[(cats || []).length % PALETTE.length], sort_order: sort })
+        .select("id, name, color").single();
+      if (error) return json({ error: error.message }, 500);
+      return json({ ok: true, category: made });
     }
 
     // -- Bulk step 1: enumerate the WHOLE store (all categories) -------------
