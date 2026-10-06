@@ -19,10 +19,15 @@ export const AI_QUALITIES = [
 ];
 
 // Concrete model per provider × quality (one place to update if names change).
+// Gemini uses Google's "-latest" aliases — pinned versions get retired (2.0 and
+// 2.5 already refuse new keys), the aliases follow the current model.
 const MODELS: Record<string, Record<string, string>> = {
   anthropic: { fast: "claude-haiku-4-5-20251001", balanced: "claude-sonnet-4-6", best: "claude-opus-4-8" },
-  gemini: { fast: "gemini-2.0-flash", balanced: "gemini-2.0-flash", best: "gemini-2.5-pro" },
+  gemini: { fast: "gemini-flash-lite-latest", balanced: "gemini-flash-latest", best: "gemini-pro-latest" },
 };
+// A busy (503), over-quota (429 — Pro has no free tier) or missing (404) Gemini
+// model steps down this ladder instead of failing the request.
+const GEMINI_LADDER = ["gemini-pro-latest", "gemini-flash-latest", "gemini-flash-lite-latest"];
 
 // Editable brand voice for SEO descriptions (POS Settings → store_settings).
 export const DEFAULT_DESCRIPTION_PROMPT = `You write concise, accurate, SEO-friendly product descriptions for TimeLag Video Games, a retro & modern video game shop in Portland, OR.
@@ -82,19 +87,32 @@ async function callClaude(o: { system: string; user: string; model: string; maxT
 }
 
 async function callGemini(o: { system: string; user: string; model: string; maxTokens?: number }): Promise<string> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${o.model}:generateContent?key=${GEMINI_KEY}`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: o.system }] },
-      contents: [{ role: "user", parts: [{ text: o.user }] }],
-      generationConfig: { maxOutputTokens: o.maxTokens ?? 600, temperature: 0.7 },
-    }),
-  });
-  const j: any = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(j?.error?.message || `Gemini request failed (${res.status})`);
-  const text = (j.candidates?.[0]?.content?.parts || []).map((p: any) => p.text).filter(Boolean).join("").trim();
-  if (!text) throw new Error("Gemini returned no text");
-  return text;
+  const i = GEMINI_LADDER.indexOf(o.model);
+  const ladder = i < 0 ? [o.model] : GEMINI_LADDER.slice(i);
+  let lastErr = "";
+  for (const model of ladder) {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+      method: "POST",
+      headers: { "x-goog-api-key": GEMINI_KEY!, "content-type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: o.system }] },
+        contents: [{ role: "user", parts: [{ text: o.user }] }],
+        // Gemini 3 "thinks" first and those tokens count toward maxOutputTokens
+        // (~575 at "low") — keep it low + add headroom so the answer isn't cut off.
+        generationConfig: { maxOutputTokens: (o.maxTokens ?? 600) + 2048, temperature: 0.7, thinkingConfig: { thinkingLevel: "low" } },
+      }),
+    });
+    const j: any = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      lastErr = j?.error?.message || `Gemini request failed (${res.status})`;
+      if ([404, 429, 503].includes(res.status)) continue;
+      throw new Error(lastErr);
+    }
+    const c = j.candidates?.[0];
+    const text = (c?.content?.parts || []).map((p: any) => p.text).filter(Boolean).join("").trim();
+    if (!text) throw new Error("Gemini returned no text");
+    if (c.finishReason === "MAX_TOKENS") throw new Error("Gemini's answer got cut off — try again");
+    return text;
+  }
+  throw new Error(lastErr);
 }
