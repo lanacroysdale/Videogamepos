@@ -166,6 +166,8 @@ export const POST: APIRoute = async ({ locals, request }) => {
         });
         const jp = row.ebay.japan ? (cats || []).find((c: any) => /japan/i.test(c.name)) : null;
         const categoryId = jp?.id || defaultCategoryFor(row.ebay.group, cats || []) || "";
+        // A Japan item and no Japan category yet → the form offers to create one.
+        const newCategory = row.ebay.japan && !jp ? "Japanese Imports" : "";
         similar = {
           title: row.title, platform: row.platform, region: row.region, completenessCode: row.completenessCode, gradeCode: row.gradeCode,
           categoryId, categoryName: (cats || []).find((c: any) => c.id === categoryId)?.name || "", group: row.ebay.group,
@@ -174,7 +176,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
           warnings: row.warnings, regionsOn: regionsOn(regions), jpCode: regionFromText("japan", regions),
           // Their price + their cheapest shipping = what a buyer actually pays.
           shippingCents: ship.cents, shippingType: ship.type, shippingService: ship.service, shipZip: !!shipZip,
-          fullTitle: mi.title,
+          fullTitle: mi.title, newCategory, japanWhy: row.ebay.japanWhy,
         };
       } catch { /* the plain fields below still fill the form */ }
       return json({ ok: true, item: mi, similar });

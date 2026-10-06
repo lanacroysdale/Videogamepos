@@ -367,16 +367,21 @@ export function buildEbayRows(listings: EbayListing[], details: Map<string, Ebay
     const aspectRegion = regionFromEbayAspect(d?.regionAspect, o.regions);
     const regionCode = aspectRegion || pr.region || regionFromPlatform(aspect, o.regions).code || split.code
       || (titleJp && group !== "merch" && group !== "toys" ? jpCode : "");
-    const region = regionOf(regionCode, o.regions);
+    const region0 = regionOf(regionCode, o.regions);
     const madeInJapan = /japan/i.test(d?.country || "");
+    // A Japanese JAN barcode (13 digits, 45 / 49…) is a Japan product.
+    const janJp = /^4[59]\d{11}$/.test((d?.upc || "").replace(/\D/g, ""));
     // "Made in Japan" means an import only for merch: Nintendo's US
     // accessories and consoles were made in Japan too.
     // eBay's Region Code is the seller's deliberate answer: a title that says
     // "Japan" on a listing marked US / PAL is flagged, not believed.
     const titleOverruled = titleJp && !!aspectRegion && aspectRegion !== jpCode;
     if (titleOverruled) warnings.push(`The eBay title says Japan but its Region Code is ${aspectRegion} — check the region`);
-    const japan = region === jpCode || (titleJp && !titleOverruled) || (madeInJapan && (group === "merch" || group === "toys"));
-    const japanWhy = region === jpCode ? "region" : titleJp && !titleOverruled ? "title" : japan ? "made in Japan" : "";
+    const japan = region0 === jpCode || (titleJp && !titleOverruled) || janJp || (madeInJapan && (group === "merch" || group === "toys"));
+    const japanWhy = region0 === jpCode ? "region" : titleJp && !titleOverruled ? "title" : janJp ? "JAN barcode" : japan ? "made in Japan" : "";
+    // A Japan item IS a Japan release / import — its region says so (badge,
+    // filters) unless eBay's Region Code names another market.
+    const region = japan && !aspectRegion ? regionOf(jpCode, o.regions) : region0;
     // Title: a game takes eBay's Game Name (+ an edition the name leaves out);
     // anything else, the listing title less the seller's search words.
     let title = l.title.replace(/\s+/g, " ").trim();
