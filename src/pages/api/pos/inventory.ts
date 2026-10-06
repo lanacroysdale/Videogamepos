@@ -430,6 +430,17 @@ export const POST: APIRoute = async ({ locals, request }) => {
           results.push({ ok: false, error: e?.message || "Failed" });
         }
       }
+      // eBay importer rows: tag the listing with the eBay item it came from
+      // (replays too), so the importer knows it's in the POS. One listing can
+      // carry several eBay items (two copies listed separately on eBay).
+      for (let i = 0; i < rows.length; i++) {
+        const ebayId = String(rows[i]?.tagEbayId ?? "");
+        const pid = results[i]?.ok ? results[i].productId : "";
+        if (!pid || !/^\d{9,15}$/.test(ebayId)) continue;
+        const { data: p } = await sb.from("products").select("tags").eq("id", pid).maybeSingle();
+        const tags: string[] = Array.isArray(p?.tags) ? p!.tags : [];
+        if (!tags.includes(`ebay:${ebayId}`)) await sb.from("products").update({ tags: [...tags, `ebay:${ebayId}`] }).eq("id", pid);
+      }
       return json({ ok: true, results, idempotent: !keysErr, atomic: useRpc });
     }
     case "renameProducts": {
