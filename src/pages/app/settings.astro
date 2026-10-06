@@ -9,6 +9,7 @@ import { barSettings } from "../../lib/barSettings";
 import { labelTemplates, labelTypeIconIds, LABEL_FONTS } from "../../lib/labels";
 import type { StoreDepartment, StoreInventoryType, StoreLocation, StoreRegion } from "../../lib/types";
 import { createSupabaseAdminClient } from "../../lib/supabase";
+import { sourceImportSettings } from "../../lib/sourceImport";
 import { PERMISSIONS, PERMISSION_GROUPS, loadRoles, roleName } from "../../lib/permissions";
 
 const supabase = Astro.locals.supabase;
@@ -57,6 +58,7 @@ const menuEnabled = (row?.settings as any)?.menuEnabled === true;
 const leadNotifyEnabled = (row?.settings as any)?.leadNotifyEnabled !== false;
 const ebayAutoSync = (row?.settings as any)?.ebayAutoSync !== false;
 const ebayShipZip = String((row?.settings as any)?.ebayShipZip ?? "");
+const srcImp = sourceImportSettings((row?.settings as any) ?? {});
 const leadNotifyEmail = String((row?.settings as any)?.leadNotifyEmail ?? "");
 const bar = barSettings(row?.settings);
 const deptLocked = (row?.settings as any)?.departmentsLocked === true;
@@ -736,6 +738,25 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   </div>
 
   <div class="pos-panel set-panel" style="margin-top:1.25rem;">
+    <h2>🔖 Send to TimeLag</h2>
+    <p class="muted set-desc">A bookmark that adds a product from another shop's page (Suruga-ya, Buyee, Mercari, Amazon JP…) to the Add form. A yen price becomes what you paid in dollars, at this rate plus your fees. Get the bookmark from Inventory → ＋ Add product → <strong>🔖 Other shops</strong>.</p>
+    <label class="set-row">
+      <span><strong>Yen per US dollar</strong><br />
+        <span class="muted">¥ ÷ this = $. <button type="button" class="link-btn" id="src-rate-now">Use today's rate</button> <span id="src-rate-hint"></span></span></span>
+      <input type="number" id="src-rate" min="1" max="10000" step="0.01" value={srcImp.jpyPerUsd} style="width:7rem;text-align:left;" />
+    </label>
+    <label class="set-row">
+      <span><strong>Fees on top (%)</strong><br />
+        <span class="muted">Proxy service, domestic + international shipping… as a share of the item price. 0 = the item price only.</span></span>
+      <input type="number" id="src-fee" min="0" max="500" step="0.1" value={srcImp.feePct} style="width:7rem;text-align:left;" />
+    </label>
+    <div class="set-actions">
+      <button id="src-save" class="btn btn-primary">Save</button>
+      <span id="src-status" class="muted"></span>
+    </div>
+  </div>
+
+  <div class="pos-panel set-panel" style="margin-top:1.25rem;">
     <h2>Lead notifications</h2>
     <p class="muted set-desc">When someone submits the “Sell your games” form on the website, it always lands in the <strong>Leads</strong> tab (and pings staff in-app). This also emails you a copy.</p>
     <label class="set-row set-toggle">
@@ -1143,6 +1164,22 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
     ebayAutoSync: ($("ebay-autosync") as HTMLInputElement).checked,
     ebayShipZip: ($("ebay-zip") as HTMLInputElement).value.trim(),
   }, document.getElementById("ebay-status")!, e.currentTarget as HTMLButtonElement));
+
+  document.getElementById("src-save")!.addEventListener("click", (e) => save({
+    sourceImport: { jpyPerUsd: Number(($("src-rate") as HTMLInputElement).value), feePct: Number(($("src-fee") as HTMLInputElement).value) || 0 },
+  }, document.getElementById("src-status")!, e.currentTarget as HTMLButtonElement));
+  document.getElementById("src-rate-now")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget as HTMLButtonElement; btn.disabled = true;
+    const hint = document.getElementById("src-rate-hint")!;
+    try {
+      const r = await fetch("/api/pos/source-import", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode: "rate" }) });
+      const j = await r.json();
+      if (!r.ok || !j.ok) throw new Error(j.error || "Couldn't get today's rate");
+      ($("src-rate") as HTMLInputElement).value = String(j.jpyPerUsd);
+      hint.textContent = `(today ≈ ¥${j.jpyPerUsd} — press Save to keep it)`;
+    } catch (err: any) { hint.textContent = err.message; }
+    finally { btn.disabled = false; }
+  });
 
   document.getElementById("lead-save")!.addEventListener("click", (e) => save({
     leadNotifyEnabled: ($("lead-notify") as HTMLInputElement).checked,

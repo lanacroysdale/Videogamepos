@@ -1,0 +1,250 @@
+// 🔖 "Send to TimeLag" — import a product from another shop's page (Suruga-ya,
+// Buyee / Yahoo! Auctions, Mercari, Amazon JP… or any shop) into the Add form.
+//
+// Those sites can't be read from our server (Suruga-ya sits behind a
+// Cloudflare "are you human" check), so a BOOKMARKLET reads the page in the
+// owner's own browser — the page they already have open — and hands it to the
+// POS tab it opens: in full by postMessage, plus a compact copy in the URL
+// #fragment (never sent to any server) in case the browser cuts the link
+// between the two tabs. The POS server then pulls out what it can (JSON-LD,
+// meta tags) and has the AI write a clean English listing for review.
+//
+// Pure helpers, shared by the browser (inventory page) and the server.
+
+export interface CapturedPage {
+  v: 1;
+  url: string;
+  title: string;                 // document.title
+  meta: Record<string, string>;  // og:* / product:* / description …
+  ld: unknown[];                 // parsed JSON-LD blocks
+  heads: string[];               // h1/h2 + title-ish elements
+  crumbs: string[];              // breadcrumb texts
+  images: string[];              // absolute image URLs, biggest first
+  text: string;                  // the page's visible text (trimmed)
+  lang: string;
+}
+
+const str = (v: unknown, max: number) => (typeof v === "string" ? v : v == null ? "" : String(v)).replace(/\u0000/g, "").slice(0, max);
+const strList = (v: unknown, maxItems: number, maxLen: number) =>
+  (Array.isArray(v) ? v : []).map((x) => str(x, maxLen).trim()).filter(Boolean).slice(0, maxItems);
+
+/** An http(s) URL we'd consider fetching / linking: a public host name, no credentials. */
+export function publicUrl(raw: unknown): string {
+  let u: URL;
+  try { u = new URL(String(raw ?? "")); } catch { return ""; }
+  if (u.protocol !== "https:" && u.protocol !== "http:") return "";
+  if (u.username || u.password) return "";
+  const h = u.hostname.toLowerCase();
+  // No IP literals, no local / internal names (the server fetches images).
+  if (!h.includes(".") || /^[\d.]+$/.test(h) || h.includes(":") || h.startsWith("[")) return "";
+  if (/(^|\.)(localhost|local|internal|localdomain|lan|home|corp|intranet)$/.test(h)) return "";
+  return u.href;
+}
+
+/** Validate + trim what a bookmarklet sent (it's untrusted page data). */
+export function sanitizeCaptured(raw: any): CapturedPage | null {
+  if (!raw || typeof raw !== "object") return null;
+  const url = publicUrl(raw.url);
+  if (!url) return null;
+  const meta: Record<string, string> = {};
+  if (raw.meta && typeof raw.meta === "object") {
+    for (const [k, v] of Object.entries(raw.meta).slice(0, 40)) {
+      const key = str(k, 60).toLowerCase();
+      if (key) meta[key] = str(v, 500);
+    }
+  }
+  // JSON-LD: keep it, but bounded (it can carry a whole catalog).
+  let ld: unknown[] = Array.isArray(raw.ld) ? raw.ld.slice(0, 12) : [];
+  try { if (JSON.stringify(ld).length > 120_000) ld = ld.filter((x) => JSON.stringify(x).length < 30_000).slice(0, 4); } catch { ld = []; }
+  return {
+    v: 1,
+    url,
+    title: str(raw.title, 300),
+    meta,
+    ld,
+    heads: strList(raw.heads, 10, 300),
+    crumbs: strList(raw.crumbs, 15, 80),
+    images: strList(raw.images, 12, 1000).map(publicUrl).filter(Boolean),
+    text: str(raw.text, 6000),
+    lang: str(raw.lang, 20),
+  };
+}
+
+// ---- where it came from --------------------------------------------------
+const SOURCES: { test: RegExp; label: string; japan: boolean }[] = [
+  { test: /(^|\.)suruga-ya\.(jp|com)$/, label: "Suruga-ya", japan: true },
+  { test: /(^|\.)buyee\.jp$/, label: "Buyee", japan: true },
+  { test: /(^|\.)auctions\.yahoo\.co\.jp$|(^|\.)page\.auctions\.yahoo\.co\.jp$/, label: "Yahoo! Auctions", japan: true },
+  { test: /(^|\.)jp\.mercari\.com$|(^|\.)mercari\.jp$/, label: "Mercari", japan: true },
+  { test: /(^|\.)amazon\.co\.jp$/, label: "Amazon JP", japan: true },
+  { test: /(^|\.)rakuten\.co\.jp$/, label: "Rakuten", japan: true },
+  { test: /(^|\.)amiami\.(jp|com)$/, label: "AmiAmi", japan: true },
+  { test: /(^|\.)mandarake\.co\.jp$/, label: "Mandarake", japan: true },
+  { test: /(^|\.)zenmarket\.jp$/, label: "ZenMarket", japan: true },
+  { test: /(^|\.)fromjapan\.co\.jp$/, label: "FROM JAPAN", japan: true },
+  { test: /(^|\.)ebay\.[a-z.]+$/, label: "eBay", japan: false },
+];
+
+export function sourceOf(url: string): { host: string; label: string; japan: boolean } {
+  let host = "";
+  try { host = new URL(url).hostname.toLowerCase().replace(/^www\./, ""); } catch { /* not a URL */ }
+  const s = SOURCES.find((x) => x.test.test(host));
+  return { host, label: s?.label ?? host, japan: s?.japan ?? /\.jp$/.test(host) };
+}
+
+/** A shop's own item number from its URL, when it has one (for "already imported?"). */
+export function sourceItemId(url: string): string {
+  try {
+    const u = new URL(url);
+    const m = u.pathname.match(/\/(?:product(?:\/detail)?|item(?:\/[a-z]+)*?|auction|items?|dp|gp\/product)\/(?:[a-z]+\/)*([A-Za-z0-9_-]{5,40})/i);
+    return m ? m[1] : "";
+  } catch { return ""; }
+}
+
+// ---- facts straight from the page (no AI) -------------------------------
+export interface PageFacts {
+  name: string;
+  nameAlt: string;          // e.g. the Japanese title on suruga-ya.com
+  price: number | null;     // in `currency` units
+  currency: string;
+  condition: string;        // "new" | "used" | ""
+  gtin: string;             // JAN / EAN / UPC digits
+  images: string[];
+  brand: string;
+  releaseDate: string;
+  description: string;
+}
+
+function* walkLd(x: unknown, depth = 0): Generator<any> {
+  if (!x || depth > 6) return;
+  if (Array.isArray(x)) { for (const y of x) yield* walkLd(y, depth + 1); return; }
+  if (typeof x !== "object") return;
+  yield x;
+  const o = x as any;
+  if (o["@graph"]) yield* walkLd(o["@graph"], depth + 1);
+}
+const isType = (o: any, t: string) => {
+  const ty = o?.["@type"];
+  return Array.isArray(ty) ? ty.some((x) => String(x).toLowerCase() === t) : String(ty ?? "").toLowerCase() === t;
+};
+const firstStr = (...vals: unknown[]) => {
+  for (const v of vals) {
+    if (typeof v === "string" && v.trim()) return v.trim();
+    if (typeof v === "number") return String(v);
+  }
+  return "";
+};
+const imgOf = (v: unknown): string[] =>
+  Array.isArray(v) ? v.flatMap(imgOf) : typeof v === "string" ? [v] : v && typeof v === "object" ? imgOf((v as any).url ?? (v as any).contentUrl) : [];
+const num = (v: unknown): number | null => {
+  const n = Number(String(v ?? "").replace(/[^\d.]/g, ""));
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+const digits = (v: unknown) => String(v ?? "").replace(/\D/g, "");
+
+export function pageFacts(p: CapturedPage): PageFacts {
+  const products = [...walkLd(p.ld)].filter((o) => isType(o, "product") || isType(o, "productgroup") || isType(o, "videogame"));
+  const prod: any = products[0] ?? {};
+  const offersRaw = prod.offers;
+  const offers: any[] = Array.isArray(offersRaw) ? offersRaw : offersRaw ? [offersRaw] : [];
+  // An AggregateOffer carries lowPrice; a list of offers → the cheapest in stock.
+  const priced = offers.flatMap((o: any) => (o?.offers ? (Array.isArray(o.offers) ? o.offers : [o.offers]) : [o]))
+    .map((o: any) => ({ o, n: num(o?.price ?? o?.lowPrice) })).filter((x) => x.n != null)
+    .sort((a, b) => (/instock/i.test(String(b.o.availability ?? "")) ? 1 : 0) - (/instock/i.test(String(a.o.availability ?? "")) ? 1 : 0) || a.n! - b.n!);
+  const best = priced[0];
+  const m = p.meta;
+  let price = best?.n ?? num(m["product:price:amount"] ?? m["og:price:amount"] ?? m["price"]);
+  let currency = firstStr(best?.o?.priceCurrency, offers[0]?.priceCurrency, m["product:price:currency"], m["og:price:currency"], m["pricecurrency"]).toUpperCase();
+  // Last resort: a yen price in the page text ("¥1,980" / "1,980円").
+  if (price == null) {
+    const y = p.text.match(/[¥￥]\s?([\d,]{2,9})|([\d,]{2,9})\s?円/);
+    if (y) { price = num(y[1] ?? y[2]); currency = currency || "JPY"; }
+  }
+  const condRaw = firstStr(best?.o?.itemCondition, offers[0]?.itemCondition, prod.itemCondition, m["product:condition"], m["og:condition"]).toLowerCase();
+  const condition = /new/.test(condRaw) ? "new" : /used|refurb|damaged/.test(condRaw) ? "used" : "";
+  // JAN / EAN / UPC: the structured one, else a JAN-looking number near "JAN".
+  let gtin = [prod.gtin13, prod.gtin, prod.gtin12, prod.gtin14, prod.gtin8, m["product:ean"], m["product:upc"], m["gtin13"]].map(digits).find((d) => /^\d{8}$|^\d{12,14}$/.test(d)) ?? "";
+  if (!gtin) { const j = p.text.match(/(?:JAN|EAN|ＪＡＮ)[^\d]{0,12}(\d{13})/i); if (j) gtin = j[1]; }
+  const ldImages = imgOf(prod.image).map(publicUrl).filter(Boolean);
+  const images = [...new Set([...ldImages, ...(m["og:image"] ? [publicUrl(m["og:image"])] : []).filter(Boolean), ...p.images])].slice(0, 12);
+  const name = firstStr(prod.name, m["og:title"], p.heads[0], p.title);
+  // suruga-ya.com shows "Japanese title: …" under the English one.
+  const alt = (p.heads.find((h) => /^japanese title\s*[:：]/i.test(h)) || "").replace(/^japanese title\s*[:：]\s*/i, "")
+    || p.heads.find((h) => h !== name && /[\u3040-\u30ff\u4e00-\u9faf]/.test(h)) || "";
+  // Shop prefixes off the original title: "PS3ソフト …", "<中古>…".
+  const cleanAlt = alt.replace(/^\s*[<＜](中古|新品)[>＞]\s*/, "").replace(/^[A-Za-z0-9０-９Ａ-Ｚａ-ｚ .・ー-]{0,20}ソフト\s+/, "").trim();
+  return {
+    name: name.slice(0, 300),
+    nameAlt: cleanAlt.slice(0, 300),
+    price,
+    currency: currency || (/[¥￥円]/.test(p.text.slice(0, 3000)) ? "JPY" : ""),
+    condition,
+    gtin,
+    images,
+    brand: firstStr(prod.brand?.name, prod.brand, prod.manufacturer?.name, prod.manufacturer).slice(0, 120),
+    releaseDate: firstStr(prod.releaseDate, prod.datePublished).slice(0, 30),
+    description: firstStr(prod.description, m["og:description"], m["description"]).slice(0, 1500),
+  };
+}
+
+// ---- money --------------------------------------------------------------
+export interface SourceImportSettings { jpyPerUsd: number; feePct: number }
+export const DEFAULT_JPY_PER_USD = 150;
+export function sourceImportSettings(raw: any): SourceImportSettings {
+  const s = raw?.sourceImport ?? {};
+  const rate = Number(s.jpyPerUsd);
+  const fee = Number(s.feePct);
+  return {
+    jpyPerUsd: Number.isFinite(rate) && rate >= 1 && rate <= 10_000 ? rate : DEFAULT_JPY_PER_USD,
+    feePct: Number.isFinite(fee) && fee >= 0 && fee <= 500 ? fee : 0,
+  };
+}
+/** What one copy cost us, in US cents: the shop's price (+ fees %) at the rate. Null = unknown currency. */
+export function costCentsFor(price: number | null, currency: string, s: SourceImportSettings): number | null {
+  if (price == null || !(price > 0)) return null;
+  const c = (currency || "").toUpperCase();
+  const withFees = price * (1 + s.feePct / 100);
+  if (c === "JPY") return Math.round((withFees / s.jpyPerUsd) * 100);
+  if (c === "USD") return Math.round(withFees * 100);
+  return null;
+}
+export const priceText = (price: number | null, currency: string) =>
+  price == null ? "" : currency === "JPY" ? `¥${Math.round(price).toLocaleString("en-US")}` : currency === "USD" ? `$${price.toFixed(2)}` : `${price} ${currency}`.trim();
+
+/** The JSON object in an AI answer (tolerates code fences / chatter around it). */
+export function parseJsonObject(raw: string): any | null {
+  const t = String(raw ?? "").replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();
+  const a = t.indexOf("{"), z = t.lastIndexOf("}");
+  if (a < 0 || z <= a) return null;
+  try { const j = JSON.parse(t.slice(a, z + 1)); return j && typeof j === "object" && !Array.isArray(j) ? j : null; } catch { return null; }
+}
+
+// ---- the bookmarklet ----------------------------------------------------
+// Plain ES5-ish so it runs on any shop page. __POS__ = this POS's origin.
+const BOOKMARKLET = `(function(){
+var P="__POS__";
+if(location.origin===P){alert("Open a product page on Suruga-ya, Buyee or another shop, then click this bookmark there.");return;}
+var d=document,T=function(e){return((e&&(e.innerText||e.textContent))||"").replace(/\\s+/g," ").trim()},A=function(u){try{return new URL(u,location.href).href}catch(x){return""}},E=function(s){return[].slice.call(d.querySelectorAll(s))};
+var meta={};E("meta[content]").forEach(function(m){var k=(m.getAttribute("property")||m.getAttribute("name")||m.getAttribute("itemprop")||"").toLowerCase();if(k&&/^(og:|product:|twitter:(title|image)|description$|price|pricecurrency|gtin|sku|brand|availability|itemcondition)/.test(k)&&!(k in meta))meta[k]=String(m.content).slice(0,400)});
+var ld=[];E('script[type="application/ld+json"]').forEach(function(s){try{ld.push(JSON.parse(s.textContent))}catch(x){}});
+var heads=[];E("h1,h2,h7,[class*=title_product],[id*=item_title],[class*=itemTitle],[class*=ItemTitle],[class*=item-title],[class*=product-title],[class*=productTitle],[data-testid*=name],[data-testid*=title]").forEach(function(e){var x=T(e);if(x&&x.length<300&&heads.indexOf(x)<0&&heads.length<10)heads.push(x)});
+var crumbs=[];E("[class*=readcrumb] a,[class*=readcrumb] li,nav[aria-label*=read] a,[class*=topicpath] a,[class*=pankuzu] a").forEach(function(e){var x=T(e);if(x&&x.length<80&&crumbs.indexOf(x)<0&&crumbs.length<15)crumbs.push(x)});
+var imgs=[],add=function(u){u=A(u);if(/^https?:/.test(u)&&imgs.indexOf(u)<0&&imgs.length<12)imgs.push(u)};if(meta["og:image"])add(meta["og:image"]);
+E("img").filter(function(i){return i.naturalWidth>=160&&i.naturalHeight>=160}).sort(function(a,b){return b.naturalWidth*b.naturalHeight-a.naturalWidth*a.naturalHeight}).slice(0,10).forEach(function(i){add(i.currentSrc||i.src)});
+var main=d.querySelector("main,#main,[role=main],#content,#item,#itemDetail")||d.body,text=String(main.innerText||"").replace(/[ \\t]+/g," ").replace(/\\n\\s*\\n+/g,"\\n").slice(0,6000);
+var p={v:1,url:location.href,title:String(d.title||"").slice(0,300),meta:meta,ld:ld,heads:heads,crumbs:crumbs,images:imgs,text:text,lang:d.documentElement.lang||""};
+try{if(JSON.stringify(p).length>400000){p.ld=[];p.text=text.slice(0,3000)}}catch(x){p.ld=[]}
+var L=function(o){var r=[];(function w(x,n){if(!x||n>5||r.length>2)return;if(Array.isArray(x)){x.forEach(function(y){w(y,n+1)});return}if(typeof x!=="object")return;if(/product|videogame/i.test(String(x["@type"]||""))){var f=x.offers;r.push({"@type":"Product",name:x.name,gtin13:x.gtin13,gtin:x.gtin,gtin12:x.gtin12,image:Array.isArray(x.image)?x.image.slice(0,3):x.image,brand:x.brand,releaseDate:x.releaseDate,itemCondition:x.itemCondition,offers:Array.isArray(f)?f.slice(0,5):f})}if(x["@graph"])w(x["@graph"],n+1)})(o,0);return r};
+var c={v:1,url:p.url,title:p.title,meta:p.meta,ld:L(ld),heads:p.heads,crumbs:p.crumbs,images:imgs.slice(0,6),text:text.slice(0,1500),lang:p.lang};try{if(JSON.stringify(c).length>14000)c.ld=[]}catch(x){c.ld=[]}
+var u=P+"/inventory?import=page#tl="+encodeURIComponent(JSON.stringify(c));
+var w=window.open(u,"_blank");if(!w){location.href=u;return}
+var done=false,on=function(e){if(e.origin!==P||!e.data||e.data.type!=="tl-ready"||done)return;done=true;try{e.source.postMessage({type:"tl-page",page:p},P)}catch(x){}window.removeEventListener("message",on)};window.addEventListener("message",on);
+})();`;
+
+/** The bookmark's address (javascript:…) for this POS. */
+export function bookmarkletHref(posOrigin: string): string {
+  const code = BOOKMARKLET.replace("__POS__", posOrigin.replace(/[^a-zA-Z0-9:/._-]/g, "")).replace(/\n/g, "");
+  return "javascript:" + encodeURIComponent(code);
+}
+/** The raw script (for tests / "copy the code"). */
+export const bookmarkletSource = (posOrigin: string) => BOOKMARKLET.replace("__POS__", posOrigin);
