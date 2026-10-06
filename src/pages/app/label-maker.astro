@@ -136,8 +136,8 @@ const blob = { sizes, saved: sanitizeSaved((row?.settings as any)?.labelMakerSav
 <script>
   import { renderTextLabelSvg, layoutTextLabel, inches, plainText, sanitizeLines, linesFromText, fontOf, type TextLabelSpec, type SavedLabel, type TextSize, type RichLine } from "../../lib/labelMaker";
   import { ensureLabelFont, type LabelTemplate } from "../../lib/labels";
-  import { fontStyleTag } from "../../lib/labelPdf";
-  import { printSvgLabels, type RotateDeg } from "../../lib/labelPrint";
+  import { fontStyleTag, svgsToPdf } from "../../lib/labelPdf";
+  import { storedRotDeg, type RotateDeg } from "../../lib/labelPrint";
   import { findZebraPrinter, printSvgsDirect, ZebraError } from "../../lib/zebraDirect";
 
   const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -251,6 +251,9 @@ const blob = { sizes, saved: sanitizeSaved((row?.settings as any)?.labelMakerSav
     $("lm-custom").hidden = sizeOf()?.key !== "custom";
     $("lm-orient-wrap").hidden = !is4x6();
     $("lm-preview").innerHTML = renderTextLabelSvg(s, measure);
+    // The preview box keeps the label's shape (a tall 4×6 isn't stretched wide).
+    const pv = $("lm-preview").querySelector("svg");
+    if (pv) pv.style.width = `min(100%, ${((62 * s.widthMm) / s.heightMm).toFixed(2)}vh)`;
     $("lm-overflow").hidden = !plainText(s.lines).trim() || layoutTextLabel(s, measure).fits;
     ed.style.fontFamily = fontOf(s.fontKey).f.family; // the box shows the label's font
     $("lm-sizecap").textContent = `${inches(s.widthMm)} × ${inches(s.heightMm)}″`;
@@ -258,8 +261,8 @@ const blob = { sizes, saved: sanitizeSaved((row?.settings as any)?.labelMakerSav
     $("lm-zebra").hidden = !canZebra;
     if (canZebra) $("lm-zebra").title = `Straight to ${zebra!.name} — the sticker roll`;
     $("lm-hint").textContent = is4x6()
-      ? "4 × 6 prints through the print dialog — pick your shipping-label printer and a 4 × 6 paper size."
-      : canZebra ? "⚡ sends straight to the Zebra; 🖨 opens the print dialog." : "🖨 opens the print dialog — pick the label printer and this label's paper size.";
+      ? "🖨 opens a 4 × 6 PDF — print it to your shipping-label printer at 100% (actual size)."
+      : canZebra ? "⚡ sends straight to the Zebra; 🖨 opens a PDF to print anywhere." : "🖨 opens a PDF at this label's size — print it to the label printer at 100% (actual size).";
     remember();
   }
 
@@ -276,7 +279,7 @@ const blob = { sizes, saved: sanitizeSaved((row?.settings as any)?.labelMakerSav
   // print dialog saves (rotation, scale, nudge).
   const ls = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
   const stickerTune = (s: TextLabelSpec) => {
-    const deg = ls("tl-print-rotdeg");
+    const deg = storedRotDeg();
     return {
       rotateDeg: (["0", "90", "180", "270"].includes(deg ?? "") ? Number(deg) : s.widthMm > s.heightMm ? 90 : 0) as RotateDeg,
       scalePct: Number(ls("tl-print-scale")) || 100,
@@ -287,10 +290,19 @@ const blob = { sizes, saved: sanitizeSaved((row?.settings as any)?.labelMakerSav
   $("lm-print").addEventListener("click", async () => {
     const s = spec();
     if (!plainText(s.lines).trim()) { alert("Type the label's text first."); ed.focus(); return; }
-    const svg = await printableSvg(s);
-    // 4×6: its own printer, portrait paper — landscape text turns onto it.
-    const opts = is4x6() ? { rotateDeg: ($<HTMLInputElement>("lm-landscape").checked ? 90 : 0) as RotateDeg } : stickerTune(s);
-    await printSvgLabels([{ svg, copies: copies() }], { widthMm: s.widthMm, heightMm: s.heightMm }, opts);
+    const btn = $<HTMLButtonElement>("lm-print"); btn.disabled = true;
+    try {
+      const svg = await printableSvg(s);
+      // 4×6: its own printer, portrait paper — landscape text turns onto it.
+      const opts = is4x6() ? { rotateDeg: ($<HTMLInputElement>("lm-landscape").checked ? 90 : 0) as RotateDeg, dpi: 203 } : { ...stickerTune(s), dpi: Number(ls("tl-print-dpi")) || 203 };
+      // A PDF at the label's exact paper size — the one browser print route
+      // that behaves the same in every browser (Safari splits HTML labels).
+      const blob = await svgsToPdf([{ svg, copies: copies() }], { widthMm: s.widthMm, heightMm: s.heightMm }, opts);
+      const url = URL.createObjectURL(blob);
+      if (!window.open(url, "_blank")) { const a = document.createElement("a"); a.href = url; a.download = "label.pdf"; a.click(); }
+      setTimeout(() => URL.revokeObjectURL(url), 120_000);
+    } catch (e: any) { alert("Couldn't build the PDF: " + e.message); }
+    finally { btn.disabled = false; }
   });
   $("lm-zebra").addEventListener("click", async () => {
     const s = spec();

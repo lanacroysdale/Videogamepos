@@ -17,6 +17,17 @@ export type PrintJob = { item: LabelItem; copies: number };
 export type RotateDeg = 0 | 90 | 180 | 270;
 export type PrintTune = { rotateDeg?: RotateDeg; scalePct?: number; nudgeXMm?: number; nudgeYMm?: number; dpi?: number };
 
+/** This station's saved label rotation ("0" / "90" / "180" / "270"), reading
+ *  the older on/off setting forward; null = never chosen. */
+export function storedRotDeg(): string | null {
+  try {
+    const deg = localStorage.getItem("tl-print-rotdeg");
+    if (deg != null) return deg;
+    const oldRot = localStorage.getItem("tl-print-rot-v2");
+    return oldRot != null ? (oldRot === "1" ? "90" : "0") : null;
+  } catch { return null; } // private mode
+}
+
 export async function printLabels(jobs: PrintJob[], tpl: LabelTemplate, opts?: PrintTune): Promise<void> {
   const real = jobs.filter((j) => j.copies > 0);
   if (!real.length) return;
@@ -224,14 +235,7 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
   // Which of the four orientations is correct is a per-station driver trait;
   // migrate the old boolean keys forward, then remember the choice.
   const rotSel = overlay.querySelector<HTMLSelectElement>("#lp-rotdeg")!;
-  let storedDeg: string | null = null;
-  try {
-    storedDeg = localStorage.getItem("tl-print-rotdeg");
-    if (storedDeg == null) {
-      const oldRot = localStorage.getItem("tl-print-rot-v2");
-      if (oldRot != null) storedDeg = oldRot === "1" ? "90" : "0";
-    }
-  } catch { /* private mode */ }
+  const storedDeg = storedRotDeg();
   rotSel.value = ["0", "90", "180", "270"].includes(storedDeg ?? "")
     ? storedDeg!
     : chosenTpl().widthMm > chosenTpl().heightMm ? "90" : "0";

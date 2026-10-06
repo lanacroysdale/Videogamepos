@@ -120,9 +120,11 @@ export function layoutTextLabel(spec: TextLabelSpec, measure?: MeasureFn): TextL
   const lineScale = (ws: Word[]) => Math.max(1e-6, ...ws.flatMap((w) => w.pieces.map((p) => p.st.scale))) || 1;
   const scaleOf = (ws: Word[]) => (ws.length ? lineScale(ws) : 1);
   const typed = spec.lines.map(wordsOf);
-  // Greedy word wrap at size s; a word wider than the label breaks by letters.
-  // keepLines = the lines exactly as typed (no wrapping).
-  const wrap = (s: number, keepLines: boolean): Word[][] => {
+  // Greedy word wrap at size s. keepLines = the lines exactly as typed (no
+  // wrapping). breakWords = a word wider than the label breaks by letters —
+  // only as a last resort: otherwise an over-wide word just doesn't fit, so
+  // the text gets smaller instead ("REFURBISHED" never prints as "REFUR/BISHED").
+  const wrap = (s: number, keepLines: boolean, breakWords = false): Word[][] => {
     if (keepLines) return typed.map((ws) => [...ws]);
     const out: Word[][] = [];
     for (const ws of typed) {
@@ -131,7 +133,7 @@ export function layoutTextLabel(spec: TextLabelSpec, measure?: MeasureFn): TextL
       for (const w of ws) {
         if (lineW([...line, w], s) <= innerW) { line.push(w); continue; }
         if (line.length) out.push(line);
-        if (wordW(w, s) <= innerW) { line = [w]; continue; }
+        if (wordW(w, s) <= innerW || !breakWords) { line = [w]; continue; }
         // Too wide even alone: split it letter by letter (styles kept).
         let chunk: Word = { pieces: [], space: null };
         for (const p of w.pieces) for (const ch of p.text) {
@@ -147,29 +149,29 @@ export function layoutTextLabel(spec: TextLabelSpec, measure?: MeasureFn): TextL
     return out;
   };
   const blockH = (ls: Word[][], s: number) => ls.reduce((a, l, i) => a + s * scaleOf(l) * (i === 0 ? 1 : LINE), 0);
-  const fitsAt = (s: number, keepLines: boolean) => {
-    const ls = wrap(s, keepLines);
+  const fitsAt = (s: number, keepLines: boolean, breakWords = false) => {
+    const ls = wrap(s, keepLines, breakWords);
     return blockH(ls, s) <= innerH && ls.every((l) => lineW(l, s) <= innerW + 1e-6) ? ls : null;
   };
   const maxS = Math.max(1.2, Math.min(innerH, spec.textSize === "fill" ? Infinity : H * CAP[spec.textSize], 80));
   // Largest size that fits (binary search).
-  const solve = (keepLines: boolean) => {
-    let lo = 1.2, hi = maxS, best: Word[][] | null = fitsAt(lo, keepLines);
-    const top = fitsAt(hi, keepLines);
+  const solve = (keepLines: boolean, breakWords = false) => {
+    let lo = 1.2, hi = maxS, best: Word[][] | null = fitsAt(lo, keepLines, breakWords);
+    const top = fitsAt(hi, keepLines, breakWords);
     if (top) return { size: hi, lines: top };
     for (let i = 0; i < 28 && hi - lo > 0.05; i++) {
       const mid = (lo + hi) / 2;
-      const ls = fitsAt(mid, keepLines);
+      const ls = fitsAt(mid, keepLines, breakWords);
       if (ls) { lo = mid; best = ls; } else hi = mid;
     }
     return best ? { size: lo, lines: best } : null;
   };
   // Lines you broke yourself stay as typed ("Includes / IPS SCREEN MOD") —
   // unless that leaves the text tiny, then it wraps like one long sentence.
-  const wrapped = solve(false);
+  const wrapped = solve(false) ?? solve(false, true);
   const asTyped = typed.length > 1 ? solve(true) : null;
   const pick = asTyped && (!wrapped || asTyped.size >= Math.max(2.4, wrapped.size * 0.4)) ? asTyped : wrapped;
-  return { lines: pick?.lines ?? wrap(1.2, false), sizeMm: pick?.size ?? 1.2, pad, borderW, fits: !!pick };
+  return { lines: pick?.lines ?? wrap(1.2, false, true), sizeMm: pick?.size ?? 1.2, pad, borderW, fits: !!pick };
 }
 
 /** The label as SVG (mm units), same conventions as renderLabelSvg. */

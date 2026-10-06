@@ -190,23 +190,33 @@ export async function labelsToPdf(jobs: PdfJob[], tpl: LabelTemplate, opts?: { r
   const real = jobs.filter((j) => j.copies > 0);
   if (!real.length) throw new Error("Nothing to print.");
   await ensureLabelFont(tpl);
-  const deg = ([0, 90, 180, 270] as const).includes(opts?.rotateDeg as any) ? opts!.rotateDeg! : 0;
-  const sideways = deg === 90 || deg === 270;
   const styleTag = await fontStyleTag(tpl);
   const logoData = tpl.logoUrl ? await inlineLogo(tpl.logoUrl) : "";
-
-  const images: { data: Uint8Array; pw: number; ph: number }[] = [];
-  const pageOfCopy: number[] = [];
-  for (const j of real) {
+  const labels = real.map((j) => {
     let svg = renderLabelSvg(tpl, j.item);
     if (styleTag) svg = svg.replace(/(<svg[^>]*>)/, `$1${styleTag}`);
     if (tpl.logoUrl && logoData) svg = svg.split(escAttr(tpl.logoUrl)).join(logoData).split(tpl.logoUrl).join(logoData);
-    const im = await rasterize(svg, tpl.widthMm, tpl.heightMm, deg, opts);
+    return { svg, copies: j.copies };
+  });
+  return svgsToPdf(labels, { widthMm: tpl.widthMm, heightMm: tpl.heightMm }, opts);
+}
+
+/** Ready-made label SVGs (fonts / images inlined) → a PDF, one label per page
+ *  at the label's paper size — price labels and the Label maker share this. */
+export async function svgsToPdf(labels: { svg: string; copies: number }[], size: { widthMm: number; heightMm: number }, opts?: { rotateDeg?: 0 | 90 | 180 | 270 } & PdfTune): Promise<Blob> {
+  const real = labels.filter((l) => l.copies > 0);
+  if (!real.length) throw new Error("Nothing to print.");
+  const deg = ([0, 90, 180, 270] as const).includes(opts?.rotateDeg as any) ? opts!.rotateDeg! : 0;
+  const sideways = deg === 90 || deg === 270;
+  const images: { data: Uint8Array; pw: number; ph: number }[] = [];
+  const pageOfCopy: number[] = [];
+  for (const l of real) {
+    const im = await rasterize(l.svg, size.widthMm, size.heightMm, deg, opts);
     const idx = images.push(im) - 1;
-    for (let c = 0; c < Math.min(500, j.copies); c++) pageOfCopy.push(idx);
+    for (let c = 0; c < Math.min(500, l.copies); c++) pageOfCopy.push(idx);
   }
   // Page = the driver's inch-defined paper, exactly (see snapToInchGrid).
-  const wPt = snapToInchGrid(sideways ? tpl.heightMm : tpl.widthMm) * PT_PER_MM;
-  const hPt = snapToInchGrid(sideways ? tpl.widthMm : tpl.heightMm) * PT_PER_MM;
+  const wPt = snapToInchGrid(sideways ? size.heightMm : size.widthMm) * PT_PER_MM;
+  const hPt = snapToInchGrid(sideways ? size.widthMm : size.heightMm) * PT_PER_MM;
   return buildPdf(images, pageOfCopy, wPt, hPt);
 }
