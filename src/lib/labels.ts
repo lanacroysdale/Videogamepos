@@ -86,6 +86,7 @@ export type LabelTemplate = {
     region: boolean;                     // "JP" / "PAL" after the platform in the meta line
     spineText: boolean;
     spineCondition: boolean;             // "CIB" / "NEW" on the spine, between logo and price
+    typeIcon: boolean;                   // the inventory type's icon, bottom-right of the face (types picked in Settings)
   };
   spineText: string;                     // tagline under the spine price, e.g. "Buy | Sell | Chill"
   barcodeHeightMm: number;               // 5–20
@@ -101,7 +102,12 @@ export type LabelTemplate = {
   logoSide: "left" | "right";            // logo before/after the price (read order); no-spine: lower corner
   titleMaxChars: number;                 // 10–60 — hard cut-off (… beyond this)
   titleDropThe: boolean;                 // print "Legend of Zelda: …" — a leading "The" spends room for nothing
+  typeIconMm: number;                    // 1.5–8 — size of the inventory type icon (bottom-right)
   isDefault?: boolean;
+  // Not saved with the template: the inventory types whose icon prints on
+  // labels (Settings → Inventory types → "Label icon"), filled in by
+  // labelTemplates() from store_settings.settings.labelTypeIcons.
+  typeIconIds?: string[];
 };
 
 // What one label prints for one variant (built by the caller from live rows).
@@ -112,6 +118,8 @@ export type LabelItem = {
   condShort: string;      // e.g. "CIB · ★★★" (conditionDisplay compAbbrev style)
   priceCents: number;
   invTypeName: string;    // e.g. "Personal Collection" ("" hides)
+  invTypeId?: string;     // the variant's inventory type — its icon prints when that type is picked
+  invTypeIcon?: string;   // that type's icon (emoji), e.g. "🛍"
   locationKey: string;    // e.g. "PDX"
   internalCode: string;   // fallback barcode payload (TL…, wide)
   labelCode?: string;     // preferred payload: 10-digit numeric → compact Code 128C
@@ -127,7 +135,7 @@ export const DEFAULT_TEMPLATE: LabelTemplate = {
   spine: "left", // front-to-spine: face on the case FRONT, flap wraps the spine
   spineDir: "down",
   spineWidthMm: 13,
-  show: { logo: true, title: true, category: true, condition: true, price: true, invType: true, location: true, sku: false, barcode: true, region: true, spineText: true, spineCondition: false },
+  show: { logo: true, title: true, category: true, condition: true, price: true, invType: true, location: true, sku: false, barcode: true, region: true, spineText: true, spineCondition: false, typeIcon: true },
   spineText: "",
   barcodeHeightMm: 8,
   barcodeShowText: true,
@@ -142,6 +150,7 @@ export const DEFAULT_TEMPLATE: LabelTemplate = {
   logoSide: "left",
   titleMaxChars: 56,
   titleDropThe: true,
+  typeIconMm: 3,
   isDefault: true,
 };
 
@@ -178,6 +187,7 @@ export function sanitizeLabelTemplates(raw: any): LabelTemplate[] {
         location: t.show?.location !== false, sku: t.show?.sku === true, barcode: t.show?.barcode !== false,
         region: t.show?.region !== false,
         spineText: t.show?.spineText !== false, spineCondition: t.show?.spineCondition === true,
+        typeIcon: t.show?.typeIcon !== false,
       },
       spineText: String(t.spineText ?? "").slice(0, 30),
       barcodeHeightMm: clamp(t.barcodeHeightMm, 5, 20, d.barcodeHeightMm),
@@ -193,6 +203,7 @@ export function sanitizeLabelTemplates(raw: any): LabelTemplate[] {
       logoSide: t.logoSide === "right" ? "right" : "left",
       titleMaxChars: clamp(t.titleMaxChars, 10, 60, d.titleMaxChars),
       titleDropThe: t.titleDropThe !== false,
+      typeIconMm: clamp(t.typeIconMm, 1.5, 8, d.typeIconMm),
       isDefault: t.isDefault === true,
     });
     // Cross-clamps: independent ranges can still combine into impossible
@@ -210,9 +221,19 @@ export function sanitizeLabelTemplates(raw: any): LabelTemplate[] {
 }
 
 // Reader for store_settings.settings.labelTemplates (settings-helper idiom).
+// Each template also carries the store-wide list of inventory types whose
+// icon prints on labels.
 export function labelTemplates(rawSettings: any): LabelTemplate[] {
-  return sanitizeLabelTemplates(rawSettings?.labelTemplates);
+  const typeIconIds = labelTypeIconIds(rawSettings);
+  return sanitizeLabelTemplates(rawSettings?.labelTemplates).map((t) => ({ ...t, typeIconIds }));
 }
+/** store_settings.settings.labelTypeIcons — inventory type ids (Settings →
+ *  Inventory types → "Label icon"). */
+export function labelTypeIconIds(rawSettings: any): string[] {
+  const raw = rawSettings?.labelTypeIcons;
+  return Array.isArray(raw) ? [...new Set(raw.filter((x: any) => typeof x === "string" && /^[0-9a-f-]{36}$/i.test(x)))].slice(0, 20) as string[] : [];
+}
+
 
 const esc = (s: any) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
@@ -425,6 +446,31 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
   const contentW = fw - railW;
   const cxFace = fx + contentW / 2; // face text centers on the content column
 
+  // The inventory type's icon (e.g. 🛍 on eBay stock) in the face's
+  // bottom-right corner — only for the types picked in Settings. Printed as a
+  // solid black silhouette: a thermal printer is black-or-white, and a colour
+  // emoji would print as specks. It sits beside the barcode (which shifts left
+  // only if it must) and NEVER moves into the price / title area: on a face
+  // too narrow for both, the icon is left off (the designer says so).
+  const iconWanted = tpl.show.typeIcon && !!item.invTypeIcon && !!item.invTypeId && (tpl.typeIconIds ?? []).includes(item.invTypeId);
+  const icS = iconWanted ? Math.min(tpl.typeIconMm, H * 0.3) : 0;  // icon box, mm (a small mark — owner)
+  const icRight = fx + contentW;                                     // the content column's right edge
+  // Barcode placement (drawn last): centered on the content column, modules
+  // capped at 0.30mm so a compact code STAYS compact instead of smearing.
+  const bcAreaX = bcFullWidth ? INSET : fx;
+  const bcAreaW = bcFullWidth ? W - INSET * 2 : contentW;
+  let bcMod = bcModules > 0 ? Math.max(MIN_MODULE_MM, Math.min(0.3, bcAreaW / bcModules)) : 0;
+  let bcX = bcAreaX + Math.max(0, (bcAreaW - bcModules * bcMod) / 2);
+  let iconOn = iconWanted;
+  if (iconOn && wantBarcode && bcModules > 0 && bcX + bcModules * bcMod > icRight - icS - 0.6) {
+    const room = icRight - icS - 0.6 - bcAreaX;
+    if (room >= bcModules * MIN_MODULE_MM) {
+      // Center the barcode in the space left of the icon (thinner bars if needed).
+      bcMod = Math.max(MIN_MODULE_MM, Math.min(bcMod, room / bcModules));
+      bcX = bcAreaX + Math.max(0, (room - bcModules * bcMod) / 2);
+    } else iconOn = false;
+  }
+
   // Title auto-sizes: short names print BIG, long names shrink to fit, and the
   // configurable titleMaxChars cut-off ellipsizes runaways.
   let y = INSET;
@@ -454,7 +500,9 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
   ].filter(Boolean);
   // The price is a FIXED size (owner spec) and the barcode is pinned low, so
   // the title gets exactly the height left between the top and the price.
-  const floorY = wantBarcode ? bcY - 0.8 : H - BOTTOM;
+  // …and above the icon when it reaches higher than the barcode band (barcode
+  // off, or a short one) — the price never prints over it.
+  const floorY = Math.min(wantBarcode ? bcY - 0.8 : H - BOTTOM, iconOn ? H - BOTTOM - icS - 0.6 : Infinity);
   const priceFontFixed = 6.0 * fs * tpl.priceScale * fsc * (FP.priceBoost ?? 1);
   const metaPart = metaBits.length ? metaSize * 0.72 + (FP.titleGap ?? 1.0) + metaSize * 1.08 : 0;
   const titleBudget = floorY - INSET - metaPart - (tpl.show.price ? priceFontFixed * 0.74 + 0.6 : 0);
@@ -547,19 +595,19 @@ export function renderLabelSvg(tpl: LabelTemplate, item: LabelItem, opts?: { pre
     const rx = fx + fw - 0.8;
     parts.push(`<text x="${rx.toFixed(2)}" y="${(H / 2).toFixed(2)}" transform="rotate(-90 ${rx.toFixed(2)} ${(H / 2).toFixed(2)})" text-anchor="middle" dominant-baseline="central" font-family="${fam}" font-size="${(2.0 * fs * fsc).toFixed(2)}" letter-spacing="0.15" fill="#000">${esc(tagBits.join(" · "))}</text>`);
   }
-  // Barcode pinned to the bottom (face-width, or full label width — see above).
-  // Never stretch to fill: modules cap at 0.30mm so a compact numeric code
-  // STAYS compact and centered instead of smearing across the label.
+  // Barcode pinned to the bottom (placed above, with the icon).
   if (wantBarcode && bcModules > 0) {
-    // Centered on the same content column as the face text (cohesion).
-    const areaX = bcFullWidth ? INSET : fx;
-    const areaW = bcFullWidth ? W - INSET * 2 : contentW;
-    const modMm = Math.max(MIN_MODULE_MM, Math.min(0.3, areaW / bcModules));
-    const { svg } = code128SvgGroup(bcPayload, areaX + Math.max(0, (areaW - bcModules * modMm) / 2), bcY, {
-      moduleMm: modMm, heightMm: tpl.barcodeHeightMm, showText: tpl.barcodeShowText, textMm: 2.2 * fs,
+    const { svg } = code128SvgGroup(bcPayload, bcX, bcY, {
+      moduleMm: bcMod, heightMm: tpl.barcodeHeightMm, showText: tpl.barcodeShowText, textMm: 2.2 * fs,
     });
     parts.push(svg);
   }
+  if (iconOn) {
+    parts.push(`<defs><filter id="tl-sil" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0"/></filter></defs>`);
+    parts.push(`<text x="${(icRight - icS / 2).toFixed(2)}" y="${(H - BOTTOM - icS / 2).toFixed(2)}" text-anchor="middle" dominant-baseline="central" font-family="'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif" font-size="${(icS * 0.9).toFixed(2)}" filter="url(#tl-sil)">${esc(item.invTypeIcon)}</text>`);
+  }
+  // The designer flags a template whose face is too narrow for the icon.
+  const flag = opts?.preview && iconWanted && !iconOn ? ' data-icon-skipped="1"' : "";
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}mm" height="${H}mm" viewBox="0 0 ${W} ${H}">${parts.join("")}</svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg"${flag} width="${W}mm" height="${H}mm" viewBox="0 0 ${W} ${H}">${parts.join("")}</svg>`;
 }

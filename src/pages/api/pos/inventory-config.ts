@@ -69,6 +69,23 @@ export const POST: APIRoute = async ({ locals, request }) => {
     return error ? fail(error) : json({ ok: true });
   }
 
+  // Label icon: the store-wide list of inventory types whose icon prints in
+  // the bottom-right corner of their labels (store_settings.settings.labelTypeIcons).
+  if (a === "setTypeLabelIcon") {
+    if (!b.id) return json({ error: "id required" }, 400);
+    const { data: t } = await admin.from("store_inventory_types").select("id, icon").eq("id", b.id).maybeSingle();
+    if (!t) return json({ error: "Type not found." }, 404);
+    if (b.value && !t.icon) return json({ error: "Give this type an icon first (edit it)." }, 400);
+    const { data: cur, error: rErr } = await admin.from("store_settings").select("settings").eq("id", 1).maybeSingle();
+    if (rErr) return fail(rErr);
+    const settings = { ...((cur as any)?.settings ?? {}) };
+    const ids = new Set<string>(Array.isArray(settings.labelTypeIcons) ? settings.labelTypeIcons.filter((x: any) => typeof x === "string") : []);
+    if (b.value) ids.add(t.id); else ids.delete(t.id);
+    settings.labelTypeIcons = [...ids];
+    const { error } = await admin.from("store_settings").update({ settings }).eq("id", 1);
+    return error ? fail(error) : json({ ok: true, labelTypeIcons: settings.labelTypeIcons });
+  }
+
   if (a === "deleteType") {
     if (!b.id) return json({ error: "id required" }, 400);
     const { data: t } = await admin.from("store_inventory_types").select("is_system, name").eq("id", b.id).maybeSingle();
