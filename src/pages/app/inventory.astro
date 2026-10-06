@@ -378,6 +378,8 @@ const posData = {
         <h2 id="m-heading">Edit product</h2>
         <button class="modal-x" data-close aria-label="Close">✕</button>
       </header>
+      <!-- Price check, same links as an entry line (title + platform + region). -->
+      <div class="m-pricelinks" id="m-pricelinks"></div>
       <div class="modal-body" id="modal-body"></div>
       <footer class="modal-foot">
         <a id="m-weblink" class="weblink" target="_blank" rel="noopener" hidden>↗ View on website</a>
@@ -627,6 +629,7 @@ const posData = {
   .ti-sug-meta { color:var(--muted-2); font-size:0.78rem; }
   .ti-sug-price { margin-left:auto; color:var(--green); font-weight:700; font-family:var(--font-mono); }
   .ti-links a { font-size:0.78rem; margin-right:0.5rem; white-space:nowrap; }
+  .m-pricelinks { padding:0.45rem 1.1rem; border-bottom:1px solid var(--border); font-size:0.8rem; display:flex; flex-wrap:wrap; align-items:center; gap:0.4rem; }
 
   /* eBay import row */
   .ebay-import { margin-bottom:0.9rem; padding-bottom:0.9rem; border-bottom:1px dashed var(--line); }
@@ -1209,6 +1212,7 @@ const posData = {
     if (!p) return;
     modal.dataset.pid = pid;
     $("m-heading").innerHTML = "Edit · " + esc(p.title) + badge(p.regionCode);
+    $("m-pricelinks").innerHTML = `<span class="muted-2">Price check:</span> ${cmpLinks([p.title, p.platform, regionTag(p.regionCode, regions)].filter(Boolean).join(" "))}`;
     const catOpts = categories.map((c) => `<option value="${c.id}"${c.id === p.categoryId ? " selected" : ""}>${esc(c.name)}</option>`).join("");
     // Active regions + the listing's own (even if since switched off).
     const curRegion = regionOf(p.regionCode, regions);
