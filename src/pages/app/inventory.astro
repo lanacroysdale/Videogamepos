@@ -260,8 +260,8 @@ const posData = {
     <div id="np-stock">
     <div class="ebay-import">
       <div class="ebay-row">
-        <span class="ebay-tag">🛒 eBay</span>
-        <input id="np-ebay" placeholder="Paste an eBay item number or listing URL to auto-fill…" />
+        <span class="ebay-tag" title="Fill this form from any eBay listing of the same item — title, platform, region, condition, category, price, UPC/EAN. On Save: its cover photo + details (brand, year, series, character). Never synced with eBay.">🛒 Sell similar</span>
+        <input id="np-ebay" placeholder="Paste any eBay listing (URL or item #) of the same item to fill this form…" />
         <button type="button" id="np-ebay-go" class="btn btn-ghost btn-sm">⬇ Pull data</button>
       </div>
       <div id="np-ebay-note" class="ebay-note" hidden></div>
@@ -2835,21 +2835,33 @@ const posData = {
       ($("inv-search") as HTMLInputElement).value = ""; state.q = ""; state.parsed = null; renderSmart();
       render();
       if (pendingEbay) {
-        // eBay-imported: pull the real listing's photo + description/specifics
-        // (eBay is the source of truth, so skip the IGDB lookup).
-        toast("✓ Product added — pulling eBay photos…");
+        // Sell Similar: the listing's cover photo + item specifics it doesn't
+        // have (a reference tag — never synced). A game then also gets the
+        // game database's description / trailer / names (empty fields only).
+        toast("✓ Product added — copying the eBay photo…");
+        const pe = pendingEbay;
         try {
           const r = await fetch("/api/pos/ebay-import", { method: "POST", headers: { "content-type": "application/json" },
-            body: JSON.stringify({ mode: "attach", productId: newItem.id, variantId: j.variantId, input: pendingEbay.input }) });
+            body: JSON.stringify({ mode: "attach", productId: newItem.id, variantId: j.variantId, input: pe.input }) });
           const e = await r.json();
           if (r.ok && e.ok) {
             if (e.imageUrl) newItem.imageUrl = e.imageUrl;
-            if (pendingEbay.description) newItem.description = pendingEbay.description;
-            newItem.ebayId = (String(pendingEbay.input).match(/\d{9,15}/) || [])[0] || "";
+            for (const k of ["franchise", "genre", "brand"]) if (e.fields?.[k]) newItem[k] = e.fields[k];
+            if (String(e.tag || "").startsWith("ebay:")) newItem.ebayId = String(e.tag).slice(5);
             render();
-            toast(e.imageUrl ? "🛒 Imported from eBay with photo" : "✓ Imported from eBay");
-          } else { toast("✓ Added (eBay media failed: " + (e.error || "?") + ")"); }
+            toast(e.imageUrl ? "🛒 Added with the eBay photo" : "✓ Added from eBay");
+          } else { toast("✓ Added (eBay photo failed: " + (e.error || "?") + ")"); }
         } catch { toast("✓ Product added"); }
+        if (pe.group === "games") {
+          try {
+            const g = await enrich({ productId: newItem.id, title: newItem.title, platform: newItem.platform });
+            if (g.ok && g.found) {
+              if (g.altNames?.length) newItem.altNames = g.altNames;
+              if (g.description && !newItem.description) newItem.description = g.description;
+              render();
+            }
+          } catch { /* the eBay photo + details are already on */ }
+        }
         pendingEbay = null;
         ($("np-ebay") as HTMLInputElement).value = "";
         ($("np-ebay-note") as HTMLElement).hidden = true;
@@ -2886,20 +2898,27 @@ const posData = {
       const j = await r.json();
       if (!r.ok || !j.ok) throw new Error(j.error || "Couldn't pull that listing");
       const it = j.item;
-      ($("np-title") as HTMLInputElement).value = it.title;
-      ($("np-platform") as HTMLInputElement).value = it.platform || "";
-      setNpRegion(it.region); // from eBay's "Region Code" aspect; "" = home
-      setComp($("np-comp") as HTMLInputElement, it.completenessCode || "", $("np-comp-abbr"));
-      if (it.gradeCode) ($("np-grade") as HTMLSelectElement).value = it.gradeCode;
+      // Sell Similar suggestions (the store importer's title / platform / region /
+      // category rules) — else the listing's raw fields.
+      const sim = j.similar || {};
+      ($("np-title") as HTMLInputElement).value = sim.title || it.title;
+      ($("np-platform") as HTMLInputElement).value = sim.platform ?? it.platform ?? "";
+      setNpRegion(sim.region || it.region); // "" = home
+      setComp($("np-comp") as HTMLInputElement, sim.completenessCode || it.completenessCode || "", $("np-comp-abbr"));
+      const grade = sim.gradeCode || it.gradeCode;
+      if (grade) ($("np-grade") as HTMLSelectElement).value = grade;
       ($("np-price") as HTMLInputElement).value = (it.priceCents / 100).toFixed(2);
-      if (it.upc) ($("np-barcode") as HTMLInputElement).value = it.upc;
+      const code = sim.barcode || it.upc;
+      ($("np-barcode") as HTMLInputElement).value = code || "";
       const sel = $("np-cat") as HTMLSelectElement;
-      const opt = [...sel.options].find((op) => op.textContent?.toLowerCase() === String(it.categoryName).toLowerCase());
+      const opt = [...sel.options].find((op) => op.value === sim.categoryId)
+        || [...sel.options].find((op) => op.textContent?.toLowerCase() === String(it.categoryName).toLowerCase());
       if (opt) sel.value = opt.value;
-      pendingEbay = { input, description: it.description, primaryImage: it.primaryImage, images: it.images };
+      pendingEbay = { input, group: sim.group || "", own: !!sim.ownListing };
+      const meta = [sim.franchise && `series: ${sim.franchise}`, sim.character && `character: ${sim.character}`, sim.brand && `brand: ${sim.brand}`, sim.releaseYear && `year: ${sim.releaseYear}`].filter(Boolean).join(" · ");
       const note = $("np-ebay-note") as HTMLElement; note.hidden = false;
-      note.innerHTML = `${it.primaryImage ? `<img src="${it.primaryImage}" alt="" style="width:46px;height:46px;object-fit:cover;border:1px solid var(--line);">` : ""}<div><strong>✓ Pulled from eBay</strong> · ${it.conditionLabel || "—"} · ${it.images.length} photo(s)${it.upc ? " · UPC " + it.upc : ""}<br><span style="color:var(--muted-2);">${it.title.slice(0, 72)}</span></div>`;
-      toast("✓ Filled from eBay — review & Save");
+      note.innerHTML = `${it.primaryImage ? `<img src="${esc(it.primaryImage)}" alt="" style="width:46px;height:46px;object-fit:cover;border:1px solid var(--line);">` : ""}<div><strong>✓ Filled from eBay</strong> · ${esc(it.conditionLabel || "—")} · their price ${money(it.priceCents)}${code ? " · UPC/EAN " + esc(code) : ""}${sim.japan ? " · 🇯🇵 Japan item" : ""}${sim.ownListing ? " · <em>your own listing</em>" : sim.seller ? ` · seller ${esc(sim.seller)}` : ""}<br><span style="color:var(--muted-2);">${esc(it.title.slice(0, 90))}</span>${meta ? `<br><span style="color:var(--muted-2);">On Save: cover photo + ${esc(meta)}</span>` : `<br><span style="color:var(--muted-2);">On Save: cover photo</span>`}${(sim.warnings || []).length ? `<br><span style="color:var(--magenta);">⚠ ${esc(sim.warnings.join(" · "))}</span>` : ""}</div>`;
+      toast("✓ Filled from eBay — check it & Save");
     } catch (e: any) { alert(e.message); } finally { btn.disabled = false; btn.textContent = o; }
   });
 

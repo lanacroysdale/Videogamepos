@@ -3,10 +3,12 @@ import { createSupabaseAdminClient } from "../../../lib/supabase";
 import { fetchAll } from "../../../lib/fetchAll";
 import { copyImageToStorage, copyGallery, listGallery } from "../../../lib/storage";
 import {
-  ebayConfigured, ebaySeller, extractItemId, getItem, listSellerItems, listSellerStore, mapItem, storeListingDetails, type MappedItem,
+  ebayConfigured, ebaySeller, extractItemId, getItem, listSellerItems, listSellerStore, mapItem, storeListingDetails,
+  listingFromItem, isOwnListing, type MappedItem,
 } from "../../../lib/ebay";
+import { buildEbayRows, defaultCategoryFor } from "../../../lib/ebayImport";
 import { syncEbayStock } from "../../../lib/ebaySync";
-import { loadRegions, regionsOn, regionByCode } from "../../../lib/regions";
+import { loadRegions, regionsOn, regionByCode, regionFromText } from "../../../lib/regions";
 
 export const prerender = false;
 const json = (d: unknown, s = 200) =>
@@ -84,6 +86,41 @@ async function importOne(admin: any, cats: Map<string, string>, legacyId: string
   return { created: true as const, title: mi.title, imageUrl, priceCents: mi.priceCents };
 }
 
+// Sell Similar (paste any eBay listing into Add Product): the new listing gets
+// the cover photo only, plus the item specifics it doesn't have yet (brand,
+// year, franchise / series, genre, character) — not the seller's description.
+// Another seller's listing is tagged ebay-ref:<id>, a reference the stock sync
+// never reads; the store's own listing gets ebay:<id> (it IS that item).
+async function attachSimilar(admin: any, productId: string, item: any) {
+  const mi = mapItem(item);
+  const tag = `${isOwnListing(item) ? "ebay" : "ebay-ref"}:${mi.ebayItemId}`;
+  // products.character ships with migration 20261006000001.
+  const hasCharacter = !(await admin.from("products").select("character").limit(1)).error;
+  const { data: cur } = await admin.from("products")
+    .select(`image_url, brand, release_year, franchise, genre, tags${hasCharacter ? ", character" : ""}`)
+    .eq("id", productId).maybeSingle() as { data: any };
+  if (!cur) throw new Error("Listing not found");
+  const tags: string[] = Array.isArray(cur.tags) ? cur.tags : [];
+  const patch: Record<string, unknown> = {};
+  if (!tags.includes(tag)) patch.tags = [...tags, tag];
+  let imageUrl: string | null = cur.image_url || null;
+  if (!imageUrl && mi.primaryImage) {
+    imageUrl = await copyImageToStorage(admin, mi.primaryImage, "ebay");
+    if (imageUrl) patch.image_url = imageUrl;
+  }
+  if (!cur.brand && mi.brand) patch.brand = mi.brand;
+  if (!cur.release_year && mi.releaseYear) patch.release_year = mi.releaseYear;
+  if (!cur.franchise && mi.franchise) patch.franchise = mi.franchise;
+  if (!cur.genre && mi.genre) patch.genre = mi.genre;
+  if (hasCharacter && !cur.character && mi.character) patch.character = mi.character;
+  if (Object.keys(patch).length) {
+    const { error } = await admin.from("products").update(patch).eq("id", productId);
+    if (error) throw new Error(error.message);
+  }
+  const { tags: _t, ...fields } = patch;
+  return { imageUrl, fields, tag };
+}
+
 export const POST: APIRoute = async ({ locals, request }) => {
   // Auth: a staff session, OR the CRON_SECRET bearer (used by the background
   // bulk-import / scheduled jobs so they can reuse this exact import logic).
@@ -103,17 +140,40 @@ export const POST: APIRoute = async ({ locals, request }) => {
     if (mode === "preview") {
       const id = extractItemId(b.input || "");
       if (!id) return json({ error: "Couldn't find an eBay item ID in that. Paste the listing URL or the numeric item number." }, 400);
-      const mi = mapItem(await getItem(id));
-      return json({ ok: true, item: mi });
+      const item = await getItem(id);
+      const mi = mapItem(item);
+      // Sell Similar: the same title / platform / region / condition / category
+      // rules as the store importer, from this one listing.
+      let similar: Record<string, unknown> | null = null;
+      try {
+        const regions = await loadRegions(admin);
+        const { data: cats } = await admin.from("categories").select("id, name").order("sort_order");
+        const listing = { ...listingFromItem(item), imported: null };
+        const d = storeListingDetails(item);
+        const [row] = buildEbayRows([listing], new Map([[listing.id, d]]), {
+          completeness: [], grades: [], platforms: [], regions,
+          defaultGameCompleteness: "", defaultItemCompleteness: "", defaultGrade: "", cleanTitles: true,
+        });
+        const jp = row.ebay.japan ? (cats || []).find((c: any) => /japan/i.test(c.name)) : null;
+        const categoryId = jp?.id || defaultCategoryFor(row.ebay.group, cats || []) || "";
+        similar = {
+          title: row.title, platform: row.platform, region: row.region, completenessCode: row.completenessCode, gradeCode: row.gradeCode,
+          categoryId, categoryName: (cats || []).find((c: any) => c.id === categoryId)?.name || "", group: row.ebay.group,
+          japan: row.ebay.japan, barcode: d.upc, ownListing: isOwnListing(item), seller: String(item.seller?.username || ""),
+          franchise: mi.franchise, character: mi.character, brand: mi.brand, releaseYear: mi.releaseYear, genre: mi.genre,
+          warnings: row.warnings, regionsOn: regionsOn(regions), jpCode: regionFromText("japan", regions),
+        };
+      } catch { /* the plain fields below still fill the form */ }
+      return json({ ok: true, item: mi, similar });
     }
 
-    // -- Copy media/metadata onto an already-created product -----------------
+    // -- Sell Similar: cover photo + item specifics onto the product just added --
     if (mode === "attach") {
       if (!b.productId) return json({ error: "productId required" }, 400);
       const id = extractItemId(b.input || "");
       if (!id) return json({ error: "missing eBay item id" }, 400);
-      const imageUrl = await attachMedia(admin, b.productId, b.variantId || null, mapItem(await getItem(id)));
-      return json({ ok: true, imageUrl });
+      const r = await attachSimilar(admin, b.productId, await getItem(id));
+      return json({ ok: true, ...r });
     }
 
     // -- Sync stock down from eBay (out of stock / ended → 0 on website) -----
