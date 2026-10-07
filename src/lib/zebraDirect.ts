@@ -193,7 +193,7 @@ async function printerProblem(device: any): Promise<string | null> {
 // Polls the printer while a job is sent. Turns itself off when the printer
 // never answers (status reads aren't available on every setup).
 function watchPrinter(device: any) {
-  let on = true, problem = "", misses = 0;
+  let on = true, problem = "", misses = 0, okAt = 0;
   (async () => {
     // Drop any late reply from an earlier check first, so an old "out of
     // labels" can't stop a fresh job.
@@ -202,11 +202,11 @@ function watchPrinter(device: any) {
       const r = await printerProblem(device).catch(() => null);
       if (!on) break;
       if (r === null) misses++;
-      else { misses = 0; if (r) { problem = r; break; } }
+      else { misses = 0; if (r) { problem = r; break; } okAt = performance.now(); }
       await sleep(4000);
     }
   })();
-  return { problem: () => problem, stop: () => { on = false; } };
+  return { problem: () => problem, okAt: () => okAt, stop: () => { on = false; } };
 }
 
 // Streams the formats, paced to the printer. Returns the labels sent.
@@ -215,15 +215,26 @@ async function sendFormats(device: any, formats: Format[], labelLenMm: number, o
   // Estimated time per label: feed (label + gap) at 3 ips, plus processing.
   // Slow writes (the printer's buffer was full) stretch it.
   let msPerLabel = ((labelLenMm + 3) / 76) * 1000 + 150;
-  let doneAt = 0, sent = 0, retried = false;
+  let doneAt = 0, sent = 0, retried = false, lastOk = performance.now();
+  // Estimated finish time of each design sent. When a job stops, the ones
+  // still due after the printer was last known alive (last good write or
+  // status reply) were probably still in it — lost if it was switched off.
+  const finish: number[] = [];
+  const stop = (msg: string, i: number, kind: ZebraStop) => {
+    const alive = Math.max(lastOk, watch.okAt());
+    let j = i;
+    while (j > 0 && finish[j - 1] > alive) j--;
+    const held = j < i ? { line: formats[j].line, copyStart: formats[j].copyStart, copies: formats.slice(j, i).reduce((a, f) => a + f.copies, 0) } : undefined;
+    return new ZebraError(msg, sent, formats[i], kind, held);
+  };
   const watch = watchPrinter(device);
   try {
     for (let i = 0; i < formats.length; i++) {
       const f = formats[i];
       for (;;) {
-        if (opts?.shouldStop?.()) throw new ZebraError("Stopped.", sent, f, "stopped");
+        if (opts?.shouldStop?.()) throw stop("Stopped.", i, "stopped");
         const p = watch.problem();
-        if (p) throw new ZebraError(`The printer reported a problem: ${p}.`, sent, f, "printer");
+        if (p) throw stop(`The printer reported a problem: ${p}.`, i, "printer");
         const wait = doneAt - performance.now() - LEAD_MS;
         if (wait <= 0) break;
         await sleep(Math.min(wait, 250));
@@ -242,10 +253,12 @@ async function sendFormats(device: any, formats: Format[], labelLenMm: number, o
           const p = watch.problem() || (await Promise.race([printerProblem(device).catch(() => null), sleep(8000).then(() => null)]));
           msg += p ? ` It says: ${p}.` : " Is it out of labels, paused, or is the lid open?";
         }
-        throw new ZebraError(msg, sent, f, e.kind);
+        throw stop(msg, i, e.kind);
       }
-      if (performance.now() - t0 > 1000) msPerLabel = Math.min(3000, msPerLabel * 1.3);
-      doneAt = Math.max(performance.now(), doneAt) + f.copies * msPerLabel;
+      lastOk = performance.now();
+      if (lastOk - t0 > 1000) msPerLabel = Math.min(3000, msPerLabel * 1.3);
+      doneAt = Math.max(lastOk, doneAt) + f.copies * msPerLabel;
+      finish[i] = doneAt;
       sent += f.copies;
       opts?.onProgress?.({ phase: "send", done: sent, total });
     }
@@ -301,7 +314,10 @@ export async function printSvgsDirect(device: any, labels: { svg: string; copies
 
 /** A direct print that stopped. `sent` labels were accepted by the printer
  *  (they print once it's ready — unless it's switched off); `at` is the first
- *  design not confirmed: line `at.line`, from its copy `at.copyStart`. */
+ *  design not accepted: line `at.line`, from its copy `at.copyStart`.
+ *  `held` = where the labels the printer was probably still holding begin
+ *  (`copies` of them, up to `at`) — the ones a switch-off loses. */
+type Spot = { line: number; copyStart: number; copies: number };
 export class ZebraError extends Error {
-  constructor(message: string, public sent: number, public at?: { line: number; copyStart: number; copies: number }, public kind: ZebraStop = "agent") { super(message); }
+  constructor(message: string, public sent: number, public at?: Spot, public kind: ZebraStop = "agent", public held?: Spot) { super(message); }
 }

@@ -322,26 +322,37 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
   }));
   overlay.querySelectorAll<HTMLButtonElement>("[data-lp-all]").forEach((b) => b.addEventListener("click", refreshInfo));
   // ▶ Start here — skip the lines above (already printed, e.g. after a print
-  // stopped part-way). Their copies are kept so ↺ can put them back.
-  // `firstCopies`: the start line itself keeps only that many (a stopped
-  // direct print got part-way through it).
+  // stopped part-way). `saved` keeps the batch's original copies (for every
+  // line touched) so ↺ can put them back.
   let skipped: { from: number; saved: number[] } | null = null;
   const skipBox = overlay.querySelector<HTMLElement>("#lp-skip")!;
-  const startAt = (from: number, note?: string, firstCopies?: number) => {
-    if (skipped) skipped.saved.forEach((c, i) => (copiesInput(i).value = String(c)));
-    const partial = firstCopies != null;
-    skipped = from > 0 || partial ? { from, saved: lines.slice(0, from + (partial ? 1 : 0)).map((_, i) => copiesAt(i)) } : null;
-    if (skipped) {
-      for (let i = 0; i < from; i++) copiesInput(i).value = "0";
-      if (partial) copiesInput(from).value = String(firstCopies);
-    }
+  const showSkip = (note?: string) => {
     skipBox.hidden = !skipped;
     if (skipped) {
-      const n = skipped.saved.reduce((a, c) => a + c, 0) - (partial ? firstCopies! : 0);
-      skipBox.innerHTML = `${note ? `${note}<br>` : ""}▶ Starting at <b>${escH(lineTitle(lines[from].item))}</b>${partial ? ` (its last ${firstCopies})` : ""} — skipping the ${n} label${n === 1 ? "" : "s"} before it. <button type="button" id="lp-unskip" style="font:inherit;font-size:0.76rem;padding:0;background:none;border:0;color:var(--cyan,#2ce6e0);cursor:pointer;text-decoration:underline;">↺ Put them back</button>`;
+      const { from, saved } = skipped;
+      const n = saved.reduce((a, c, i) => a + Math.max(0, c - copiesAt(i)), 0);
+      const partial = copiesAt(from) < (saved[from] ?? 0);
+      skipBox.innerHTML = `${note ? `${note}<br>` : ""}▶ Starting at <b>${escH(lineTitle(lines[from].item))}</b>${partial ? ` (its last ${copiesAt(from)})` : ""} — skipping ${n} label${n === 1 ? "" : "s"} of the batch. <button type="button" id="lp-unskip" style="font:inherit;font-size:0.76rem;padding:0;background:none;border:0;color:var(--cyan,#2ce6e0);cursor:pointer;text-decoration:underline;">↺ Put them back</button>`;
       skipBox.querySelector("#lp-unskip")!.addEventListener("click", () => startAt(0));
     }
     refreshInfo();
+  };
+  const startAt = (from: number) => {
+    if (skipped) skipped.saved.forEach((c, i) => (copiesInput(i).value = String(c)));
+    skipped = from > 0 ? { from, saved: lines.slice(0, from).map((_, i) => copiesAt(i)) } : null;
+    if (skipped) for (let i = 0; i < from; i++) copiesInput(i).value = "0";
+    showSkip();
+  };
+  // After a direct print stops: `run` = the copies that run was sent with.
+  // Lines before `from` went out, `from` keeps `first`, later lines keep the
+  // run's copies — never the batch's originals (some of those already printed
+  // in an earlier run). The originals stay in `saved` for ↺.
+  const carryOn = (run: number[], from: number, first: number, note: string) => {
+    const old = skipped?.saved ?? [];
+    const saved = Array.from({ length: Math.max(from + 1, old.length) }, (_, i) => (i < old.length ? old[i] : run[i]));
+    run.forEach((c, i) => (copiesInput(i).value = String(i < from ? 0 : i === from ? first : c)));
+    skipped = { from, saved };
+    showSkip(note);
   };
   overlay.querySelectorAll<HTMLButtonElement>("[data-lp-start]").forEach((b) => b.addEventListener("click", () => {
     startAt(Number(b.dataset.lpStart));
@@ -409,7 +420,7 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
       sending = true; stopAsked = false;
       btn.disabled = true; btn.textContent = "Preparing…";
       stopBtn.hidden = false; stopBtn.disabled = false; stopBtn.textContent = "■ Stop";
-      others().forEach((b) => (b.disabled = true));
+      others().forEach((b) => { b.disabled = true; b.style.opacity = "0.45"; });
       window.addEventListener("beforeunload", guard);
       try {
         const n = await printDirect(z.device, jobs, chosenTpl(), tune(), {
@@ -427,19 +438,27 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
           alert(`Direct print stopped: ${e?.message || e}\n\nCheck that the Zebra is on and ready (green light, labels loaded, lid closed) and is the default printer in the Zebra Browser Print menu-bar app.`);
           return;
         }
-        const sent = e.sent;
+        const sent = e.sent, held = e.held;
         const left = before.reduce((a, c) => a + c, 0) - sent;
-        const sentNote = ` The first ${sent} label${sent === 1 ? " is" : "s are"} at the printer — ${e.kind === "stopped" ? "they finish printing on their own" : "they print once it's ready (don't switch it off)"}.`;
-        const doubt = e.kind === "timeout" || e.kind === "agent" || e.kind === "unreachable"
-          ? ` The next ${e.at.copies} may have partly printed — check the last label that came out and lower the copies below if so.`
-          : "";
-        const note = `${e.kind === "stopped" ? "■" : "⚠"} ${escH(e.message)}${escH(sentNote)}${escH(doubt)} <b>${left} left</b> — fix the printer if needed, then press ⚡ again.`;
-        startAt(e.at.line, note, before[e.at.line] - e.at.copyStart);
+        const plural = (n: number) => `${n} label${n === 1 ? "" : "s"}`;
+        let from = e.at.line, first = before[e.at.line] - e.at.copyStart, more: string;
+        if (e.kind === "stopped") more = ` The first ${plural(sent)} are at the printer and finish on their own.`;
+        else if (e.kind === "disconnected" && held) {
+          // Switched off = the labels it was still holding are gone: carry on
+          // from those (a few repeats beat a gap).
+          from = held.line; first = before[held.line] - held.copyStart;
+          more = ` If it was switched off, the labels it hadn't printed yet are lost — up to the last ${plural(held.copies)} sent — so this starts from those. If some of them did come out, lower the copies below.`;
+        } else {
+          more = ` The first ${plural(sent)} are at the printer and print once it's fixed — don't switch it off${held ? ` (that would lose the last ${held.copies})` : ""}.`;
+          if (e.kind === "agent" || e.kind === "unreachable") more += ` The next ${plural(e.at.copies)} may have reached it too — if they come out, lower the copies below.`;
+        }
+        const note = `${e.kind === "stopped" ? "■" : "⚠"} ${escH(e.message)}${escH(more)} <b>${left} not sent</b> — fix the printer if needed, then press ⚡ again.`;
+        carryOn(before, from, first, note);
         skipBox.scrollIntoView({ block: "nearest" });
       } finally {
         sending = false;
         stopBtn.hidden = true;
-        others().forEach((b) => (b.disabled = false));
+        others().forEach((b) => { b.disabled = false; b.style.opacity = ""; });
         window.removeEventListener("beforeunload", guard);
       }
     });
