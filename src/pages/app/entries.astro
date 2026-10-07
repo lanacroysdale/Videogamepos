@@ -285,7 +285,7 @@ const pageData = {
           const loc = locById.get(v.location_id);
           return {
             item: {
-              title: p.title ?? "?", categoryName: p.platform || p.category?.name || "", region: regionTag(p.region_code ?? "", regions), condShort: condShort(v),
+              title: p.title ?? "?", categoryName: p.platform || p.category?.name || "", region: regionTag(p.region_code ?? "", regions), condShort: condShort(v), compCode: v.completeness_code || "",
               priceCents: v.price_cents ?? 0,
               invTypeName: (typeById.get(v.inventory_type_id) as any)?.name ?? "",
               invTypeId: v.inventory_type_id || "", invTypeIcon: (typeById.get(v.inventory_type_id) as any)?.icon ?? "",

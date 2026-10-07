@@ -59,6 +59,7 @@ const rowInfo = (p: any) => ({
   categoryName: p.variant?.product?.platform || p.variant?.product?.category?.name || "",
   region: regionTag(p.variant?.product?.region_code, regions),
   condShort: condShort(p.variant),
+  compCode: p.variant?.completeness_code || "",
   priceCents: p.variant?.price_cents ?? 0,
   suggestedCents: p.suggested_cents,
   quantity: p.variant?.quantity ?? 0,
@@ -185,7 +186,7 @@ const clientBlob = { rows: lblRows, templates: labelTemplates((settingsRow as an
     const r = rows[id];
     if (!r || !(r.labelCode || r.internalCode)) return null;
     return {
-      item: { title: r.title, categoryName: r.categoryName, region: r.region || "", condShort: r.condShort, priceCents: r.priceCents, invTypeName: r.invTypeName, invTypeId: r.invTypeId || "", invTypeIcon: r.invTypeIcon || "", locationKey: r.locationKey, internalCode: r.internalCode, labelCode: r.labelCode || "", sku: r.sku, storeName: blob.storeName },
+      item: { title: r.title, categoryName: r.categoryName, region: r.region || "", condShort: r.condShort, compCode: r.compCode || "", priceCents: r.priceCents, invTypeName: r.invTypeName, invTypeId: r.invTypeId || "", invTypeIcon: r.invTypeIcon || "", locationKey: r.locationKey, internalCode: r.internalCode, labelCode: r.labelCode || "", sku: r.sku, storeName: blob.storeName },
       defaultCopies: Math.max(1, r.quantity), // a price change re-tags every shelf copy
     };
   }

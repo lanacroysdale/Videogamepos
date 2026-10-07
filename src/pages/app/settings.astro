@@ -7,6 +7,7 @@ import { themeSettings, THEMES, SIDEBARS } from "../../lib/themeSettings";
 import { aiSettings, aiStatus, AI_PROVIDERS, AI_QUALITIES } from "../../lib/ai";
 import { barSettings } from "../../lib/barSettings";
 import { labelTemplates, labelTypeIconIds, LABEL_FONTS } from "../../lib/labels";
+import { compAbbrev } from "../../lib/conditionDisplay";
 import type { StoreDepartment, StoreInventoryType, StoreLocation, StoreRegion } from "../../lib/types";
 import { createSupabaseAdminClient } from "../../lib/supabase";
 import { sourceImportSettings } from "../../lib/sourceImport";
@@ -96,6 +97,10 @@ const sampleType = (lblTypeRows ?? []).find((t: any) => t.icon) ?? null;
 const { data: rgRows } = await supabase.from("store_regions").select("*").order("sort_order").order("name");
 const regionRows: StoreRegion[] = (rgRows as StoreRegion[]) ?? [];
 const regionsOn = regionRows.length > 0;
+// Completeness levels — the label designer's "Leave off the spine" boxes and
+// its "Preview as" picker (labels print compAbbrev: "CIB", "Loose"…).
+const { data: compRows } = await supabase.from("completeness_levels").select("code, label, sort_order, is_active").order("sort_order");
+const compLevels = ((compRows ?? []) as any[]).filter((c) => c.is_active !== false);
 const aiSt = aiStatus(ai.provider);
 const aiProviderLabel = aiSt.provider === "gemini" ? "Gemini" : aiSt.provider === "anthropic" ? "Claude" : "";
 const minPriceDollars = (ls.lowStockMinPriceCents / 100).toFixed(2);
@@ -492,6 +497,12 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
                   <label title={k === "typeIcon" ? "The inventory type's icon, bottom-right — for the types ticked under Inventory types → Label icon" : undefined}><input type="checkbox" data-ltshow={k} /> {k === "invType" ? "Inv. type" : k === "sku" ? "SKU" : k === "spineText" ? "Tagline" : k === "spineCondition" ? "Condition on spine" : k === "typeIcon" ? "Type icon" : k[0].toUpperCase() + k.slice(1)}</label>
                 ))}
               </div>
+              {compLevels.length > 0 && (
+                <div class="lt-skip" id="lt-skiprow" title="These conditions still print on the face — just not on the spine (a loose cart is obviously loose)">
+                  <span class="lt-skip-h">Leave off the spine:</span>
+                  {compLevels.map((c) => <label><input type="checkbox" data-ltskip={c.code} /> {compAbbrev(c.code, compLevels)}</label>)}
+                </div>
+              )}
               <label class="lt-num" title="How big the inventory type icon prints in the bottom-right corner">Type icon mm<input id="lt-ticon" type="number" min="1.5" max="8" step="0.5" /></label>
               <div class="lt-toggles" style="border-top:1px solid var(--border);padding-top:0.5rem;">
                 <label><input type="checkbox" id="lt-bctext" /> Code digits</label>
@@ -505,6 +516,9 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
         <div class="lt-right">
           <div class="dm-field" style="min-width:0;">Preview
             <div id="lt-preview" class="lt-preview"></div>
+            {compLevels.length > 0 && (
+              <label class="lt-sel lt-pcond">Preview as<select id="lt-pcond">{compLevels.map((c) => <option value={c.code} data-short={compAbbrev(c.code, compLevels)} selected={c.code === "CIB"}>{c.label}</option>)}</select></label>
+            )}
             <p id="lt-iconnote" class="muted-2" hidden style="margin:0.3rem 0 0;font-size:0.78rem;">⚠ The type icon doesn't fit beside the barcode on this label size — it's left off (it never prints over the price).</p>
           </div>
           <p id="lt-warn" class="muted-2" style="color:var(--magenta);" hidden>⚠ Barcode won’t fit at a scannable density — widen the label or shrink the spine.</p>
@@ -1035,6 +1049,12 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
   .lt-toggles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.35rem 0.8rem; }
   .lt-toggles label { display: flex; align-items: center; gap: 0.45rem; font-size: 0.85rem; font-weight: 500; color: var(--text, #e8ecf1); white-space: nowrap; }
   .lt-toggles input { width: 1.05rem; height: 1.05rem; accent-color: var(--cyan, #2ce6e0); flex: none; margin: 0; }
+  .lt-skip { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem 0.8rem; font-size: 0.85rem; }
+  .lt-skip[hidden] { display: none; }
+  .lt-skip-h { font-size: 0.74rem; font-weight: 600; color: var(--muted, #9aa3ad); }
+  .lt-skip label { display: flex; align-items: center; gap: 0.4rem; font-weight: 500; color: var(--text, #e8ecf1); white-space: nowrap; }
+  .lt-skip input { width: 1.05rem; height: 1.05rem; accent-color: var(--cyan, #2ce6e0); flex: none; margin: 0; }
+  .lt-pcond { margin-top: 0.45rem; justify-self: start; }
 </style>
 
 <script>
@@ -1617,6 +1637,12 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       internalCode: "TL2C3F5A7B9D", labelCode: "1000000042", sku: "SNES-MMX3", storeName: blob.storeName || "TimeLag",
     };
     const shows = [...ltPanel.querySelectorAll<HTMLInputElement>("[data-ltshow]")];
+    const skips = [...ltPanel.querySelectorAll<HTMLInputElement>("[data-ltskip]")];
+    // The boxes only matter while the spine prints a condition.
+    const skipRowSync = (t: any) => {
+      const row = document.getElementById("lt-skiprow");
+      if (row) row.hidden = !t.show.spineCondition || t.spine === "none";
+    };
     // A type's "Label icon" ticked / unticked in Inventory types: the sample
     // shows that type (or no icon once none is left).
     window.addEventListener("tl-label-icon", (e: any) => {
@@ -1653,6 +1679,8 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       (document.getElementById("lt-logoclear") as HTMLElement).hidden = !t.logoUrl;
       document.getElementById("lt-logostatus")!.textContent = t.logoUrl ? "logo set ✓" : "";
       shows.forEach((cb) => (cb.checked = !!t.show[cb.dataset.ltshow!]));
+      skips.forEach((cb) => (cb.checked = (t.spineCondSkip ?? ["L"]).includes(cb.dataset.ltskip!)));
+      skipRowSync(t);
       $("lt-bctext").checked = !!t.barcodeShowText;
       $("lt-2lines").checked = t.titleMaxLines === 2;
       $("lt-dropthe").checked = t.titleDropThe !== false;
@@ -1678,6 +1706,10 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       t.typeIconMm = Number($("lt-ticon").value) || t.typeIconMm || 3;
       t.logoRotate = ($("lt-logorot") as unknown as HTMLSelectElement).value === "sideways" ? "sideways" : "upright";
       shows.forEach((cb) => (t.show[cb.dataset.ltshow!] = cb.checked));
+      // Codes with no box here (a retired level) keep their saved setting.
+      const boxed = new Set(skips.map((cb) => cb.dataset.ltskip!));
+      t.spineCondSkip = [...(t.spineCondSkip ?? ["L"]).filter((c: string) => !boxed.has(c)), ...skips.filter((cb) => cb.checked).map((cb) => cb.dataset.ltskip!)];
+      skipRowSync(t);
       t.barcodeShowText = $("lt-bctext").checked;
       t.titleMaxLines = $("lt-2lines").checked ? 2 : 1;
       t.titleDropThe = $("lt-dropthe").checked;
@@ -1690,6 +1722,9 @@ const freeShipDollars = (fs.freeShipThresholdCents / 100).toFixed(2);
       // The sample's type is one whose icon prints (store-wide list), so the
       // corner shows on every template — including ones added this session.
       const withIcon = { ...t, typeIconIds: SAMPLE.invTypeId ? [SAMPLE.invTypeId] : [] };
+      // "Preview as" — e.g. Loose, to see it leave the spine.
+      const pc = (document.getElementById("lt-pcond") as HTMLSelectElement | null)?.selectedOptions[0];
+      if (pc) Object.assign(SAMPLE, { compCode: pc.value, condShort: `${pc.dataset.short || pc.value} · ★★★` });
       const draw = () => {
         try {
           const svg = renderLabelSvg(withIcon, SAMPLE, { preview: true });
