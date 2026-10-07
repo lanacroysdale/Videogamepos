@@ -174,12 +174,13 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
         </select>
       </label>
       <div style="display:grid;grid-template-columns:minmax(0,1fr);gap:0.5rem;max-height:44vh;overflow-y:auto;overflow-x:hidden;border-top:1px solid var(--border,#333);padding-top:0.55rem;">
+        <div id="lp-skip" hidden style="padding:0.4rem 0.55rem;font-size:0.78rem;background:rgba(44,230,224,.08);border:1px solid rgba(44,230,224,.3);"></div>
         <div style="display:flex;justify-content:space-between;font-size:0.7rem;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:var(--muted-2,#888);"><span>Label</span><span>Copies</span></div>
         ${lines.map((l, i) => `
-          <div style="display:flex;flex-wrap:wrap;align-items:center;gap:0.4rem 0.6rem;min-width:0;">
+          <div data-lp-row="${i}" style="display:flex;flex-wrap:wrap;align-items:center;gap:0.4rem 0.6rem;min-width:0;">
             <div style="flex:1 1 11rem;min-width:0;font-size:0.88rem;line-height:1.3;overflow-wrap:break-word;">
               ${escH(lineTitle(l.item))}
-              <div style="color:var(--muted-2,#888);font-size:0.76rem;">${escH(l.item.condShort)}${l.allCopies != null ? ` · ${l.allCopies} in stock` : ""}${l.hint ? `<span style="color:var(--magenta,#ff49d0);"> · ${escH(l.hint)}</span>` : ""}</div>
+              <div style="color:var(--muted-2,#888);font-size:0.76rem;">${escH(l.item.condShort)}${l.allCopies != null ? ` · ${l.allCopies} in stock` : ""}${l.hint ? `<span style="color:var(--magenta,#ff49d0);"> · ${escH(l.hint)}</span>` : ""}<span data-lp-range="${i}"></span>${i > 0 ? ` <button data-lp-start="${i}" type="button" title="Print from this line on — the lines above get 0 copies (they already printed)" style="font:inherit;font-size:0.72rem;padding:0 0.2rem;background:none;border:0;color:var(--cyan,#2ce6e0);cursor:pointer;text-decoration:underline;">▶ Start here</button>` : ""}</div>
             </div>
             <div style="flex:none;margin-left:auto;display:flex;align-items:center;gap:0.3rem;">
               ${l.allCopies != null && l.allCopies > 1 ? `<button data-lp-all="${i}" type="button" title="A label for every copy in stock" style="flex:none;font:inherit;font-size:0.76rem;font-weight:700;padding:0.3rem 0.55rem;background:transparent;color:var(--cyan,#2ce6e0);border:1px solid var(--cyan,#2ce6e0);cursor:pointer;white-space:nowrap;">All ${l.allCopies}</button>` : ""}
@@ -288,10 +289,20 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
   // Live label count on the Print button + the driver paper size to match —
   // the "why did it print 8 pages" and "why is it tiny" answers, up front.
   const inch = (mm: number) => (mm / 25.4).toFixed(2).replace(/0$/, "");
+  const copiesInput = (i: number) => overlay.querySelector<HTMLInputElement>(`[data-lp-copies="${i}"]`)!;
+  const copiesAt = (i: number) => Math.max(0, Math.round(Number(copiesInput(i).value)) || 0);
   const refreshInfo = () => {
     const t = chosenTpl();
     const sideways = rotDeg() === 90 || rotDeg() === 270;
-    const n = lines.reduce((a, _, i) => a + Math.max(0, Math.round(Number(overlay.querySelector<HTMLInputElement>(`[data-lp-copies="${i}"]`)!.value)) || 0), 0);
+    // Each line's label numbers in print order (#4–6) — what "▶ Start here"
+    // and a stopped print talk about.
+    let n = 0;
+    lines.forEach((_, i) => {
+      const c = copiesAt(i);
+      overlay.querySelector(`[data-lp-range="${i}"]`)!.textContent = c ? ` · #${n + 1}${c > 1 ? `–${n + c}` : ""}` : "";
+      overlay.querySelector<HTMLElement>(`[data-lp-row="${i}"]`)!.style.opacity = c ? "" : "0.5";
+      n += c;
+    });
     overlay.querySelector("#lp-browser")!.textContent = `🖨 Print ${n} label${n === 1 ? "" : "s"}`;
     // Talk in the LABEL's terms — the driver's paper picker lists it as
     // W×H (e.g. "2.25x1.25") regardless of which way the page is composed.
@@ -309,11 +320,28 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
     refreshInfo();
   }));
   overlay.querySelectorAll<HTMLButtonElement>("[data-lp-all]").forEach((b) => b.addEventListener("click", refreshInfo));
+  // ▶ Start here — skip the lines above (already printed, e.g. after a print
+  // stopped part-way). Their copies are kept so ↺ can put them back.
+  let skipped: { from: number; saved: number[] } | null = null;
+  const skipBox = overlay.querySelector<HTMLElement>("#lp-skip")!;
+  const startAt = (from: number, note?: string) => {
+    if (skipped) skipped.saved.forEach((c, i) => (copiesInput(i).value = String(c)));
+    skipped = from > 0 ? { from, saved: lines.slice(0, from).map((_, i) => copiesAt(i)) } : null;
+    if (skipped) for (let i = 0; i < from; i++) copiesInput(i).value = "0";
+    skipBox.hidden = !skipped;
+    if (skipped) {
+      const n = skipped.saved.reduce((a, c) => a + c, 0);
+      skipBox.innerHTML = `${note ? `${note}<br>` : ""}▶ Starting at <b>${escH(lineTitle(lines[from].item))}</b> — skipping the ${n} label${n === 1 ? "" : "s"} above. <button type="button" id="lp-unskip" style="font:inherit;font-size:0.76rem;padding:0;background:none;border:0;color:var(--cyan,#2ce6e0);cursor:pointer;text-decoration:underline;">↺ Put them back</button>`;
+      skipBox.querySelector("#lp-unskip")!.addEventListener("click", () => startAt(0));
+    }
+    refreshInfo();
+  };
+  overlay.querySelectorAll<HTMLButtonElement>("[data-lp-start]").forEach((b) => b.addEventListener("click", () => {
+    startAt(Number(b.dataset.lpStart));
+    skipBox.scrollIntoView({ block: "nearest" });
+  }));
   const gatherJobs = (): PrintJob[] | null => {
-    const jobs: PrintJob[] = lines.map((l, i) => ({
-      item: l.item,
-      copies: Math.max(0, Math.round(Number(overlay.querySelector<HTMLInputElement>(`[data-lp-copies="${i}"]`)!.value)) || 0),
-    }));
+    const jobs: PrintJob[] = lines.map((l, i) => ({ item: l.item, copies: copiesAt(i) }));
     if (!jobs.some((j) => j.copies > 0)) { alert("Set at least one copy."); return null; }
     return jobs;
   };
