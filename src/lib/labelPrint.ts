@@ -7,7 +7,7 @@
 // (CSS vars from app.css only), so it drops into any POS page.
 import { renderLabelSvg, ensureLabelFont, DEFAULT_TEMPLATE, type LabelTemplate, type LabelItem } from "./labels";
 import { labelsToPdf, fontStyleTag, inlineLogo, escAttr, snapToInchGrid } from "./labelPdf";
-import { findZebraPrinter, printDirect } from "./zebraDirect";
+import { findZebraPrinter, printDirect, ZebraError } from "./zebraDirect";
 
 export type PrintJob = { item: LabelItem; copies: number };
 
@@ -231,7 +231,8 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
       <p style="margin:0;color:var(--muted-2,#888);font-size:0.72rem;">Print opens a ready-made PDF in a new tab — press <b>⌘P</b> there and print at 100%. Every page is exactly one label; what you see is what prints.</p>
     </div>`;
 
-  const close = () => { overlay.remove(); opts?.onClose?.(); };
+  let sending = false; // a direct print is streaming — the dialog stays put
+  const close = () => { if (sending) return; overlay.remove(); opts?.onClose?.(); };
   overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
   overlay.querySelector("#lp-cancel")!.addEventListener("click", close);
   overlay.querySelectorAll<HTMLButtonElement>("[data-lp-all]").forEach((b) =>
@@ -322,16 +323,22 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
   overlay.querySelectorAll<HTMLButtonElement>("[data-lp-all]").forEach((b) => b.addEventListener("click", refreshInfo));
   // ▶ Start here — skip the lines above (already printed, e.g. after a print
   // stopped part-way). Their copies are kept so ↺ can put them back.
+  // `firstCopies`: the start line itself keeps only that many (a stopped
+  // direct print got part-way through it).
   let skipped: { from: number; saved: number[] } | null = null;
   const skipBox = overlay.querySelector<HTMLElement>("#lp-skip")!;
-  const startAt = (from: number, note?: string) => {
+  const startAt = (from: number, note?: string, firstCopies?: number) => {
     if (skipped) skipped.saved.forEach((c, i) => (copiesInput(i).value = String(c)));
-    skipped = from > 0 ? { from, saved: lines.slice(0, from).map((_, i) => copiesAt(i)) } : null;
-    if (skipped) for (let i = 0; i < from; i++) copiesInput(i).value = "0";
+    const partial = firstCopies != null;
+    skipped = from > 0 || partial ? { from, saved: lines.slice(0, from + (partial ? 1 : 0)).map((_, i) => copiesAt(i)) } : null;
+    if (skipped) {
+      for (let i = 0; i < from; i++) copiesInput(i).value = "0";
+      if (partial) copiesInput(from).value = String(firstCopies);
+    }
     skipBox.hidden = !skipped;
     if (skipped) {
-      const n = skipped.saved.reduce((a, c) => a + c, 0);
-      skipBox.innerHTML = `${note ? `${note}<br>` : ""}▶ Starting at <b>${escH(lineTitle(lines[from].item))}</b> — skipping the ${n} label${n === 1 ? "" : "s"} above. <button type="button" id="lp-unskip" style="font:inherit;font-size:0.76rem;padding:0;background:none;border:0;color:var(--cyan,#2ce6e0);cursor:pointer;text-decoration:underline;">↺ Put them back</button>`;
+      const n = skipped.saved.reduce((a, c) => a + c, 0) - (partial ? firstCopies! : 0);
+      skipBox.innerHTML = `${note ? `${note}<br>` : ""}▶ Starting at <b>${escH(lineTitle(lines[from].item))}</b>${partial ? ` (its last ${firstCopies})` : ""} — skipping the ${n} label${n === 1 ? "" : "s"} before it. <button type="button" id="lp-unskip" style="font:inherit;font-size:0.76rem;padding:0;background:none;border:0;color:var(--cyan,#2ce6e0);cursor:pointer;text-decoration:underline;">↺ Put them back</button>`;
       skipBox.querySelector("#lp-unskip")!.addEventListener("click", () => startAt(0));
     }
     refreshInfo();
@@ -380,21 +387,60 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
     btn.style.cssText = "font:inherit;font-weight:700;padding:0.45rem 0.9rem;background:var(--green,#80ff72);color:#0a2506;border:1px solid var(--green,#80ff72);cursor:pointer;";
     btn.textContent = `⚡ Direct to ${z.name}`;
     row.prepend(btn);
+    // Streams paced to the printer (zebraDirect). While it runs the other
+    // buttons are off, ■ Stop ends it after the label being sent, and leaving
+    // the page asks first. If it stops, the copies are set up to carry on
+    // from the first label the printer didn't take.
+    const stopBtn = document.createElement("button");
+    stopBtn.type = "button";
+    stopBtn.hidden = true;
+    stopBtn.style.cssText = "font:inherit;font-weight:700;padding:0.45rem 0.9rem;background:transparent;color:var(--text,#eee);border:1px solid var(--border-strong,#444);cursor:pointer;";
+    stopBtn.textContent = "■ Stop";
+    btn.after(stopBtn);
+    let stopAsked = false;
+    stopBtn.addEventListener("click", () => { stopAsked = true; stopBtn.disabled = true; stopBtn.textContent = "Stopping…"; });
+    const guard = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
+    const others = () => [...overlay.querySelectorAll<HTMLButtonElement | HTMLInputElement>("#lp-browser, #lp-print, #lp-test, #lp-cancel, [data-lp-start], [data-lp-step], [data-lp-all], #lp-unskip, [data-lp-copies]")];
     btn.addEventListener("click", async () => {
       const jobs = gatherJobs();
       if (!jobs) return;
       const orig = btn.textContent;
-      btn.disabled = true; btn.textContent = "Printing…";
+      const before = jobs.map((j) => j.copies);
+      sending = true; stopAsked = false;
+      btn.disabled = true; btn.textContent = "Preparing…";
+      stopBtn.hidden = false; stopBtn.disabled = false; stopBtn.textContent = "■ Stop";
+      others().forEach((b) => (b.disabled = true));
+      window.addEventListener("beforeunload", guard);
       try {
-        const n = await printDirect(z.device, jobs, chosenTpl(), tune());
+        const n = await printDirect(z.device, jobs, chosenTpl(), tune(), {
+          shouldStop: () => stopAsked,
+          onProgress: (p) => { btn.textContent = p.phase === "render" ? `Preparing ${p.done}/${p.total}…` : `Sending ${p.done}/${p.total}…`; },
+        });
         btn.textContent = `✓ Sent ${n} label${n === 1 ? "" : "s"}`;
-        setTimeout(close, 900);
+        sending = false;
+        setTimeout(close, 1200);
       } catch (e: any) {
-        const sent = Number(e?.sent) || 0;
-        alert(`Direct print stopped${sent ? ` after ${sent} label${sent === 1 ? "" : "s"}` : ""}: ${e.message}\n\n`
-          + "Check that the Zebra is on and ready (green light, not paused, labels loaded, lid closed), and that it's the default printer in the Zebra Browser Print menu-bar app."
-          + (sent ? `\n\nThe first ${sent} label${sent === 1 ? " was" : "s were"} already sent — remove those from the list before printing again.` : ""));
+        sending = false;
         btn.disabled = false; btn.textContent = orig;
+        if (e instanceof ZebraError && e.kind === "stopped" && !e.sent) return; // stopped before anything went out
+        if (!(e instanceof ZebraError) || !e.at || !e.sent) {
+          alert(`Direct print stopped: ${e?.message || e}\n\nCheck that the Zebra is on and ready (green light, labels loaded, lid closed) and is the default printer in the Zebra Browser Print menu-bar app.`);
+          return;
+        }
+        const sent = e.sent;
+        const left = before.reduce((a, c) => a + c, 0) - sent;
+        const sentNote = ` The first ${sent} label${sent === 1 ? " is" : "s are"} at the printer — ${e.kind === "stopped" ? "they finish printing on their own" : "they print once it's ready (don't switch it off)"}.`;
+        const doubt = e.kind === "timeout" || e.kind === "agent" || e.kind === "unreachable"
+          ? ` The next ${e.at.copies} may have partly printed — check the last label that came out and lower the copies below if so.`
+          : "";
+        const note = `${e.kind === "stopped" ? "■" : "⚠"} ${escH(e.message)}${escH(sentNote)}${escH(doubt)} <b>${left} left</b> — fix the printer if needed, then press ⚡ again.`;
+        startAt(e.at.line, note, before[e.at.line] - e.at.copyStart);
+        skipBox.scrollIntoView({ block: "nearest" });
+      } finally {
+        sending = false;
+        stopBtn.hidden = true;
+        others().forEach((b) => (b.disabled = false));
+        window.removeEventListener("beforeunload", guard);
       }
     });
   });

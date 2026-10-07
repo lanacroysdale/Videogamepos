@@ -337,11 +337,13 @@ const blob = { sizes, saved: sanitizeSaved((row?.settings as any)?.labelMakerSav
     try {
       const svg = await printableSvg(s);
       const t = stickerTune(s);
-      const n = await printSvgsDirect(zebra.device, [{ svg, copies: copies() }], { widthMm: s.widthMm, heightMm: s.heightMm }, { scalePct: t.scalePct, nudgeXMm: t.nudgeXMm, nudgeYMm: t.nudgeYMm });
+      const n = await printSvgsDirect(zebra.device, [{ svg, copies: copies() }], { widthMm: s.widthMm, heightMm: s.heightMm }, { scalePct: t.scalePct, nudgeXMm: t.nudgeXMm, nudgeYMm: t.nudgeYMm },
+        { onProgress: (p) => { if (p.total > 5) btn.textContent = `Sending ${p.done}/${p.total}…`; } });
       btn.textContent = `✓ Sent ${n}`;
       setTimeout(() => { btn.textContent = "⚡ Print to Zebra"; }, 2000);
     } catch (e: any) {
-      alert(e instanceof ZebraError ? `${e.message}${e.sent ? ` (${e.sent} already printed)` : ""}\n\nCheck that the Zebra is on and ready, and that it's the default printer in Zebra Browser Print.` : e.message);
+      btn.textContent = "⚡ Print to Zebra";
+      alert(e instanceof ZebraError ? `${e.message}${e.sent ? ` (${e.sent} already sent to the printer — they print once it's ready)` : ""}\n\nCheck that the Zebra is on and ready, and that it's the default printer in Zebra Browser Print.` : e.message);
     } finally { btn.disabled = false; }
   });
 
