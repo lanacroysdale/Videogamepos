@@ -120,66 +120,204 @@ function runCode(n: number): string {
   return s;
 }
 
-// Render every job and hand the ZPL to the agent's chosen printer.
-export async function printDirect(device: any, jobs: ZebraJob[], tpl: LabelTemplate, tune?: ZebraTune): Promise<number> {
-  const real = jobs.filter((j) => j.copies > 0);
-  if (!real.length) return 0;
+// ---- Sending ----
+// The macOS agent (Browser Print 1.3.x) writes each POST to the printer as ONE
+// USB transfer and gives up after 5 s ("write timeout"). The printer only
+// takes bytes while its receive buffer has room, so pouring 48 KB batches in
+// as fast as the agent answered filled that buffer, the next write timed out
+// and the rest of a 197-label job was never sent (2026-10-06). So now:
+//  • one label design per write, at most COPIES_PER_FORMAT copies — freeing
+//    room for the next never takes long, and at most a few labels are ever
+//    in doubt when something stops;
+//  • paced — only about LEAD_MS of printing waits in the printer, so its
+//    buffer never fills and "sent" stays close to "printed";
+//  • a status check (~HQES) runs alongside: out of labels, head open or
+//    paused stops the sending at once, with the reason.
+const COPIES_PER_FORMAT = 3;
+const LEAD_MS = 3000;
+
+/** One ^XA…^XZ write: `copies` labels of dialog line `line`, starting at that line's copy `copyStart`. */
+type Format = { line: number; copyStart: number; copies: number; zpl: string };
+export type DirectProgress = { phase: "render" | "send"; done: number; total: number };
+export type DirectOpts = { onProgress?: (p: DirectProgress) => void; shouldStop?: () => boolean };
+export type ZebraStop = "printer" | "timeout" | "disconnected" | "unreachable" | "agent" | "stopped" | "render";
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+class AgentError extends Error {
+  constructor(public kind: ZebraStop, message: string) { super(message); }
+}
+async function agentPost(path: "write" | "read", body: any, timeoutMs: number): Promise<string> {
+  let r: Response;
+  try {
+    r = await fetch(`${AGENT}/${path}`, { method: "POST", body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) });
+  } catch (e: any) {
+    throw e?.name === "TimeoutError"
+      ? new AgentError("unreachable", "Zebra Browser Print stopped answering.")
+      : new AgentError("unreachable", "Couldn't reach Zebra Browser Print — is it running (menu-bar app)?");
+  }
+  const text = await r.text().catch(() => "");
+  if (r.ok) return text;
+  const why = text.trim().slice(0, 200);
+  if (/write timeout/i.test(why)) throw new AgentError("timeout", "The printer stopped taking labels.");
+  if (/no such device|unable to establish|pipe error|usb error|disconnect/i.test(why)) throw new AgentError("disconnected", "The printer was disconnected or turned off.");
+  throw new AgentError("agent", `Zebra Browser Print couldn't send to the printer (${r.status}${why ? `: ${why}` : ""}).`);
+}
+
+/** ~HQES "ERRORS: f gggggggg hhhhhhhh" → "" (no error), a reason, or null (no reply to parse). */
+export function parseHqes(text: string): string | null {
+  const m = [...text.matchAll(/ERRORS:\s*(\d)\s+([0-9A-Fa-f]{8})\s+([0-9A-Fa-f]{8})/g)].pop();
+  if (!m) return null;
+  const g1 = parseInt(m[3], 16), g2 = parseInt(m[2], 16);
+  if (m[1] === "0" && !g1 && !g2) return "";
+  const why: string[] = [];
+  if (g1 & 0x1) why.push("out of labels");
+  if (g1 & 0x2) why.push("out of ribbon");
+  if (g1 & 0x4) why.push("the lid / print head is open");
+  if (g1 & 0x8) why.push("cutter fault");
+  if (g1 & 0x30) why.push("overheated");
+  if (g1 & 0x10000) why.push("paused");
+  return why.length ? why.join(", ") : "printer error";
+}
+// One status round trip. Each /read costs the macOS agent 1–3.4 s.
+async function printerProblem(device: any): Promise<string | null> {
+  await agentPost("write", { device, data: "~HQES" }, 6000);
+  let text = "";
+  for (let k = 0; k < 2; k++) {
+    text += await agentPost("read", { device }, 6000);
+    const r = parseHqes(text);
+    if (r !== null) return r;
+  }
+  return null;
+}
+// Polls the printer while a job is sent. Turns itself off when the printer
+// never answers (status reads aren't available on every setup).
+function watchPrinter(device: any) {
+  let on = true, problem = "", misses = 0, okAt = 0;
+  (async () => {
+    // Drop any late reply from an earlier check first, so an old "out of
+    // labels" can't stop a fresh job.
+    await agentPost("read", { device }, 6000).catch(() => "");
+    while (on && misses < 2) {
+      const r = await printerProblem(device).catch(() => null);
+      if (!on) break;
+      if (r === null) misses++;
+      else { misses = 0; if (r) { problem = r; break; } okAt = performance.now(); }
+      await sleep(4000);
+    }
+  })();
+  return { problem: () => problem, okAt: () => okAt, stop: () => { on = false; } };
+}
+
+// Streams the formats, paced to the printer. Returns the labels sent.
+async function sendFormats(device: any, formats: Format[], labelLenMm: number, opts?: DirectOpts): Promise<number> {
+  const total = formats.reduce((a, f) => a + f.copies, 0);
+  // Estimated time per label: feed (label + gap) at 3 ips, plus processing.
+  // Slow writes (the printer's buffer was full) stretch it.
+  let msPerLabel = ((labelLenMm + 3) / 76) * 1000 + 150;
+  let doneAt = 0, sent = 0, retried = false, lastOk = performance.now();
+  // Estimated finish time of each design sent. When a job stops, the ones
+  // still due after the printer was last known alive (last good write or
+  // status reply) were probably still in it — lost if it was switched off.
+  const finish: number[] = [];
+  const stop = (msg: string, i: number, kind: ZebraStop) => {
+    const alive = Math.max(lastOk, watch.okAt());
+    let j = i;
+    while (j > 0 && finish[j - 1] > alive) j--;
+    const held = j < i ? { line: formats[j].line, copyStart: formats[j].copyStart, copies: formats.slice(j, i).reduce((a, f) => a + f.copies, 0) } : undefined;
+    return new ZebraError(msg, sent, formats[i], kind, held);
+  };
+  const watch = watchPrinter(device);
+  try {
+    for (let i = 0; i < formats.length; i++) {
+      const f = formats[i];
+      for (;;) {
+        if (opts?.shouldStop?.()) throw stop("Stopped.", i, "stopped");
+        const p = watch.problem();
+        if (p) throw stop(`The printer reported a problem: ${p}.`, i, "printer");
+        const wait = doneAt - performance.now() - LEAD_MS;
+        if (wait <= 0) break;
+        await sleep(Math.min(wait, 250));
+      }
+      const t0 = performance.now();
+      try {
+        // ~JX first: drops a half-received design a stopped job may have left behind.
+        await agentPost("write", { device, data: (i === 0 ? "~JX" : "") + f.zpl }, 20000);
+      } catch (e: any) {
+        if (!(e instanceof AgentError)) throw e;
+        // Nothing reached the printer yet and the connection was stale
+        // (printer re-plugged / woke up): one quiet retry.
+        if (sent === 0 && !retried && (e.kind === "disconnected" || e.kind === "unreachable")) { retried = true; await sleep(1000); i--; continue; }
+        let msg = e.message;
+        if (e.kind === "timeout") {
+          const p = watch.problem() || (await Promise.race([printerProblem(device).catch(() => null), sleep(8000).then(() => null)]));
+          msg += p ? ` It says: ${p}.` : " Is it out of labels, paused, or is the lid open?";
+        }
+        throw stop(msg, i, e.kind);
+      }
+      lastOk = performance.now();
+      if (lastOk - t0 > 1000) msPerLabel = Math.min(3000, msPerLabel * 1.3);
+      doneAt = Math.max(lastOk, doneAt) + f.copies * msPerLabel;
+      finish[i] = doneAt;
+      sent += f.copies;
+      opts?.onProgress?.({ phase: "send", done: sent, total });
+    }
+    return sent;
+  } finally { watch.stop(); }
+}
+
+// A line's copies as designs of one bitmap, `per` copies at most each.
+function formatsFor(line: number, bitmap: { hex: string; rowBytes: number; rows: number; pw: number }, copies: number, per = COPIES_PER_FORMAT): Format[] {
+  const out: Format[] = [];
+  for (let c = 0; c < copies; c += per) {
+    const n = Math.min(per, copies - c);
+    out.push({ line, copyStart: c, copies: n, zpl: buildZpl(bitmap, n) });
+  }
+  return out;
+}
+
+// Render every job first (a render failure stops before label 1, never
+// mid-job), then stream them. `line` in a ZebraError is the index in `jobs`.
+export async function printDirect(device: any, jobs: ZebraJob[], tpl: LabelTemplate, tune?: ZebraTune, opts?: DirectOpts): Promise<number> {
+  const total = jobs.reduce((a, j) => a + Math.max(0, j.copies), 0);
+  if (!total) return 0;
   await ensureLabelFont(tpl);
   const deps = { styleTag: await fontStyleTag(tpl), logoData: tpl.logoUrl ? await inlineLogo(tpl.logoUrl) : "" };
-  // Sent in small batches, one after another: one huge request for a whole
-  // entry is what the agent refuses, and a failure part-way says how far it got.
-  const BATCH_BYTES = 48_000;
-  let zpl = "", inBatch = 0, sent = 0, queued = 0;
-  const flush = async () => {
-    if (!zpl) return;
-    const r = await fetch(`${AGENT}/write`, { method: "POST", body: JSON.stringify({ device, data: zpl }), signal: AbortSignal.timeout(30000) })
-      .catch((e) => { throw new ZebraError(`Couldn't reach Zebra Browser Print (${e?.message || e}).`, sent); });
-    if (!r.ok) {
-      const why = (await r.text().catch(() => "")).trim().slice(0, 200);
-      throw new ZebraError(`Zebra Browser Print couldn't send to the printer (${r.status}${why ? `: ${why}` : ""}).`, sent);
+  const formats: Format[] = [];
+  let ready = 0;
+  for (let i = 0; i < jobs.length; i++) {
+    const j = jobs[i];
+    if (j.copies <= 0) continue;
+    if (opts?.shouldStop?.()) throw new ZebraError("Stopped.", 0, undefined, "stopped");
+    try {
+      formats.push(...formatsFor(i, await labelToZplBitmap(tpl, j.item, tune, deps), j.copies));
+    } catch (e: any) {
+      throw new ZebraError(`Couldn't draw the label for “${j.item.title}” (${e?.message || e}). Nothing was sent.`, 0, undefined, "render");
     }
-    sent += inBatch; zpl = ""; inBatch = 0;
-  };
-  for (const j of real) {
-    const bmp = await labelToZplBitmap(tpl, j.item, tune, deps);
-    const one = buildZpl(bmp, j.copies);
-    if (zpl && zpl.length + one.length > BATCH_BYTES) await flush();
-    zpl += one;
-    inBatch += Math.min(500, j.copies);
-    queued += Math.min(500, j.copies);
+    ready += j.copies;
+    opts?.onProgress?.({ phase: "render", done: ready, total });
   }
-  await flush();
-  return queued;
+  return sendFormats(device, formats, tpl.heightMm, opts);
 }
 
-/** Ready-made label SVGs (Label maker) straight to the Zebra — same batching. */
-export async function printSvgsDirect(device: any, labels: { svg: string; copies: number }[], size: { widthMm: number; heightMm: number }, tune?: ZebraTune): Promise<number> {
-  const real = labels.filter((l) => l.copies > 0);
-  if (!real.length) return 0;
-  const BATCH_BYTES = 48_000;
-  let zpl = "", inBatch = 0, sent = 0, queued = 0;
-  const flush = async () => {
-    if (!zpl) return;
-    const r = await fetch(`${AGENT}/write`, { method: "POST", body: JSON.stringify({ device, data: zpl }), signal: AbortSignal.timeout(30000) })
-      .catch((e) => { throw new ZebraError(`Couldn't reach Zebra Browser Print (${e?.message || e}).`, sent); });
-    if (!r.ok) {
-      const why = (await r.text().catch(() => "")).trim().slice(0, 200);
-      throw new ZebraError(`Zebra Browser Print couldn't send to the printer (${r.status}${why ? `: ${why}` : ""}).`, sent);
-    }
-    sent += inBatch; zpl = ""; inBatch = 0;
-  };
-  for (const l of real) {
-    const one = buildZpl(await svgToZplBitmap(l.svg, size, tune), l.copies);
-    if (zpl && zpl.length + one.length > BATCH_BYTES) await flush();
-    zpl += one;
-    inBatch += Math.min(500, l.copies);
-    queued += Math.min(500, l.copies);
+/** Ready-made label SVGs (Label maker) straight to the Zebra. One design per
+ *  label with all its copies (^PQ, up to 500 a write) — the printer repeats
+ *  it itself, so there's nothing to pace or resume. */
+export async function printSvgsDirect(device: any, labels: { svg: string; copies: number }[], size: { widthMm: number; heightMm: number }, tune?: ZebraTune, opts?: DirectOpts): Promise<number> {
+  const formats: Format[] = [];
+  for (let i = 0; i < labels.length; i++) {
+    if (labels[i].copies <= 0) continue;
+    formats.push(...formatsFor(i, await svgToZplBitmap(labels[i].svg, size, tune), labels[i].copies, 500));
   }
-  await flush();
-  return queued;
+  return formats.length ? sendFormats(device, formats, size.heightMm, opts) : 0;
 }
 
-/** A direct print that stopped: `sent` labels were already handed to the printer. */
+/** A direct print that stopped. `sent` labels were accepted by the printer
+ *  (they print once it's ready — unless it's switched off); `at` is the first
+ *  design not accepted: line `at.line`, from its copy `at.copyStart`.
+ *  `held` = where the labels the printer was probably still holding begin
+ *  (`copies` of them, up to `at`) — the ones a switch-off loses. */
+type Spot = { line: number; copyStart: number; copies: number };
 export class ZebraError extends Error {
-  constructor(message: string, public sent: number) { super(message); }
+  constructor(message: string, public sent: number, public at?: Spot, public kind: ZebraStop = "agent", public held?: Spot) { super(message); }
 }
