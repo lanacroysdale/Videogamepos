@@ -40,12 +40,18 @@ export const POST: APIRoute = async ({ locals, request }) => {
         Genre: p.genre ?? "",
         Publisher: (p as any).brand ?? "",
         "Release year": (p as any).release_year ? String((p as any).release_year) : "",
-        Condition: [v.completeness, v.condition].filter(Boolean).join(" / "),
+        // A listing-wide text (bulk "Write descriptions") covers every copy, so
+        // no one copy's condition.
+        Condition: b.omitCondition ? "" : [v.completeness, v.condition].filter(Boolean).join(" / "),
         "Also known as": ((p as any).alternative_names ?? []).join(", "),
       });
       if (rgCol && !b.regionCode) regionCode = (p as any).region_code ?? "";
     }
   }
+  // A one-line description being rewritten: its facts (edition, bundle,
+  // contents) are kept — not condition / testing / selling words.
+  const current = String(b.currentText ?? "").replace(/\s+/g, " ").trim().slice(0, 300);
+  if (current) ctx["Current short note (keep any edition / bundle / contents facts from it; ignore condition, testing, shipping or seller words)"] = current;
   // Only a badged region (not the home market): "Region: Japan (NTSC-J) — an import".
   if (regionTag(regionCode, regions)) ctx.Region = `${regionByCode(regionCode, regions)!.name} — an import release`;
 

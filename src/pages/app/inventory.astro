@@ -130,7 +130,7 @@ const allRows = (products ?? []).map((p: any) => ({
   ebayId: (p.tags ?? []).find((t: string) => t.startsWith("ebay:"))?.slice(5) ?? "",
   // Sell Similar: the other seller's listing it was copied from (never synced).
   ebayRefId: (p.tags ?? []).find((t: string) => t.startsWith("ebay-ref:"))?.slice(9) ?? "",
-  pcId: (p.tags ?? []).find((t: string) => t.startsWith("pricecharting:"))?.slice(13) ?? "",
+  pcId: (p.tags ?? []).find((t: string) => t.startsWith("pricecharting:"))?.slice("pricecharting:".length) ?? "",
   // Plain tags ("plush") — the "kind:value" ones above are internal markers.
   tags: (p.tags ?? []).filter((t: string) => !t.includes(":")),
   supplierLinks: p.product_suppliers ?? [], // manager-only via RLS (staff get [])
@@ -193,6 +193,7 @@ const posData = {
           <button id="ebay-sync" class="btn btn-ghost btn-sm" role="menuitem" title="Check eBay for ended / out-of-stock listings and zero them on the website (never raises local stock)">🔁 Sync eBay stock</button>
           <button id="resync-img" class="btn btn-ghost btn-sm" role="menuitem" title="Fetch covers for items with no image (only fills empties)">🔄 Resync images</button>
           <button id="fix-titles" class="btn btn-ghost btn-sm" role="menuitem" title="Suggest official game titles (from the game database) for listings with typos — you approve each one">✎ Fix titles</button>
+          <button id="write-descs" class="btn btn-ghost btn-sm" role="menuitem" title="AI writes web descriptions for listings with none or only one short line — saved as they're written, each can be undone">✍ Write descriptions</button>
           {!upcProbeErr && <button id="fill-upcs" class="btn btn-ghost btn-sm" role="menuitem" title="Look up UPCs on eBay's product catalog for games that don't have one (attaches only sure matches)">🏷 Fill missing UPCs</button>}
         </div>
       </div>
@@ -400,6 +401,41 @@ const posData = {
       </ul>
     </div>
   )}
+
+  <div id="pcu-modal" class="modal-wrap" hidden>
+    <div class="modal-backdrop" data-pcuclose></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="pcu-heading" style="width:min(640px,100%);">
+      <header class="modal-head">
+        <h2 id="pcu-heading">📈 Update from PriceCharting</h2>
+        <button class="modal-x" data-pcuclose aria-label="Close">✕</button>
+      </header>
+      <div id="pcu-body" style="padding:0.9rem 1.1rem;overflow:auto;font-size:0.9rem;"></div>
+    </div>
+  </div>
+
+  <div id="desc-modal" class="modal-wrap" hidden>
+    <div class="modal-backdrop" data-dclose></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="desc-heading" style="width:min(880px,100%);">
+      <header class="modal-head">
+        <h2 id="desc-heading">✍ Write descriptions</h2>
+        <button class="modal-x" data-dclose aria-label="Close">✕</button>
+      </header>
+      <div style="padding:0.8rem 1.1rem;overflow:auto;">
+        <p class="muted" style="margin:0 0 0.6rem;font-size:0.84rem;">The AI writes a short web description — in your voice from Settings → AI — for listings with <strong>no description</strong> or just <strong>one short line</strong>, using only the listing's own facts (title, platform, series, genre, publisher, year, region) — never one copy's condition, since it covers every copy. Each is saved as soon as it's written; ↩ puts the old one back. It goes a few seconds apart to stay within the AI's free limits.</p>
+        <div class="desc-opts">
+          <label><input type="checkbox" id="desc-instock" checked /> Only listings in stock</label>
+          <label><input type="checkbox" id="desc-thin" checked /> Include one-line descriptions</label>
+        </div>
+        <div id="desc-list"></div>
+      </div>
+      <footer style="display:flex;gap:0.6rem;justify-content:flex-end;align-items:center;padding:0.8rem 1.1rem;border-top:1px solid var(--border);">
+        <span class="muted" id="desc-count" style="margin-right:auto;font-size:0.84rem;"></span>
+        <button class="btn btn-ghost btn-sm" type="button" data-dclose>Close</button>
+        <button class="btn btn-ghost btn-sm" type="button" id="desc-stop" hidden>■ Stop</button>
+        <button class="btn btn-primary btn-sm" type="button" id="desc-go">✨ Write selected</button>
+      </footer>
+    </div>
+  </div>
 
   <div id="fix-modal" class="modal-wrap" hidden>
     <div class="modal-backdrop" data-fclose></div>
@@ -658,6 +694,14 @@ const posData = {
   .sup-row .link-btn { margin-left:auto; }
   .ent-add { display:flex; gap:0.6rem; align-items:center; margin-bottom:0.9rem; }
   .m-market { margin:0.2rem 0 0.5rem; font-size:0.8rem; }
+  .desc-opts { display:flex; gap:1.2rem; flex-wrap:wrap; margin:0 0 0.6rem; font-size:0.84rem; }
+  .pcu-row { display:flex; align-items:center; gap:0.6rem; padding:0.45rem 0; border-bottom:1px solid var(--border); }
+  .pcu-row > div { flex:1; min-width:0; }
+  .pcu-acts { display:flex; gap:0.6rem; justify-content:flex-end; margin-top:0.9rem; flex-wrap:wrap; }
+  .desc-opts input { width:auto; }
+  .desc-old { color:var(--muted-2); font-size:0.78rem; }
+  .desc-new { margin-top:0.3rem; font-size:0.82rem; white-space:pre-wrap; }
+  .desc-st { white-space:nowrap; font-size:0.8rem; }
   /* 🔖 Send to TimeLag */
   .bm-card { max-width:560px; }
   .bm-steps { margin:0.6rem 0; padding-left:1.2rem; display:grid; gap:0.5rem; font-size:0.9rem; }
@@ -1475,7 +1519,7 @@ const posData = {
         </div>
         ${rgOn ? `<div id="m-region-warn" class="upc-note m-region-warn" hidden></div>` : ""}
         <div id="m-imgprev" class="img-prev"${p.imageUrl ? "" : " hidden"}>${p.imageUrl ? `<img src="${esc(p.imageUrl)}" alt="">` : ""}</div>
-        <div class="m-field"><label style="display:flex;align-items:center;gap:0.5rem;justify-content:space-between;">Description (web) <button type="button" class="btn btn-ghost btn-sm" id="m-ai-desc" data-pid="${p.id}">✨ Write with AI</button></label><textarea id="m-desc" rows="3" placeholder="Shown on the website listing">${esc(p.description)}</textarea></div>
+        <div class="m-field"><label style="display:flex;align-items:center;gap:0.5rem;justify-content:space-between;">Description (web) <button type="button" class="btn btn-ghost btn-sm" id="m-ai-desc" data-pid="${p.id}">✨ Write with AI</button></label><textarea id="m-desc" rows="3" placeholder="Shown on the website listing" data-orig="${esc(String(p.description ?? "").trim())}">${esc(p.description)}</textarea></div>
       </div>
 
       <div class="m-section">
@@ -1980,13 +2024,17 @@ const posData = {
     btn.disabled = true; const orig = btn.textContent; btn.textContent = "Saving…";
     try {
       const regionSel = document.getElementById("m-region") as HTMLSelectElement | null;
+      const descEl = $("m-desc") as HTMLTextAreaElement;
+      const descChanged = descEl.value.trim() !== (descEl.dataset.orig ?? "");
       const pj = await api({
         action: "updateProduct", id: pid,
         title: get("m-title").trim(), genre: get("m-genre").trim(),
         // Platform only when it was changed (a save never re-spells it).
         ...(get("m-platform") !== ($("m-platform") as HTMLSelectElement).dataset.orig ? { platform: get("m-platform") } : {}),
         franchise: get("m-franchise").trim(), categoryId: get("m-category"), imageUrl: get("m-image").trim(),
-        description: ($("m-desc") as HTMLTextAreaElement).value.trim(),
+        // Description only when it was changed here — an edit window left open
+        // must not wipe one written meanwhile (e.g. by ✍ Write descriptions).
+        ...(descChanged ? { description: ($("m-desc") as HTMLTextAreaElement).value.trim() } : {}),
         ...(regionSel ? { regionCode: regionSel.value } : {}),
         // Tag categories (🧸 Plush): on / off per tag.
         ...(document.querySelector("[data-vtag]") ? { tags: Object.fromEntries([...document.querySelectorAll<HTMLInputElement>("[data-vtag]")].map((c) => [c.dataset.vtag!, c.checked])) } : {}),
@@ -1994,7 +2042,7 @@ const posData = {
       Object.assign(p, {
         title: get("m-title").trim(), platform: get("m-platform"), genre: get("m-genre").trim(),
         franchise: get("m-franchise").trim(), categoryId: get("m-category"), imageUrl: get("m-image").trim(),
-        description: ($("m-desc") as HTMLTextAreaElement).value.trim(),
+        ...(descChanged ? { description: ($("m-desc") as HTMLTextAreaElement).value.trim() } : {}),
         categoryName: categories.find((c) => c.id === get("m-category"))?.name ?? p.categoryName,
         categoryColor: categories.find((c) => c.id === get("m-category"))?.color ?? p.categoryColor,
       });
@@ -3302,6 +3350,132 @@ const posData = {
   });
   // ---- ✎ Fix titles (managers): official names for listings with typos ----
   let fixSuggestions: { p: any; to: string; sim: number }[] = [];
+  /* ---------- ✍ Write descriptions (bulk, AI) ----------
+     Listings with no description, or only one short line (an eBay title, a
+     note), get one written by the AI — the same writer as the edit window's
+     "✨ Write with AI", grounded on the listing's own facts. One at a time, a
+     few seconds apart (free-tier limits); saved as written; each undoable. */
+  const DESC_SHORT = 160;
+  const descNeed = (p: any): "" | "empty" | "short" => {
+    const t = String(p.description ?? "").trim();
+    if (!t) return "empty";
+    return !/\n/.test(t) && t.length < DESC_SHORT ? "short" : "";
+  };
+  let descRows: { p: any; old: string; done: boolean; ai?: string }[] = [];
+  let descRunning = false, descStop = false;
+  const descSleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  function descCandidates() {
+    const inStock = ($("desc-instock") as HTMLInputElement).checked, thin = ($("desc-thin") as HTMLInputElement).checked;
+    return liveItems().filter((p: any) => { const n = descNeed(p); return (n === "empty" || (thin && n === "short")) && (!inStock || totalQty(p) > 0); })
+      .sort(byTitle);
+  }
+  function renderDescList() {
+    descRows = descCandidates().map((p: any) => ({ p, old: String(p.description ?? ""), done: false }));
+    $("desc-list").innerHTML = descRows.length ? `<table class="tbl" style="width:100%;font-size:0.84rem;"><thead><tr><th><input type="checkbox" id="desc-all" checked title="Select all" /></th><th>Listing</th><th>Now</th><th></th></tr></thead><tbody>${
+      descRows.map((r, i) => `<tr data-drow="${i}"><td><input type="checkbox" data-desc="${i}" checked /></td>
+        <td><strong>${esc(r.p.title)}</strong>${badge(r.p.regionCode)} <span class="muted">${esc(r.p.platform || r.p.categoryName || "")}</span><div class="desc-new" data-dnew hidden></div></td>
+        <td class="desc-old">${r.old.trim() ? esc(r.old.trim().slice(0, 120)) : "— none —"}</td>
+        <td class="desc-st" data-dst></td></tr>`).join("")
+    }</tbody></table>` : `<p class="empty">Nothing to write — every ${($("desc-instock") as HTMLInputElement).checked ? "in-stock " : ""}listing has a description.</p>`;
+    document.getElementById("desc-all")?.addEventListener("change", (e) => {
+      document.querySelectorAll<HTMLInputElement>("[data-desc]").forEach((c) => (c.checked = (e.target as HTMLInputElement).checked));
+      descCount();
+    });
+    document.querySelectorAll<HTMLInputElement>("[data-desc]").forEach((c) => c.addEventListener("change", descCount));
+    descCount();
+  }
+  function descCount() {
+    const n = document.querySelectorAll<HTMLInputElement>("[data-desc]:checked").length;
+    const secs = n * 7;
+    $("desc-count").textContent = descRows.length ? `${n} of ${descRows.length} selected${n ? ` · about ${secs < 90 ? `${secs} s` : `${Math.ceil(secs / 60)} min`}` : ""}` : "";
+    ($("desc-go") as HTMLButtonElement).disabled = !n || descRunning;
+  }
+  // Written rows keep their ↩ undo until the list is rebuilt on purpose.
+  const descUndoable = () => descRows.some((r) => r.done);
+  document.getElementById("write-descs")?.addEventListener("click", () => {
+    if (!descRunning && !descUndoable()) renderDescList();
+    ($("desc-modal") as HTMLElement).hidden = false;
+  });
+  ["desc-instock", "desc-thin"].forEach((id) => document.getElementById(id)?.addEventListener("change", (e) => {
+    if (descRunning) { (e.target as HTMLInputElement).checked = !(e.target as HTMLInputElement).checked; return; }
+    if (descUndoable() && !confirm("Rebuild the list? ↩ undo for the descriptions already written goes away (they stay written).")) { (e.target as HTMLInputElement).checked = !(e.target as HTMLInputElement).checked; return; }
+    renderDescList();
+  }));
+  document.querySelectorAll<HTMLElement>("[data-dclose]").forEach((el) => el.addEventListener("click", () => {
+    if (descRunning && !confirm("Still writing — close this window? It keeps going in the background until you Stop it or leave the page.")) return;
+    ($("desc-modal") as HTMLElement).hidden = true;
+  }));
+  document.getElementById("desc-stop")?.addEventListener("click", () => { descStop = true; ($("desc-stop") as HTMLButtonElement).textContent = "Stopping…"; });
+  window.addEventListener("beforeunload", (e) => { if (descRunning) { e.preventDefault(); e.returnValue = ""; } });
+  async function describeOne(p: any, currentText: string): Promise<string> {
+    const req = () => fetch("/api/pos/ai/describe", { method: "POST", headers: { "content-type": "application/json" },
+      // A one-liner is REWRITTEN (its edition / bundle facts kept), not thrown away.
+      body: JSON.stringify({ productId: p.id, title: p.title, platform: p.platform, regionCode: p.regionCode || "", omitCondition: true, currentText }) })
+      .then(async (r) => ({ ok: r.ok, j: await r.json().catch(() => ({})) }));
+    let { ok, j } = await req();
+    // The AI is busy / over its per-minute limit → wait and try once more.
+    if (!ok && !j.needsKey && /quota|rate|busy|overload|429|503|exhausted|try again/i.test(String(j.error))) { await descSleep(20_000); ({ ok, j } = await req()); }
+    if (!ok || !j.description) throw Object.assign(new Error(j.error || "The AI didn't answer"), { needsKey: !!j.needsKey });
+    return String(j.description).trim();
+  }
+  document.getElementById("desc-go")?.addEventListener("click", async () => {
+    const picked = [...document.querySelectorAll<HTMLInputElement>("[data-desc]:checked")].map((c) => +c.dataset.desc!).filter((i) => !descRows[i].done);
+    if (!picked.length) return;
+    descRunning = true; descStop = false;
+    const go = $("desc-go") as HTMLButtonElement, stop = $("desc-stop") as HTMLButtonElement;
+    go.disabled = true; stop.hidden = false; stop.textContent = "■ Stop";
+    let written = 0, failed = 0, failedInRow = 0, skipped = 0;
+    try {
+      for (let k = 0; k < picked.length; k++) {
+        if (descStop) break;
+        const i = picked[k], r = descRows[i];
+        const tr = document.querySelector<HTMLElement>(`tr[data-drow="${i}"]`)!;
+        const st = tr.querySelector<HTMLElement>("[data-dst]")!;
+        const cb = tr.querySelector<HTMLInputElement>("[data-desc]")!;
+        // Unticked since, or its description changed here since the list was made → leave it.
+        const changed = () => String(r.p.description ?? "") !== r.old;
+        if (!cb.checked || changed()) { st.textContent = cb.checked ? "– skipped (edited since)" : "– skipped"; skipped++; continue; }
+        st.textContent = `✨ writing… (${k + 1}/${picked.length})`;
+        tr.scrollIntoView({ block: "nearest" });
+        const t0 = Date.now();
+        try {
+          const text = await describeOne(r.p, r.old.trim());
+          if (!cb.checked || changed()) { st.textContent = "– skipped (edited since)"; skipped++; continue; }
+          // Saved only if the listing still has the description it had (not a newer edit from anywhere).
+          const sv = await api({ action: "updateProduct", id: r.p.id, description: text, ifDescription: r.old });
+          if (sv.stale) { st.textContent = "– skipped (changed on another screen)"; skipped++; continue; }
+          r.p.description = text; r.ai = text; r.done = true; written++; failedInRow = 0;
+          const nw = tr.querySelector<HTMLElement>("[data-dnew]")!;
+          nw.textContent = text; nw.hidden = true;
+          st.innerHTML = `✓ <button type="button" class="link-btn" data-dshow>show</button> · <button type="button" class="link-btn" data-dundo title="Put the old description back">↩ undo</button>`;
+          st.querySelector("[data-dshow]")!.addEventListener("click", () => { nw.hidden = !nw.hidden; });
+          st.querySelector("[data-dundo]")!.addEventListener("click", async () => {
+            if (String(r.p.description ?? "") !== r.ai && !confirm("This listing's description was edited since — put the old one back anyway?")) return;
+            try {
+              const u = await api({ action: "updateProduct", id: r.p.id, description: r.old, ifDescription: String(r.p.description ?? "") });
+              if (u.stale) { alert("It was changed on another screen meanwhile — left as it is."); return; }
+              r.p.description = r.old; r.done = false; nw.hidden = true; st.textContent = "↩ undone";
+            } catch (e: any) { alert(e.message); }
+          });
+          (tr.querySelector("[data-desc]") as HTMLInputElement).checked = false;
+        } catch (e: any) {
+          failed++; failedInRow++;
+          st.textContent = `✗ ${String(e.message || e).slice(0, 80)}`;
+          if (e.needsKey) { alert(e.message); break; }
+          // 3 in a row (after its own retry each): the AI is out for now (e.g. its daily limit).
+          if (failedInRow >= 3) { alert(`The AI keeps failing — stopped. Try the rest later.\n\n${e.message}`); break; }
+        }
+        // Few seconds apart: stays within the AI's free per-minute limit.
+        if (k < picked.length - 1 && !descStop) await descSleep(Math.max(0, 6500 - (Date.now() - t0)));
+      }
+    } finally {
+      descRunning = false; stop.hidden = true;
+      descCount();
+      render();
+      toast(`✍ ${written} description${written === 1 ? "" : "s"} written${failed ? ` · ${failed} failed` : ""}${skipped ? ` · ${skipped} skipped` : ""}${descStop ? " (stopped)" : ""}`);
+    }
+  });
+
   document.getElementById("fix-titles")?.addEventListener("click", async () => {
     const btn = document.getElementById("fix-titles") as HTMLButtonElement;
     // Games only — a console named after its platform ("Super Nintendo") has no game title to fix.
@@ -3476,6 +3650,8 @@ const posData = {
           // the page as a supplier link with the shop's title (managers only).
           // Before the game database fills the rest.
           toast(`✓ Added${where} — copying the photo…`);
+          // PriceCharting's codes only if its prefilled barcode was kept (cleared / changed = not this item's).
+          if ((body.barcode || "") !== (ps.codes?.[0] || "")) ps.codes = [];
           try {
             const r = await fetch("/api/pos/source-import", { method: "POST", headers: { "content-type": "application/json" },
               body: JSON.stringify({ mode: "attach", productId: newItem.id, source: ps, market: ps.market || undefined }) });
@@ -3484,6 +3660,9 @@ const posData = {
               if (e.imageUrl) newItem.imageUrl = e.imageUrl;
               if (e.supplier) newItem.supplierLinks = [...(newItem.supplierLinks || []), e.supplier];
               if (e.market) newItem.marketPrices = e.market;
+              // Every code PriceCharting lists is the listing's now.
+              for (const a of e.codes?.added || []) if (!(newItem.upcs || []).some((u: any) => u.upc === a.upc)) newItem.upcs = [...(newItem.upcs || []), { ...a, evidence: "From PriceCharting" }];
+              if (e.codes?.conflicts?.length) toast(`Some codes are already on other listings: ${e.codes.conflicts.slice(0, 2).join("; ")}`);
               if (e.marketError) alert(e.marketError);
               if (e.market?.id) newItem.pcId = e.market.id;
               render();
@@ -3554,7 +3733,8 @@ const posData = {
       <h3>🔖 Send to TimeLag</h3>
       <p class="muted">Add products from <strong>PriceCharting</strong> (its UPC + Loose / Complete / New averages), <strong>Suruga-ya</strong>, <strong>Buyee</strong> (Yahoo! Auctions, Mercari…), Amazon JP or any shop. Dragged it in before? Drag it again — new sites need the new copy. The bookmark reads the page you're looking at, in your own browser, so nothing visits that shop from our server.</p>
       <ol class="bm-steps">
-        <li><strong>Drag this button</strong> onto your bookmarks bar: <a class="bm-link" id="bm-link" draggable="true">🔖 Send to TimeLag</a></li>
+        <li><strong>Drag this button</strong> onto your bookmarks bar: <a class="bm-link" id="bm-link" draggable="true">🔖 Send to TimeLag</a>
+          <br><span class="muted bm-small">And for PriceCharting: <a class="bm-link" id="bm-link-pc" draggable="true">📈 Update from PriceCharting</a> — on a PriceCharting game page it goes <em>straight into</em> the matching listing (today's averages, barcodes, photo), or creates it with 0 in stock.</span></li>
         <li>On a product page, <strong>click the bookmark</strong>. A POS tab opens with this form filled in: a clean English title, platform, region, condition, JAN and what you paid in dollars.</li>
         <li><strong>Check it, set your price, Save.</strong> The photo is copied into our own storage under a new name; the page is kept as the item's source (managers only, never on the website).</li>
       </ol>
@@ -3565,8 +3745,10 @@ const posData = {
     const href = bookmarkletHref(location.origin);
     const link = ov.querySelector<HTMLAnchorElement>("#bm-link")!;
     link.href = href;
-    // Clicked here (not dragged) it would just run on the POS.
-    link.addEventListener("click", (e) => { e.preventDefault(); toast("Drag it to your bookmarks bar — then click it on a shop's product page"); });
+    const linkPc = ov.querySelector<HTMLAnchorElement>("#bm-link-pc")!;
+    linkPc.href = bookmarkletHref(location.origin, "pc-update");
+    // Clicked here (not dragged) they would just run on the POS.
+    for (const a of [link, linkPc]) a.addEventListener("click", (e) => { e.preventDefault(); toast("Drag it to your bookmarks bar — then click it on a product page"); });
     ov.querySelector("#bm-copy")!.addEventListener("click", async () => {
       try { await navigator.clipboard.writeText(href); toast("📋 Copied — paste it as a new bookmark's URL"); }
       catch { prompt("Copy this, then paste it as a new bookmark's URL:", href); }
@@ -3579,6 +3761,10 @@ const posData = {
 
   // The page the bookmark sent: the full copy from the shop tab, else the
   // compact one in the address. Forgotten from the address bar right away.
+  // How the page arrived: "message" = posted by the bookmark from the shop tab
+  // itself (origin = that site); "fragment" = only the copy in the address
+  // (pop-up blocked — or a link someone else made, so never acted on unasked).
+  let receivedVia: { via: "message" | "fragment"; origin: string } = { via: "fragment", origin: "" };
   async function receivePage(): Promise<any | null> {
     let compact: any = null;
     const m = location.hash.match(/[#&]tl=([^&]*)/);
@@ -3601,6 +3787,7 @@ const posData = {
         if (e.source !== opener || (from && e.origin !== from) || e.data?.type !== "tl-page" || !e.data.page) return;
         // The page this tab was opened for (not one an older click still holds).
         if (compact?.url && e.data.page.url !== compact.url) return;
+        receivedVia = { via: "message", origin: e.origin };
         finish(e.data.page);
       };
       window.addEventListener("message", on);
@@ -3610,6 +3797,105 @@ const posData = {
       const timer = setInterval(ping, 400);
       setTimeout(() => finish(compact), 3500);
     });
+  }
+
+  /* ---------- 📈 Update from PriceCharting (second bookmark) ----------
+     A PriceCharting page goes STRAIGHT into its listing — found by its
+     PriceCharting id, a barcode, else the same title on the same platform +
+     region: today's averages, every barcode, the photo (main if none, else an
+     extra gallery photo), blank details. Unsure → you pick. None → the
+     listing is created with 0 in stock (one stock row at the category's usual
+     condition, priced at its average). */
+  const pcuOpen = (html: string) => { $("pcu-body").innerHTML = html; ($("pcu-modal") as HTMLElement).hidden = false; };
+  document.querySelectorAll<HTMLElement>("[data-pcuclose]").forEach((el) => el.addEventListener("click", () => { ($("pcu-modal") as HTMLElement).hidden = true; }));
+  async function pcUpdateFromPage() {
+    pcuOpen(`<p>📈 Reading the PriceCharting page…</p>`);
+    const page = await receivePage();
+    if (!page?.url) { pcuOpen(`<p>⚠ The page didn't come through — click the 📈 bookmark again on the PriceCharting game page.</p>`); return; }
+    let j: any;
+    try {
+      const r = await fetch("/api/pos/source-import", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode: "pc-match", page }) });
+      j = await r.json();
+      if (!r.ok || !j.ok) throw new Error(j.error || "Couldn't read that page");
+    } catch (e: any) { pcuOpen(`<p>⚠ ${esc(e.message)}</p>`); return; }
+    const head = `<p style="margin:0 0 0.5rem;"><strong>${esc(j.fields.title)}</strong> <span class="muted">${esc(j.fields.platform)}${j.fields.regionCode && j.fields.regionCode !== "US" ? ` · ${esc(j.fields.regionCode)}` : ""}</span><br>${marketLine(j.market) || "no prices taken"} <span class="muted">(averages, ${esc(j.market.at)})</span>${j.priceNote ? `<br><span style="color:var(--magenta);">⚠ ${esc(j.priceNote)}</span>` : ""}${j.marketReady ? "" : `<br><span style="color:var(--magenta);">⚠ Averages can't be kept until the market-prices migration is run.</span>`}</p>`;
+    // Hands-free only when the page really came from PriceCharting through the
+    // bookmark (not just a link with data in it): else one click to confirm.
+    const trusted = receivedVia.via === "message" && /^https:\/\/([a-z0-9-]+\.)*pricecharting\.com$/i.test(receivedVia.origin);
+    if (j.match && trusted) { await pcApply(j, j.match.id, head, false); return; }
+    const choices: any[] = j.match ? [j.match] : j.choices || [];
+    const noPrice = marketPriceFor(j.market, j.fields.defaultCompleteness || "") == null;
+    pcuOpen(`${head}<p class="muted" style="margin:0.6rem 0 0.3rem;">${j.match ? "Update this listing?" : choices.length ? "Which listing is this?" : "No listing for it yet."}</p>${choices.map((c, i) => `
+      <div class="pcu-row"><div><strong>${esc(c.title)}</strong>${badge(c.regionCode)} <span class="muted">${esc(c.platform)} · ${c.stock} in stock · ${esc(c.by)}</span>${c.linkedPc ? `<br><span style="color:var(--magenta);font-size:0.8rem;">linked to another PriceCharting product (#${esc(c.linkedPc)})</span>` : ""}</div>
+        <button type="button" class="btn ${j.match ? "btn-primary" : "btn-ghost"} btn-sm" data-pcuse="${i}">Update this one</button></div>`).join("")}
+      <div class="pcu-acts"><button type="button" class="btn btn-ghost btn-sm" data-pcuclose2>Cancel</button><button type="button" class="btn ${choices.length ? "btn-ghost" : "btn-primary"} btn-sm" id="pcu-create">＋ Create a new listing (0 in stock)</button></div>
+      ${noPrice ? `<p class="muted" style="font-size:0.8rem;">A new listing would start at $0 (no average for its usual condition) — set its price after.</p>` : ""}`);
+    $("pcu-body").querySelectorAll<HTMLElement>("[data-pcuse]").forEach((b) => b.addEventListener("click", () => {
+      const c = choices[+b.dataset.pcuse!];
+      if (c.linkedPc && !confirm(`“${c.title}” is linked to another PriceCharting product (#${c.linkedPc}). Link it to this page instead? Its averages are replaced.`)) return;
+      pcApply(j, c.id, head, false, !!c.linkedPc);
+    }));
+    document.getElementById("pcu-create")?.addEventListener("click", () => pcCreate(j, head));
+    $("pcu-body").querySelector("[data-pcuclose2]")?.addEventListener("click", () => { ($("pcu-modal") as HTMLElement).hidden = true; });
+  }
+  // Today's averages / barcodes / photo / blank details onto a listing.
+  async function pcApply(j: any, productId: string, head: string, created: boolean, replaceLink = false) {
+    pcuOpen(`${head}<p>Saving…</p>`);
+    let e: any;
+    try {
+      const r = await fetch("/api/pos/source-import", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ mode: "attach", productId, source: j.source, market: j.market, facts: j.fields, replaceLink }) });
+      e = await r.json();
+      if (r.status === 409 && e.linkedPc && !replaceLink) {
+        const t = items.find((x: any) => x.id === productId)?.title || "This listing";
+        if (confirm(`${t} is linked to another PriceCharting product (#${e.linkedPc}). Link it to this page instead? Its averages are replaced.`)) return pcApply(j, productId, head, created, true);
+        pcuOpen(`${head}<p>Left as it is.</p>`); return;
+      }
+      if (!r.ok || !e.ok) throw new Error(e.error || "Couldn't update the listing");
+    } catch (err: any) { pcuOpen(`${head}<p>⚠ ${esc(err.message)}</p>`); return; }
+    const p = items.find((x: any) => x.id === productId);
+    if (p) {
+      if (e.market) p.marketPrices = e.market;
+      if (j.market?.id) p.pcId = j.market.id;
+      if (e.imageUrl && !p.imageUrl) p.imageUrl = e.imageUrl;
+      for (const a of e.codes?.added || []) if (!(p.upcs || []).some((u: any) => u.upc === a.upc)) p.upcs = [...(p.upcs || []), { ...a, evidence: "From PriceCharting" }];
+      render();
+    }
+    const did = [
+      e.market ? "today's averages" : j.priceNote ? "no averages (see above) — the saved ones stay" : "",
+      e.codes?.added?.length ? `${e.codes.added.length} barcode${e.codes.added.length === 1 ? "" : "s"} (${e.codes.added.map((a: any) => esc(a.upc)).join(", ")})` : "",
+      e.galleryAdded ? "its photo (extra, in the gallery)" : e.imageUrl && created ? "its photo" : "",
+      (e.filled || []).length ? `blank details (${(e.filled as string[]).map((f) => f === "brand" ? "publisher" : f === "release_year" ? "release year" : f).join(", ")})` : "",
+    ].filter(Boolean);
+    pcuOpen(`${head}<p style="margin:0.6rem 0 0;">${created ? "✓ <strong>Created</strong> with 0 in stock" : `✓ <strong>Updated</strong> ${esc(p?.title || "the listing")}`}${did.length ? ` — ${did.join(" · ")}` : ""}.</p>
+      ${e.marketError ? `<p style="color:var(--magenta);">⚠ ${esc(e.marketError)}</p>` : ""}
+      ${e.codes?.conflicts?.length ? `<p class="muted">Not added: ${e.codes.conflicts.map(esc).join("; ")}</p>` : ""}
+      <div class="pcu-acts"><button type="button" class="btn btn-ghost btn-sm" data-pcuclose2>Close</button>${p ? `<button type="button" class="btn btn-primary btn-sm" id="pcu-open">Open the listing</button>` : ""}</div>`);
+    $("pcu-body").querySelector("[data-pcuclose2]")?.addEventListener("click", () => { ($("pcu-modal") as HTMLElement).hidden = true; });
+    document.getElementById("pcu-open")?.addEventListener("click", () => { ($("pcu-modal") as HTMLElement).hidden = true; openModal(productId); });
+  }
+  // No listing yet: create it with 0 in stock — one stock row at the
+  // category's usual condition, priced at that condition's average.
+  async function pcCreate(j: any, head: string) {
+    const f = j.fields;
+    if (!f.categoryId) { pcuOpen(`${head}<p>⚠ No category to put it in — add one first.</p>`); return; }
+    const comp = f.defaultCompleteness || completeness.find((c: any) => /complete|cib/i.test(c.label))?.code || "";
+    const label = completeness.find((c: any) => c.code === comp)?.label || "Used";
+    const priceCents = marketPriceFor(j.market, comp) ?? 0;
+    pcuOpen(`${head}<p>Creating the listing…</p>`);
+    let a: any;
+    try {
+      a = await api({ action: "addProduct", title: f.title, platform: f.platform, regionCode: f.regionCode || undefined, categoryId: f.categoryId,
+        condition: label, completenessCode: comp, gradeCode: "", priceCents, quantity: 0, barcode: f.barcode || null });
+    } catch (err: any) { pcuOpen(`${head}<p>⚠ ${esc(err.message)}</p>`); return; }
+    const cat = categories.find((c: any) => c.id === f.categoryId);
+    items.push({ id: a.productId, title: a.title ?? f.title, slug: a.slug || "", platform: a.platform ?? f.platform, regionCode: a.regionCode ?? f.regionCode ?? "",
+      franchise: "", genre: "", description: "", imageUrl: "", altNames: [], categoryId: f.categoryId, categoryName: cat?.name ?? "", categoryColor: cat?.color ?? "#2ce6e0",
+      tags: [], upcs: [], marketPrices: null,
+      variants: [{ id: a.variantId, condition: label, completeness: null, completenessCode: comp, gradeCode: "", sku: null, internalCode: a.internalCode || "", labelCode: a.labelCode || "",
+        priceCents, onlinePriceCents: null, costCents: 0, quantity: 0, onlineVisible: false, inventoryTypeId: retailTypeId, locationId: "", barcodes: f.barcode ? [{ id: "primary:" + a.variantId, barcode: f.barcode, label: "Primary", primary: true }] : [] }] });
+    render();
+    await pcApply(j, a.productId, head, true);
   }
 
   async function importFromPage() {
@@ -3641,7 +3927,7 @@ const posData = {
     ($("np-barcode") as HTMLInputElement).value = f.barcode || "";
     ($("np-cost") as HTMLInputElement).value = f.costCents != null ? (f.costCents / 100).toFixed(2) : "";
     ($("np-qty") as HTMLInputElement).value = "1";
-    pendingSource = { url: so.url, priceText: so.priceText, titleOriginal: so.titleOriginal, images: so.images, market: j.market || null };
+    pendingSource = { url: so.url, priceText: so.priceText, titleOriginal: so.titleOriginal, images: so.images, market: j.market || null, codes: so.codes || [] };
     pendingMarket = j.market || null;
     npPriceTouched = false;
     const rate = j.money?.jpyPerUsd, fee = j.money?.feePct;
@@ -3652,7 +3938,8 @@ const posData = {
     if (j.market) {
       // A price guide: its averages are what copies SELL for — the price
       // follows the condition you pick (until you type one); nothing is "paid".
-      note.innerHTML = `${img}<div><strong>📈 From PriceCharting</strong>${f.barcode ? ` · UPC ${esc(f.barcode)}` : ""}${f.regionCode && f.regionCode !== "US" ? ` · ${esc(f.regionCode)} release` : ""}
+      const codes: string[] = so.codes || (f.barcode ? [f.barcode] : []);
+      note.innerHTML = `${img}<div><strong>📈 From PriceCharting</strong>${codes.length ? ` · ${codes.length > 1 ? "UPC / EAN codes" : codes[0].length === 13 ? "EAN" : "UPC"} ${codes.map(esc).join(", ")}${codes.length > 1 ? " (all go on the listing)" : " (goes on the listing)"}` : " · no UPC / EAN on the page"}${f.regionCode && f.regionCode !== "US" ? ` · ${esc(f.regionCode)} release` : ""}
         <br>${marketLine(j.market, true) || "no prices taken"} <span style="color:var(--muted-2);">(averages, ${esc(j.market.at)})</span>
         ${j.priceNote ? `<br><span style="color:var(--magenta);">⚠ ${esc(j.priceNote)}</span>` : ""}
         <br><span style="color:var(--muted-2);">Pick the condition — the price follows it (or click one). On Save: ${j.marketReady ? "these averages are kept on the listing, plus" : "<span style='color:var(--magenta);'>(averages can't be kept until the market-prices migration is run)</span>"} its PriceCharting photo and link.</span>
@@ -3864,6 +4151,8 @@ const posData = {
   });
 
   render();
-  // Opened by the 🔖 Send to TimeLag bookmark.
-  if (new URLSearchParams(location.search).get("import") === "page") importFromPage();
+  // Opened by a bookmark: 🔖 Send to TimeLag (the Add form) or 📈 Update from PriceCharting (straight in).
+  const importMode = new URLSearchParams(location.search).get("import");
+  if (importMode === "page") importFromPage();
+  else if (importMode === "pc-update") pcUpdateFromPage();
 </script>

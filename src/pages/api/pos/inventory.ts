@@ -934,8 +934,17 @@ export const POST: APIRoute = async ({ locals, request }) => {
         const { data: cur } = await sb.from("products").select("region_code").eq("id", b.id).maybeSingle();
         before = cur?.region_code ?? null;
       }
-      const { data: saved, error } = await sb.from("products").update(patch).eq("id", b.id).select().maybeSingle();
+      // ifDescription: save only if the description is still what the caller
+      // last saw (bulk "Write descriptions" never overwrites a newer edit).
+      let uq = sb.from("products").update(patch).eq("id", b.id);
+      const guarded = b.ifDescription !== undefined;
+      if (guarded) {
+        const was = String(b.ifDescription ?? "");
+        uq = was === "" ? uq.or('description.is.null,description.eq.""') : uq.eq("description", was);
+      }
+      const { data: saved, error } = await uq.select().maybeSingle();
       if (error) return json({ error: error.message }, 500);
+      if (guarded && !saved) return json({ ok: true, stale: true });
       // Moved off US: its automatic (eBay US catalog) UPC is another release's.
       const upcReset = !!(rgOn && before && saved?.region_code && saved.region_code !== before && saved.region_code !== "US");
       if (upcReset) await resetUpcsForRegion([b.id]);

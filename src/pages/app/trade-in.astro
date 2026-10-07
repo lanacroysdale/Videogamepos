@@ -54,7 +54,7 @@ const catalog = (products ?? []).map((p: any) => ({
   franchise: p.franchise ?? "",
   altNames: p.alternative_names ?? [],
   categoryId: p.category_id,
-  pcId: (p.tags ?? []).find((t: string) => t.startsWith("pricecharting:"))?.slice(13) ?? "",
+  pcId: (p.tags ?? []).find((t: string) => t.startsWith("pricecharting:"))?.slice("pricecharting:".length) ?? "",
   upcs: (p.product_upcs ?? []).map((u: any) => u.upc),
   variants: (p.product_variants ?? []).map((v: any) => ({
     priceCents: v.price_cents,
