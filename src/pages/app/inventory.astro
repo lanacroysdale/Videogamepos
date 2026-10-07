@@ -1467,7 +1467,7 @@ const posData = {
     await fillLabelCodes(items.filter((p) => selected.has(p.id)).flatMap((p) => p.variants));
     const lines: any[] = [];
     items.filter((p) => selected.has(p.id)).forEach((p) => p.variants.forEach((v: any) => {
-      if (v.internalCode || v.labelCode) lines.push({ item: labelItemOf(p, v), defaultCopies: 1, allCopies: v.quantity > 1 ? v.quantity : null });
+      if (v.internalCode || v.labelCode) lines.push({ item: labelItemOf(p, v), defaultCopies: 1, allCopies: v.quantity });
     }));
     if (!lines.length) { alert("Selected items have no label codes yet."); return; }
     openPrintDialog(lines, lblTemplates, { title: `Print labels — ${lines.length} condition${lines.length === 1 ? "" : "s"}` });
