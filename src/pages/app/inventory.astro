@@ -1361,53 +1361,82 @@ const posData = {
     }).join("");
   }
   /* ---------- Inline edits on the list (managers) ---------- */
+  // While an inline editor is open (or saving) the list isn't rebuilt: a
+  // rebuild would tear it down mid-typing (and the browser's blur on removal
+  // would save half-typed text). render() waits and runs when the last one
+  // closes. A save started by leaving the box is applied to the item at once
+  // (rolled back if it fails), and Print / Edit wait for it to land.
+  let ieOpen = 0, renderWaiting = false;
+  let iePending: Promise<unknown> | null = null;
+  const ieSettled = () => (iePending ? iePending.catch(() => {}) : Promise.resolve());
+  const ieEnd = () => { ieOpen = Math.max(0, ieOpen - 1); if (!ieOpen && renderWaiting) render(); };
   // Click / Enter / Space opens the editor (keyboard users get it too).
   function onActivate(el: HTMLElement, go: () => void) {
     el.addEventListener("click", (e) => { e.stopPropagation(); go(); });
     el.addEventListener("keydown", (e) => { if (e.target === el && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); go(); } });
   }
   // Swaps `el`'s text for an input. Enter or leaving the box saves, Esc
-  // cancels; an unchanged value saves nothing. `save` throws to keep editing.
-  function inlineEdit(el: HTMLElement, value: string, save: (v: string) => Promise<void>, opts?: { decimal?: boolean; width?: string }) {
+  // cancels; an unchanged value saves nothing. `save` throws to keep editing;
+  // `shown` is the text for `el` once saved.
+  function inlineEdit(el: HTMLElement, value: string, save: (v: string) => Promise<void>, shown: () => string, opts?: { decimal?: boolean; width?: string }) {
     if (el.querySelector("input")) return;
     const orig = el.innerHTML;
+    const again = el.dataset.ietitle ? `[data-ietitle="${el.dataset.ietitle}"]` : `[data-ieprice="${el.dataset.ieprice}"]`;
     const inp = document.createElement("input");
     inp.className = "ie-input";
+    inp.dataset.noscan = "1"; // a phone scan goes to the search box, not here
     inp.value = value;
     if (opts?.decimal) inp.inputMode = "decimal";
     if (opts?.width) inp.style.width = opts.width;
     el.innerHTML = "";
     el.appendChild(inp);
+    ieOpen++;
     inp.focus(); inp.select();
     let busy = false, done = false;
-    const finish = async (commit: boolean) => {
+    // Keyboard finishes put focus back on the (re-drawn) title / price;
+    // leaving by click or Tab leaves it where the user went.
+    const end = (html: string, refocus: boolean) => {
+      done = true;
+      el.innerHTML = html;
+      ieEnd();
+      if (refocus) document.querySelector<HTMLElement>(again)?.focus();
+    };
+    const finish = async (commit: boolean, byKey: boolean) => {
       if (busy || done) return;
       const v = inp.value.trim();
-      if (!commit || v === value.trim()) { done = true; el.innerHTML = orig; el.focus(); return; }
+      if (!commit || v === value.trim()) { end(orig, byKey); return; }
       busy = true; inp.disabled = true;
-      try { await save(v); done = true; }
+      const run = save(v);
+      iePending = run;
+      try { await run; renderWaiting = true; end(shown(), byKey); }
       catch (e: any) { busy = false; inp.disabled = false; alert(e.message); inp.focus(); }
+      finally { if (iePending === run) iePending = null; }
     };
     inp.addEventListener("keydown", (e) => {
       e.stopPropagation();
-      if (e.key === "Enter") { e.preventDefault(); finish(true); }
-      else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+      if (e.isComposing || e.keyCode === 229) return; // Enter picking an IME (e.g. Japanese) candidate
+      if (e.key === "Enter") { e.preventDefault(); finish(true, true); }
+      else if (e.key === "Escape") { e.preventDefault(); finish(false, true); }
     });
     inp.addEventListener("click", (e) => e.stopPropagation());
-    inp.addEventListener("blur", () => finish(true));
+    inp.addEventListener("blur", () => finish(true, false));
   }
   function editTitleInline(el: HTMLElement) {
     const p = items.find((x) => x.id === el.dataset.ietitle);
     if (!p) return;
     inlineEdit(el, p.title, async (v) => {
-      const pj = await api({ action: "updateProduct", id: p.id, title: v });
-      // What the server stored: a typed "[JP]" title tag becomes the region.
-      p.title = typeof pj.title === "string" ? pj.title : v;
-      if (typeof pj.regionCode === "string") p.regionCode = pj.regionCode;
-      if (pj.upcReset) { p.upcs = (p.upcs || []).filter((u: any) => u.source !== "ebay"); p.upcStatus = ""; p.upcCheckedAt = null; }
-      render();
+      if (/^\d{8,}$/.test(v.replace(/\s/g, ""))) throw new Error("That looks like a scanned barcode, not a title — nothing was changed.");
+      const was = { title: p.title, regionCode: p.regionCode };
+      p.title = v;
+      try {
+        const pj = await api({ action: "updateProduct", id: p.id, title: v });
+        // What the server stored: a typed "[JP]" title tag becomes the region.
+        if (typeof pj.title === "string") p.title = pj.title;
+        if (typeof pj.regionCode === "string") p.regionCode = pj.regionCode;
+        if (pj.upcReset) { p.upcs = (p.upcs || []).filter((u: any) => u.source !== "ebay"); p.upcStatus = ""; p.upcCheckedAt = null; }
+      } catch (e) { Object.assign(p, was); throw e; }
       toast(`✓ Renamed to “${p.title}”`);
-    }, { width: `${Math.max(16, Math.min(60, p.title.length + 4))}ch` });
+    }, () => esc(p.title), { width: `${Math.max(16, Math.min(60, p.title.length + 4))}ch` });
   }
   function editPriceInline(el: HTMLElement) {
     const p = items.find((x) => x.variants.some((v: any) => v.id === el.dataset.ieprice));
@@ -1416,14 +1445,15 @@ const posData = {
     inlineEdit(el, (v.priceCents / 100).toFixed(2), async (raw) => {
       const n = Number(raw.replace(/[$,\s]/g, ""));
       if (!raw || !Number.isFinite(n) || n < 0) throw new Error("Type a price, e.g. 24.99");
+      if (n > 100000) throw new Error("That price looks wrong (a scanned barcode?) — nothing was changed.");
       const cents = Math.round(n * 100);
-      if (cents === v.priceCents) { render(); return; }
-      await api({ action: "updateVariant", id: v.id, priceCents: cents });
+      if (cents === v.priceCents) return;
       const was = v.priceCents;
       v.priceCents = cents;
-      render();
+      try { await api({ action: "updateVariant", id: v.id, priceCents: cents }); }
+      catch (e) { v.priceCents = was; throw e; }
       toast(`✓ ${rgTitle(p)} · ${condLabel(v)}: ${money(was)} → ${money(cents)} — 🏷 Print for new labels`);
-    }, { decimal: true, width: "6.5ch" });
+    }, () => money(v.priceCents), { decimal: true, width: "6.5ch" });
   }
 
   // Stock count change (managers): the chip's "− 2 +" becomes "2 → − [3] +
@@ -1436,11 +1466,15 @@ const posData = {
     if (!p || !v) return;
     const from = Number(v.quantity) || 0;
     const orig = el.innerHTML;
+    ieOpen++;
     el.classList.add("qedit");
     el.innerHTML = `<span class="qfrom">${from} →</span><button type="button" class="qbtn" data-d="-1" aria-label="One fewer">−</button><input class="ie-input qin" inputmode="numeric" aria-label="New stock count"><button type="button" class="qbtn" data-d="1" aria-label="One more">+</button><button type="button" class="qok"></button><button type="button" class="qno" aria-label="Cancel">✕</button>`;
     const inp = el.querySelector<HTMLInputElement>(".qin")!;
+    inp.dataset.noscan = "1";
     const ok = el.querySelector<HTMLButtonElement>(".qok")!;
-    const val = () => { const n = Number(inp.value.trim()); return Number.isInteger(n) && n >= 0 ? n : null; };
+    // Whole numbers only: blank (cleared to retype) or a scanned barcode is
+    // never a count — Confirm / Enter stay off.
+    const val = () => { const t = inp.value.trim(); return /^\d{1,6}$/.test(t) && Number(t) <= 100000 ? Number(t) : null; };
     const sync = () => {
       const n = val();
       ok.disabled = n === null || n === from;
@@ -1449,8 +1483,19 @@ const posData = {
     inp.value = String(Math.max(0, from + step));
     sync();
     inp.focus(); inp.select();
-    let busy = false;
-    const close = () => { document.removeEventListener("pointerdown", outside, true); el.classList.remove("qedit"); el.innerHTML = orig; el.querySelectorAll<HTMLButtonElement>("[data-qstep]").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); editQtyInline(el, Number(b.dataset.qstep)); })); };
+    let busy = false, ended = false;
+    // Back to "− n +" (n = the saved count after a Confirm), then let a
+    // waiting re-render run.
+    const close = () => {
+      if (ended) return;
+      ended = true;
+      document.removeEventListener("pointerdown", outside, true);
+      el.classList.remove("qedit");
+      el.innerHTML = orig;
+      const qn = el.querySelector(".qn"); if (qn) qn.textContent = String(v.quantity);
+      el.querySelectorAll<HTMLButtonElement>("[data-qstep]").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); editQtyInline(el, Number(b.dataset.qstep)); }));
+      ieEnd();
+    };
     const outside = (e: Event) => { if (!busy && !el.contains(e.target as Node)) close(); };
     document.addEventListener("pointerdown", outside, true);
     const confirmIt = async () => {
@@ -1459,9 +1504,9 @@ const posData = {
       busy = true; ok.disabled = true; ok.textContent = "Saving…";
       try {
         const j = await api({ action: "adjustStock", variantId: v.id, from, to });
-        document.removeEventListener("pointerdown", outside, true);
         v.quantity = Number(j.quantity) || 0;
-        render();
+        renderWaiting = true;
+        close();
         if (j.stale) alert(`The stock of ${rgTitle(p)} · ${condLabel(v)} changed meanwhile (a sale or another station) — it's ${v.quantity} now. Nothing was changed; try again if needed.`);
         else toast(`✓ ${rgTitle(p)} · ${condLabel(v)}: stock ${from} → ${v.quantity}`);
       } catch (e: any) { busy = false; sync(); alert(e.message); inp.focus(); }
@@ -1476,6 +1521,7 @@ const posData = {
     inp.addEventListener("click", (e) => e.stopPropagation());
     inp.addEventListener("keydown", (e) => {
       e.stopPropagation();
+      if (e.isComposing || e.keyCode === 229) return;
       if (e.key === "Enter") { e.preventDefault(); confirmIt(); }
       else if (e.key === "Escape") { e.preventDefault(); close(); }
     });
@@ -1484,23 +1530,28 @@ const posData = {
   }
 
   function render() {
+    // An inline editor is open → after it closes. (Only while its box is
+    // really on the page — a lost count can never freeze the list.)
+    if (ieOpen && document.querySelector("#inv-list .ie-input")) { renderWaiting = true; return; }
+    ieOpen = 0; renderWaiting = false;
     renderPlatformFilter();
     const list = visible();
     shownIds = new Set(list.map((p) => p.id));
     $("inv-count").textContent = `${list.length} product${list.length === 1 ? "" : "s"}`;
     $("inv-list").innerHTML = list.length ? list.map(cardHtml).join("") : `<p class="empty">No products match.</p>`;
-    document.querySelectorAll<HTMLElement>("[data-edit]").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); openModal(b.dataset.edit!); }));
+    document.querySelectorAll<HTMLElement>("[data-edit]").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); ieSettled().then(() => openModal(b.dataset.edit!)); }));
     // Click a card (not a control) → open the item's edit modal (owner spec:
     // the old shop-page popup 404'd through the host-split and hit dashboard).
     document.querySelectorAll<HTMLElement>(".inv-card").forEach((card) => {
       card.addEventListener("click", (e) => {
-        if ((e.target as HTMLElement).closest("button, a, input, select, label, .ie-able")) return;
-        openModal(card.dataset.p!);
+        if ((e.target as HTMLElement).closest("button, a, input, select, label, .ie-able, .qedit")) return;
+        ieSettled().then(() => openModal(card.dataset.p!));
       });
     });
     // 🏷 Print on a card: its in-stock conditions (every one if none are).
     document.querySelectorAll<HTMLButtonElement>("[data-cardprint]").forEach((b) => b.addEventListener("click", async (e) => {
       e.stopPropagation();
+      await ieSettled(); // a price typed a moment ago prints, not the old one
       const p = items.find((x) => x.id === b.dataset.cardprint);
       if (!p) return;
       const vs = p.variants.some((v: any) => v.quantity > 0) ? p.variants.filter((v: any) => v.quantity > 0) : p.variants;
@@ -1654,6 +1705,7 @@ const posData = {
   // Print labels for every condition of the selected items (1 each by default,
   // with the per-line "all N" escape hatch for full re-tags).
   $("bulk-print").addEventListener("click", async () => {
+    await ieSettled();
     await fillLabelCodes(items.filter((p) => selected.has(p.id)).flatMap((p) => p.variants));
     const lines: any[] = [];
     items.filter((p) => selected.has(p.id)).forEach((p) => p.variants.forEach((v: any) => {
@@ -3806,6 +3858,7 @@ const posData = {
       clearProductFields();
       addSaved = true;
       setAddOpen(true);
+      if ((state.q || "").trim()) searchMoved();
       ($("inv-search") as HTMLInputElement).value = ""; state.q = ""; state.parsed = null; renderSmart();
       render();
       const focusNext = () => (document.getElementById("np-title") as HTMLInputElement | null)?.focus();

@@ -217,8 +217,9 @@ export const POST: APIRoute = async ({ locals, request }) => {
       // came in meanwhile nothing changes and the real count comes back.
       // Ledger reason "adjust" — not receiving, so no ⚡ Quick adds line.
       if (!locals.can("inventory.manage")) return json({ error: "Only managers can change stock here." }, 403);
-      const from = Math.round(Number(b.from)), to = Math.round(Number(b.to));
-      if (!b.variantId || !Number.isFinite(from) || !Number.isFinite(to) || from < 0 || to < 0 || to > 100000) return json({ error: "Stock must be a whole number, 0 or more." }, 400);
+      const whole = (x: unknown) => (typeof x === "number" ? x : /^\d+$/.test(String(x ?? "")) ? Number(x) : NaN);
+      const from = whole(b.from), to = whole(b.to);
+      if (!b.variantId || !Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < 0 || to > 100000) return json({ error: "Stock must be a whole number, 0 or more." }, 400);
       if (from === to) return json({ ok: true, quantity: to });
       const { data: row, error } = await sb.from("product_variants").update({ quantity: to }).eq("id", b.variantId).eq("quantity", from).select("quantity").maybeSingle();
       if (error) return json({ error: error.message }, 500);
