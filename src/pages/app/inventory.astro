@@ -593,6 +593,11 @@ const posData = {
   .vchip .cond { font-weight:700; font-family:var(--font-mono); }
   .vchip .web { color:var(--green); font-size:0.82rem; }
   .vchip .nweb { color:var(--muted-2); }
+  /* Managers: title / price edit in place (click). */
+  .ie-able { cursor:text; border-bottom:1px dashed transparent; }
+  .ie-able:hover, .ie-able:focus-visible { border-bottom-color:var(--muted); outline:none; }
+  .vprice.ie-able { font-weight:700; }
+  .ie-input { font:inherit; color:var(--text); background:var(--bg); border:1px solid var(--cyan); padding:0.05rem 0.3rem; max-width:100%; }
   .inv-actions { display:flex; flex-direction:column; gap:0.4rem; align-items:stretch; }
   .inv-actions .tot { font-size:0.74rem; color:var(--muted-2); text-align:right; }
   .icon-btn { display:inline-flex; align-items:center; justify-content:center; gap:0.35rem; white-space:nowrap; }
@@ -1227,7 +1232,10 @@ const posData = {
     // Flag non-retail pools (e.g. 🔒 Personal Collection) at a glance.
     const t = typeById.get(v.inventoryTypeId);
     const tIcon = t && t.key !== "retail" ? `<span class="vtype" title="${esc(t.name)}">${esc(t.icon || "📦")}</span> ` : "";
-    return `<span class="vchip ${cls}">${tIcon}<span class="cond">${esc(condLabel(v))}</span> ${money(v.priceCents)} · ${v.quantity} ${web}</span>`;
+    const price = data.isManager
+      ? `<span class="vprice ie-able" data-ieprice="${v.id}" title="Click to change the price" tabindex="0" role="button">${money(v.priceCents)}</span>`
+      : money(v.priceCents);
+    return `<span class="vchip ${cls}">${tIcon}<span class="cond">${esc(condLabel(v))}</span> ${price} · ${v.quantity} ${web}</span>`;
   }
 
   function cardHtml(p: any) {
@@ -1243,13 +1251,18 @@ const posData = {
     const sellBtn = sellV
       ? `<a class="btn btn-ghost btn-sm icon-btn" href="/checkout?add=${sellV.id}" title="Add to checkout">🛒 Sell</a>`
       : "";
+    const printBtn = p.variants.length
+      ? `<button class="btn btn-ghost btn-sm icon-btn" type="button" data-cardprint="${p.id}" title="Print price labels for this item">🏷 Print</button>`
+      : "";
     return `
       <div class="inv-card${selected.has(p.id) ? " selected" : ""}" data-p="${p.id}">
         <input type="checkbox" class="inv-check" data-sel="${p.id}"${selected.has(p.id) ? " checked" : ""} aria-label="Select ${esc(rgTitle(p))}">
         ${cover}
         <div class="inv-main">
           <div class="inv-titlerow">
-            <span class="inv-title">${esc(p.title)}</span>${badge(p.regionCode)}
+            ${data.isManager
+              ? `<span class="inv-title ie-able" data-ietitle="${p.id}" title="Click to rename" tabindex="0" role="button">${esc(p.title)}</span>`
+              : `<span class="inv-title">${esc(p.title)}</span>`}${badge(p.regionCode)}
             <span class="inv-catpill" style="background:${esc(p.categoryColor)}22;color:${esc(p.categoryColor)}">${esc(p.categoryName)}</span>
             ${p.ebayId ? `<span class="inv-ebay" title="Imported from eBay">🛒 eBay</span>` : ""}
           </div>
@@ -1263,6 +1276,7 @@ const posData = {
           <span class="tot">${totalQty(p)} in stock</span>
           <button class="btn btn-primary btn-sm icon-btn" data-edit="${p.id}">✎ Edit</button>
           ${sellBtn}
+          ${printBtn}
           ${webBtn}
         </div>
       </div>`;
@@ -1332,6 +1346,72 @@ const posData = {
       return `<option value="${esc(v)}"${v === state.plat ? " selected" : ""}>${esc(k || "(no platform)")} (${counts.get(k)})</option>`;
     }).join("");
   }
+  /* ---------- Inline edits on the list (managers) ---------- */
+  // Click / Enter / Space opens the editor (keyboard users get it too).
+  function onActivate(el: HTMLElement, go: () => void) {
+    el.addEventListener("click", (e) => { e.stopPropagation(); go(); });
+    el.addEventListener("keydown", (e) => { if (e.target === el && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); go(); } });
+  }
+  // Swaps `el`'s text for an input. Enter or leaving the box saves, Esc
+  // cancels; an unchanged value saves nothing. `save` throws to keep editing.
+  function inlineEdit(el: HTMLElement, value: string, save: (v: string) => Promise<void>, opts?: { decimal?: boolean; width?: string }) {
+    if (el.querySelector("input")) return;
+    const orig = el.innerHTML;
+    const inp = document.createElement("input");
+    inp.className = "ie-input";
+    inp.value = value;
+    if (opts?.decimal) inp.inputMode = "decimal";
+    if (opts?.width) inp.style.width = opts.width;
+    el.innerHTML = "";
+    el.appendChild(inp);
+    inp.focus(); inp.select();
+    let busy = false, done = false;
+    const finish = async (commit: boolean) => {
+      if (busy || done) return;
+      const v = inp.value.trim();
+      if (!commit || v === value.trim()) { done = true; el.innerHTML = orig; el.focus(); return; }
+      busy = true; inp.disabled = true;
+      try { await save(v); done = true; }
+      catch (e: any) { busy = false; inp.disabled = false; alert(e.message); inp.focus(); }
+    };
+    inp.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") { e.preventDefault(); finish(true); }
+      else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+    });
+    inp.addEventListener("click", (e) => e.stopPropagation());
+    inp.addEventListener("blur", () => finish(true));
+  }
+  function editTitleInline(el: HTMLElement) {
+    const p = items.find((x) => x.id === el.dataset.ietitle);
+    if (!p) return;
+    inlineEdit(el, p.title, async (v) => {
+      const pj = await api({ action: "updateProduct", id: p.id, title: v });
+      // What the server stored: a typed "[JP]" title tag becomes the region.
+      p.title = typeof pj.title === "string" ? pj.title : v;
+      if (typeof pj.regionCode === "string") p.regionCode = pj.regionCode;
+      if (pj.upcReset) { p.upcs = (p.upcs || []).filter((u: any) => u.source !== "ebay"); p.upcStatus = ""; p.upcCheckedAt = null; }
+      render();
+      toast(`✓ Renamed to “${p.title}”`);
+    }, { width: `${Math.max(16, Math.min(60, p.title.length + 4))}ch` });
+  }
+  function editPriceInline(el: HTMLElement) {
+    const p = items.find((x) => x.variants.some((v: any) => v.id === el.dataset.ieprice));
+    const v = p?.variants.find((x: any) => x.id === el.dataset.ieprice);
+    if (!p || !v) return;
+    inlineEdit(el, (v.priceCents / 100).toFixed(2), async (raw) => {
+      const n = Number(raw.replace(/[$,\s]/g, ""));
+      if (!raw || !Number.isFinite(n) || n < 0) throw new Error("Type a price, e.g. 24.99");
+      const cents = Math.round(n * 100);
+      if (cents === v.priceCents) { render(); return; }
+      await api({ action: "updateVariant", id: v.id, priceCents: cents });
+      const was = v.priceCents;
+      v.priceCents = cents;
+      render();
+      toast(`✓ ${rgTitle(p)} · ${condLabel(v)}: ${money(was)} → ${money(cents)} — 🏷 Print for new labels`);
+    }, { decimal: true, width: "6.5ch" });
+  }
+
   function render() {
     renderPlatformFilter();
     const list = visible();
@@ -1343,10 +1423,24 @@ const posData = {
     // the old shop-page popup 404'd through the host-split and hit dashboard).
     document.querySelectorAll<HTMLElement>(".inv-card").forEach((card) => {
       card.addEventListener("click", (e) => {
-        if ((e.target as HTMLElement).closest("button, a, input, select, label")) return;
+        if ((e.target as HTMLElement).closest("button, a, input, select, label, .ie-able")) return;
         openModal(card.dataset.p!);
       });
     });
+    // 🏷 Print on a card: its in-stock conditions (every one if none are).
+    document.querySelectorAll<HTMLButtonElement>("[data-cardprint]").forEach((b) => b.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const p = items.find((x) => x.id === b.dataset.cardprint);
+      if (!p) return;
+      const vs = p.variants.some((v: any) => v.quantity > 0) ? p.variants.filter((v: any) => v.quantity > 0) : p.variants;
+      await fillLabelCodes(vs);
+      const lines = vs.filter((v: any) => v.internalCode || v.labelCode).map((v: any) => ({ item: labelItemOf(p, v), defaultCopies: 1, allCopies: v.quantity }));
+      if (!lines.length) { alert("This item has no label codes yet — reload the page and try again."); return; }
+      openPrintDialog(lines, lblTemplates, { title: `Print · ${rgTitle(p)}` });
+    }));
+    // Managers: click a title or a price to change it right here.
+    document.querySelectorAll<HTMLElement>("[data-ietitle]").forEach((el) => onActivate(el, () => editTitleInline(el)));
+    document.querySelectorAll<HTMLElement>("[data-ieprice]").forEach((el) => onActivate(el, () => editPriceInline(el)));
     // Bulk-select checkboxes.
     document.querySelectorAll<HTMLInputElement>(".inv-check").forEach((cb) => {
       cb.addEventListener("change", () => {
@@ -1602,7 +1696,14 @@ const posData = {
     const mPlat = document.getElementById("m-platform") as HTMLSelectElement | null;
     if (mPlat) {
       const raw = String(p.platform ?? "");
-      if (raw && ![...mPlat.options].some((o) => o.value === raw)) mPlat.insertBefore(new Option(raw, raw), mPlat.options[1] ?? null);
+      // Not in the list (e.g. an import's "nintendo 64"): keep it, listed
+      // right after "— none —". options[1] sits inside an <optgroup>, so it
+      // can't be the insertBefore anchor (that threw and left the window
+      // half set up).
+      if (raw && ![...mPlat.options].some((o) => o.value === raw)) {
+        const o = new Option(raw, raw);
+        if (mPlat.options[0]?.parentElement === mPlat) mPlat.options[0].after(o); else mPlat.prepend(o);
+      }
       mPlat.value = raw;
       mPlat.dataset.orig = raw;
     }
