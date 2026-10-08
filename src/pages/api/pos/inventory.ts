@@ -211,6 +211,25 @@ export const POST: APIRoute = async ({ locals, request }) => {
       });
       return json({ ok: true, newQuantity: Number(newQty ?? 0), ...quick });
     }
+    case "adjustStock": {
+      // A manager's count correction from the inventory list (− / + then
+      // Confirm). Compare-and-set on the number they saw: if a copy sold or
+      // came in meanwhile nothing changes and the real count comes back.
+      // Ledger reason "adjust" — not receiving, so no ⚡ Quick adds line.
+      if (!locals.can("inventory.manage")) return json({ error: "Only managers can change stock here." }, 403);
+      const from = Math.round(Number(b.from)), to = Math.round(Number(b.to));
+      if (!b.variantId || !Number.isFinite(from) || !Number.isFinite(to) || from < 0 || to < 0 || to > 100000) return json({ error: "Stock must be a whole number, 0 or more." }, 400);
+      if (from === to) return json({ ok: true, quantity: to });
+      const { data: row, error } = await sb.from("product_variants").update({ quantity: to }).eq("id", b.variantId).eq("quantity", from).select("quantity").maybeSingle();
+      if (error) return json({ error: error.message }, 500);
+      if (!row) {
+        const { data: cur } = await sb.from("product_variants").select("quantity").eq("id", b.variantId).maybeSingle();
+        if (!cur) return json({ error: "That condition no longer exists." }, 404);
+        return json({ ok: true, stale: true, quantity: cur.quantity ?? 0 });
+      }
+      await sb.from("stock_movements").insert({ variant_id: b.variantId, delta: to - from, reason: "adjust", channel: "in_store", employee_id: uid });
+      return json({ ok: true, quantity: row.quantity ?? to });
+    }
     // ---- Entry DRAFTS (staged lines; nothing applies until commit) ----
     case "stageItem": {
       const qty = Math.max(1, Math.round(Number(b.qty)) || 1);

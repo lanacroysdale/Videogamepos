@@ -598,6 +598,16 @@ const posData = {
   .ie-able:hover, .ie-able:focus-visible { border-bottom-color:var(--muted); outline:none; }
   .vprice.ie-able { font-weight:700; }
   .ie-input { font:inherit; color:var(--text); background:var(--bg); border:1px solid var(--cyan); padding:0.05rem 0.3rem; max-width:100%; }
+  .vqty { display:inline-flex; align-items:center; gap:0.25rem; }
+  .vqty .qn { min-width:1ch; text-align:center; font-weight:700; }
+  .qbtn { width:1.35rem; height:1.35rem; padding:0; font:inherit; font-weight:700; line-height:1; color:var(--text); background:rgba(255,255,255,.06); border:1px solid var(--border-strong); cursor:pointer; }
+  .qbtn:disabled { opacity:0.35; cursor:default; }
+  .vqty.qedit { gap:0.3rem; padding:0.1rem 0.3rem; border:1px solid var(--cyan); background:var(--panel); }
+  .qfrom { color:var(--muted); white-space:nowrap; }
+  .qin { width:4ch; text-align:center; }
+  .qok { font:inherit; font-size:0.74rem; font-weight:700; padding:0.15rem 0.45rem; color:#04222a; background:var(--cyan); border:1px solid var(--cyan); cursor:pointer; white-space:nowrap; }
+  .qok:disabled { opacity:0.45; cursor:default; }
+  .qno { font:inherit; padding:0 0.3rem; color:var(--muted); background:none; border:0; cursor:pointer; }
   .inv-actions { display:flex; flex-direction:column; gap:0.4rem; align-items:stretch; }
   .inv-actions .tot { font-size:0.74rem; color:var(--muted-2); text-align:right; }
   .icon-btn { display:inline-flex; align-items:center; justify-content:center; gap:0.35rem; white-space:nowrap; }
@@ -1235,7 +1245,11 @@ const posData = {
     const price = data.isManager
       ? `<span class="vprice ie-able" data-ieprice="${v.id}" title="Click to change the price" tabindex="0" role="button">${money(v.priceCents)}</span>`
       : money(v.priceCents);
-    return `<span class="vchip ${cls}">${tIcon}<span class="cond">${esc(condLabel(v))}</span> ${price} · ${v.quantity} ${web}</span>`;
+    // Managers: − / + propose a new count; nothing changes until Confirm.
+    const qty = data.isManager
+      ? `<span class="vqty" data-vqty="${v.id}"><button type="button" class="qbtn" data-qstep="-1" title="Fewer in stock" aria-label="Fewer in stock"${v.quantity > 0 ? "" : " disabled"}>−</button><span class="qn">${v.quantity}</span><button type="button" class="qbtn" data-qstep="1" title="More in stock — a count correction (new stock you bought: ＋ Receive in ✎ Edit, so its cost is kept)" aria-label="More in stock">+</button></span>`
+      : String(v.quantity);
+    return `<span class="vchip ${cls}">${tIcon}<span class="cond">${esc(condLabel(v))}</span> ${price} · ${qty} ${web}</span>`;
   }
 
   function cardHtml(p: any) {
@@ -1412,6 +1426,63 @@ const posData = {
     }, { decimal: true, width: "6.5ch" });
   }
 
+  // Stock count change (managers): the chip's "− 2 +" becomes "2 → − [3] +
+  // ✓ Confirm ✕". ± / typing adjust the proposal; only Confirm (or Enter)
+  // saves — Esc, ✕ or clicking elsewhere drops it.
+  function editQtyInline(el: HTMLElement, step: number) {
+    if (el.querySelector("input")) return;
+    const p = items.find((x) => x.variants.some((v: any) => v.id === el.dataset.vqty));
+    const v = p?.variants.find((x: any) => x.id === el.dataset.vqty);
+    if (!p || !v) return;
+    const from = Number(v.quantity) || 0;
+    const orig = el.innerHTML;
+    el.classList.add("qedit");
+    el.innerHTML = `<span class="qfrom">${from} →</span><button type="button" class="qbtn" data-d="-1" aria-label="One fewer">−</button><input class="ie-input qin" inputmode="numeric" aria-label="New stock count"><button type="button" class="qbtn" data-d="1" aria-label="One more">+</button><button type="button" class="qok"></button><button type="button" class="qno" aria-label="Cancel">✕</button>`;
+    const inp = el.querySelector<HTMLInputElement>(".qin")!;
+    const ok = el.querySelector<HTMLButtonElement>(".qok")!;
+    const val = () => { const n = Number(inp.value.trim()); return Number.isInteger(n) && n >= 0 ? n : null; };
+    const sync = () => {
+      const n = val();
+      ok.disabled = n === null || n === from;
+      ok.textContent = n === null ? "✓ Confirm" : `✓ Confirm ${from} → ${n}${n === from ? "" : ` (${n > from ? "+" : "−"}${Math.abs(n - from)})`}`;
+    };
+    inp.value = String(Math.max(0, from + step));
+    sync();
+    inp.focus(); inp.select();
+    let busy = false;
+    const close = () => { document.removeEventListener("pointerdown", outside, true); el.classList.remove("qedit"); el.innerHTML = orig; el.querySelectorAll<HTMLButtonElement>("[data-qstep]").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); editQtyInline(el, Number(b.dataset.qstep)); })); };
+    const outside = (e: Event) => { if (!busy && !el.contains(e.target as Node)) close(); };
+    document.addEventListener("pointerdown", outside, true);
+    const confirmIt = async () => {
+      const to = val();
+      if (busy || to === null || to === from) return;
+      busy = true; ok.disabled = true; ok.textContent = "Saving…";
+      try {
+        const j = await api({ action: "adjustStock", variantId: v.id, from, to });
+        document.removeEventListener("pointerdown", outside, true);
+        v.quantity = Number(j.quantity) || 0;
+        render();
+        if (j.stale) alert(`The stock of ${rgTitle(p)} · ${condLabel(v)} changed meanwhile (a sale or another station) — it's ${v.quantity} now. Nothing was changed; try again if needed.`);
+        else toast(`✓ ${rgTitle(p)} · ${condLabel(v)}: stock ${from} → ${v.quantity}`);
+      } catch (e: any) { busy = false; sync(); alert(e.message); inp.focus(); }
+    };
+    el.querySelectorAll<HTMLButtonElement>("[data-d]").forEach((b) => b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const n = val() ?? from;
+      inp.value = String(Math.max(0, n + Number(b.dataset.d)));
+      sync(); inp.focus();
+    }));
+    inp.addEventListener("input", sync);
+    inp.addEventListener("click", (e) => e.stopPropagation());
+    inp.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") { e.preventDefault(); confirmIt(); }
+      else if (e.key === "Escape") { e.preventDefault(); close(); }
+    });
+    ok.addEventListener("click", (e) => { e.stopPropagation(); confirmIt(); });
+    el.querySelector(".qno")!.addEventListener("click", (e) => { e.stopPropagation(); close(); });
+  }
+
   function render() {
     renderPlatformFilter();
     const list = visible();
@@ -1441,6 +1512,10 @@ const posData = {
     // Managers: click a title or a price to change it right here.
     document.querySelectorAll<HTMLElement>("[data-ietitle]").forEach((el) => onActivate(el, () => editTitleInline(el)));
     document.querySelectorAll<HTMLElement>("[data-ieprice]").forEach((el) => onActivate(el, () => editPriceInline(el)));
+    document.querySelectorAll<HTMLButtonElement>("[data-vqty] [data-qstep]").forEach((b) => b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      editQtyInline(b.closest<HTMLElement>("[data-vqty]")!, Number(b.dataset.qstep));
+    }));
     // Bulk-select checkboxes.
     document.querySelectorAll<HTMLInputElement>(".inv-check").forEach((cb) => {
       cb.addEventListener("change", () => {
