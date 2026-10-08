@@ -24,7 +24,9 @@ function route(m: ScanMsg) {
   if (active && active.tagName === "INPUT" && ["text", "search", "number", ""].includes((active as HTMLInputElement).type || "text")) {
     input = active as HTMLInputElement;
   }
-  if (!input || input.readOnly || input.disabled) input = opts?.target() ?? null;
+  // data-noscan: a box a scan must never land in (e.g. an inline title /
+  // price / stock edit) — the scan goes to the page's default input instead.
+  if (!input || input.readOnly || input.disabled || input.dataset.noscan) input = opts?.target() ?? null;
   // Look the code up BEFORE dispatching: pages clear the field / mutate their
   // list on an exact hit, and the phone wants to know what that hit was.
   let hit: string | null | undefined;

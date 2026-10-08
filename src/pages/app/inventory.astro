@@ -367,7 +367,8 @@ const posData = {
   </div>
 
   <div id="bulk-bar" class="bulk-bar" hidden>
-    <span class="bulk-count"><strong id="bulk-n">0</strong> selected</span>
+    <span class="bulk-count"><strong id="bulk-n">0</strong> selected<span id="bulk-hidden" class="bulk-hidden"></span></span>
+    <label class="bulk-keep" title="Off: a new search or filter starts a fresh selection. On: what you've picked stays selected while you search for more — e.g. to build one batch of labels. Printing labels clears it either way."><input type="checkbox" id="bulk-keep" /> Keep across searches</label>
     <div class="bulk-actions">
       <button id="bulk-selall" class="btn btn-ghost btn-sm" type="button">Select all shown</button>
       <button id="bulk-print" class="btn btn-ghost btn-sm" type="button">🏷 Print labels</button>
@@ -557,6 +558,9 @@ const posData = {
   }
   .bulk-count { font-weight:700; }
   .bulk-count strong { color:var(--cyan); font-family:var(--font-mono); }
+  .bulk-hidden { font-weight:500; color:var(--muted); font-size:0.85rem; }
+  .bulk-keep { display:flex; align-items:center; gap:0.4rem; font-size:0.82rem; color:var(--muted); cursor:pointer; white-space:nowrap; }
+  .bulk-keep input { width:1rem; height:1rem; accent-color:var(--cyan); margin:0; }
   .bulk-actions { display:flex; flex-wrap:wrap; gap:0.5rem; }
   .bulk-region { width:auto; padding:0.3rem 0.45rem; font-size:0.84rem; }
   .m-vtag { display:flex; flex-direction:column; justify-content:flex-end; gap:0.2rem; }
@@ -589,6 +593,21 @@ const posData = {
   .vchip .cond { font-weight:700; font-family:var(--font-mono); }
   .vchip .web { color:var(--green); font-size:0.82rem; }
   .vchip .nweb { color:var(--muted-2); }
+  /* Managers: title / price edit in place (click). */
+  .ie-able { cursor:text; border-bottom:1px dashed transparent; }
+  .ie-able:hover, .ie-able:focus-visible { border-bottom-color:var(--muted); outline:none; }
+  .vprice.ie-able { font-weight:700; }
+  .ie-input { font:inherit; color:var(--text); background:var(--bg); border:1px solid var(--cyan); padding:0.05rem 0.3rem; max-width:100%; }
+  .vqty { display:inline-flex; align-items:center; gap:0.25rem; }
+  .vqty .qn { min-width:1ch; text-align:center; font-weight:700; }
+  .qbtn { width:1.35rem; height:1.35rem; padding:0; font:inherit; font-weight:700; line-height:1; color:var(--text); background:rgba(255,255,255,.06); border:1px solid var(--border-strong); cursor:pointer; }
+  .qbtn:disabled { opacity:0.35; cursor:default; }
+  .vqty.qedit { gap:0.3rem; padding:0.1rem 0.3rem; border:1px solid var(--cyan); background:var(--panel); }
+  .qfrom { color:var(--muted); white-space:nowrap; }
+  .qin { width:4ch; text-align:center; }
+  .qok { font:inherit; font-size:0.74rem; font-weight:700; padding:0.15rem 0.45rem; color:#04222a; background:var(--cyan); border:1px solid var(--cyan); cursor:pointer; white-space:nowrap; }
+  .qok:disabled { opacity:0.45; cursor:default; }
+  .qno { font:inherit; padding:0 0.3rem; color:var(--muted); background:none; border:0; cursor:pointer; }
   .inv-actions { display:flex; flex-direction:column; gap:0.4rem; align-items:stretch; }
   .inv-actions .tot { font-size:0.74rem; color:var(--muted-2); text-align:right; }
   .icon-btn { display:inline-flex; align-items:center; justify-content:center; gap:0.35rem; white-space:nowrap; }
@@ -879,6 +898,13 @@ const posData = {
   const toCents = (v: string) => Math.max(0, Math.round(parseFloat(v) * 100) || 0);
   const state = { q: "", cat: "", plat: "", region: "", sort: "title", instock: false, web: false, ebay: false, attention: false, needsupc: false, parsed: null as any };
   const selected = new Set<string>(); // product ids selected for bulk edit
+  let shownIds = new Set<string>(); // the cards on screen (render)
+  // Off (default): a new search or filter starts a fresh selection, so items
+  // picked earlier can't ride along unseen into Print labels / Publish. On:
+  // picks carry across searches (building one batch). Remembered per station.
+  let keepSel = false;
+  try { keepSel = localStorage.getItem("tl-inv-keepsel") === "1"; } catch { /* private mode */ }
+  const searchMoved = () => { if (!keepSel) selected.clear(); };
 
   // Regions (migration 20261005000001): a listing's market is a tag shown as a
   // badge next to its title. [] before the migration → no badges / controls.
@@ -1216,7 +1242,14 @@ const posData = {
     // Flag non-retail pools (e.g. 🔒 Personal Collection) at a glance.
     const t = typeById.get(v.inventoryTypeId);
     const tIcon = t && t.key !== "retail" ? `<span class="vtype" title="${esc(t.name)}">${esc(t.icon || "📦")}</span> ` : "";
-    return `<span class="vchip ${cls}">${tIcon}<span class="cond">${esc(condLabel(v))}</span> ${money(v.priceCents)} · ${v.quantity} ${web}</span>`;
+    const price = data.isManager
+      ? `<span class="vprice ie-able" data-ieprice="${v.id}" title="Click to change the price" tabindex="0" role="button">${money(v.priceCents)}</span>`
+      : money(v.priceCents);
+    // Managers: − / + propose a new count; nothing changes until Confirm.
+    const qty = data.isManager
+      ? `<span class="vqty" data-vqty="${v.id}"><button type="button" class="qbtn" data-qstep="-1" title="Fewer in stock" aria-label="Fewer in stock"${v.quantity > 0 ? "" : " disabled"}>−</button><span class="qn">${v.quantity}</span><button type="button" class="qbtn" data-qstep="1" title="More in stock — a count correction (new stock you bought: ＋ Receive in ✎ Edit, so its cost is kept)" aria-label="More in stock">+</button></span>`
+      : String(v.quantity);
+    return `<span class="vchip ${cls}">${tIcon}<span class="cond">${esc(condLabel(v))}</span> ${price} · ${qty} ${web}</span>`;
   }
 
   function cardHtml(p: any) {
@@ -1232,13 +1265,18 @@ const posData = {
     const sellBtn = sellV
       ? `<a class="btn btn-ghost btn-sm icon-btn" href="/checkout?add=${sellV.id}" title="Add to checkout">🛒 Sell</a>`
       : "";
+    const printBtn = p.variants.length
+      ? `<button class="btn btn-ghost btn-sm icon-btn" type="button" data-cardprint="${p.id}" title="Print price labels for this item">🏷 Print</button>`
+      : "";
     return `
       <div class="inv-card${selected.has(p.id) ? " selected" : ""}" data-p="${p.id}">
         <input type="checkbox" class="inv-check" data-sel="${p.id}"${selected.has(p.id) ? " checked" : ""} aria-label="Select ${esc(rgTitle(p))}">
         ${cover}
         <div class="inv-main">
           <div class="inv-titlerow">
-            <span class="inv-title">${esc(p.title)}</span>${badge(p.regionCode)}
+            ${data.isManager
+              ? `<span class="inv-title ie-able" data-ietitle="${p.id}" title="Click to rename" tabindex="0" role="button">${esc(p.title)}</span>`
+              : `<span class="inv-title">${esc(p.title)}</span>`}${badge(p.regionCode)}
             <span class="inv-catpill" style="background:${esc(p.categoryColor)}22;color:${esc(p.categoryColor)}">${esc(p.categoryName)}</span>
             ${p.ebayId ? `<span class="inv-ebay" title="Imported from eBay">🛒 eBay</span>` : ""}
           </div>
@@ -1252,6 +1290,7 @@ const posData = {
           <span class="tot">${totalQty(p)} in stock</span>
           <button class="btn btn-primary btn-sm icon-btn" data-edit="${p.id}">✎ Edit</button>
           ${sellBtn}
+          ${printBtn}
           ${webBtn}
         </div>
       </div>`;
@@ -1321,20 +1360,213 @@ const posData = {
       return `<option value="${esc(v)}"${v === state.plat ? " selected" : ""}>${esc(k || "(no platform)")} (${counts.get(k)})</option>`;
     }).join("");
   }
+  /* ---------- Inline edits on the list (managers) ---------- */
+  // While an inline editor is open (or saving) the list isn't rebuilt: a
+  // rebuild would tear it down mid-typing (and the browser's blur on removal
+  // would save half-typed text). render() waits and runs when the last one
+  // closes. A save started by leaving the box is applied to the item at once
+  // (rolled back if it fails), and Print / Edit wait for it to land.
+  let ieOpen = 0, renderWaiting = false;
+  let iePending: Promise<unknown> | null = null;
+  const ieSettled = () => (iePending ? iePending.catch(() => {}) : Promise.resolve());
+  const ieEnd = () => { ieOpen = Math.max(0, ieOpen - 1); if (!ieOpen && renderWaiting) render(); };
+  // Click / Enter / Space opens the editor (keyboard users get it too).
+  function onActivate(el: HTMLElement, go: () => void) {
+    el.addEventListener("click", (e) => { e.stopPropagation(); go(); });
+    el.addEventListener("keydown", (e) => { if (e.target === el && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); go(); } });
+  }
+  // Swaps `el`'s text for an input. Enter or leaving the box saves, Esc
+  // cancels; an unchanged value saves nothing. `save` throws to keep editing;
+  // `shown` is the text for `el` once saved.
+  function inlineEdit(el: HTMLElement, value: string, save: (v: string) => Promise<void>, shown: () => string, opts?: { decimal?: boolean; width?: string }) {
+    if (el.querySelector("input")) return;
+    const orig = el.innerHTML;
+    const again = el.dataset.ietitle ? `[data-ietitle="${el.dataset.ietitle}"]` : `[data-ieprice="${el.dataset.ieprice}"]`;
+    const inp = document.createElement("input");
+    inp.className = "ie-input";
+    inp.dataset.noscan = "1"; // a phone scan goes to the search box, not here
+    inp.value = value;
+    if (opts?.decimal) inp.inputMode = "decimal";
+    if (opts?.width) inp.style.width = opts.width;
+    el.innerHTML = "";
+    el.appendChild(inp);
+    ieOpen++;
+    inp.focus(); inp.select();
+    let busy = false, done = false;
+    // Keyboard finishes put focus back on the (re-drawn) title / price;
+    // leaving by click or Tab leaves it where the user went.
+    const end = (html: string, refocus: boolean) => {
+      done = true;
+      el.innerHTML = html;
+      ieEnd();
+      if (refocus) document.querySelector<HTMLElement>(again)?.focus();
+    };
+    const finish = async (commit: boolean, byKey: boolean) => {
+      if (busy || done) return;
+      const v = inp.value.trim();
+      if (!commit || v === value.trim()) { end(orig, byKey); return; }
+      busy = true; inp.disabled = true;
+      const run = save(v);
+      iePending = run;
+      try { await run; renderWaiting = true; end(shown(), byKey); }
+      catch (e: any) { busy = false; inp.disabled = false; alert(e.message); inp.focus(); }
+      finally { if (iePending === run) iePending = null; }
+    };
+    inp.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.isComposing || e.keyCode === 229) return; // Enter picking an IME (e.g. Japanese) candidate
+      if (e.key === "Enter") { e.preventDefault(); finish(true, true); }
+      else if (e.key === "Escape") { e.preventDefault(); finish(false, true); }
+    });
+    inp.addEventListener("click", (e) => e.stopPropagation());
+    inp.addEventListener("blur", () => finish(true, false));
+  }
+  function editTitleInline(el: HTMLElement) {
+    const p = items.find((x) => x.id === el.dataset.ietitle);
+    if (!p) return;
+    inlineEdit(el, p.title, async (v) => {
+      if (/^\d{8,}$/.test(v.replace(/\s/g, ""))) throw new Error("That looks like a scanned barcode, not a title — nothing was changed.");
+      const was = { title: p.title, regionCode: p.regionCode };
+      p.title = v;
+      try {
+        const pj = await api({ action: "updateProduct", id: p.id, title: v });
+        // What the server stored: a typed "[JP]" title tag becomes the region.
+        if (typeof pj.title === "string") p.title = pj.title;
+        if (typeof pj.regionCode === "string") p.regionCode = pj.regionCode;
+        if (pj.upcReset) { p.upcs = (p.upcs || []).filter((u: any) => u.source !== "ebay"); p.upcStatus = ""; p.upcCheckedAt = null; }
+      } catch (e) { Object.assign(p, was); throw e; }
+      toast(`✓ Renamed to “${p.title}”`);
+    }, () => esc(p.title), { width: `${Math.max(16, Math.min(60, p.title.length + 4))}ch` });
+  }
+  function editPriceInline(el: HTMLElement) {
+    const p = items.find((x) => x.variants.some((v: any) => v.id === el.dataset.ieprice));
+    const v = p?.variants.find((x: any) => x.id === el.dataset.ieprice);
+    if (!p || !v) return;
+    inlineEdit(el, (v.priceCents / 100).toFixed(2), async (raw) => {
+      const n = Number(raw.replace(/[$,\s]/g, ""));
+      if (!raw || !Number.isFinite(n) || n < 0) throw new Error("Type a price, e.g. 24.99");
+      if (n > 100000) throw new Error("That price looks wrong (a scanned barcode?) — nothing was changed.");
+      const cents = Math.round(n * 100);
+      if (cents === v.priceCents) return;
+      const was = v.priceCents;
+      v.priceCents = cents;
+      try { await api({ action: "updateVariant", id: v.id, priceCents: cents }); }
+      catch (e) { v.priceCents = was; throw e; }
+      toast(`✓ ${rgTitle(p)} · ${condLabel(v)}: ${money(was)} → ${money(cents)} — 🏷 Print for new labels`);
+    }, () => money(v.priceCents), { decimal: true, width: "6.5ch" });
+  }
+
+  // Stock count change (managers): the chip's "− 2 +" becomes "2 → − [3] +
+  // ✓ Confirm ✕". ± / typing adjust the proposal; only Confirm (or Enter)
+  // saves — Esc, ✕ or clicking elsewhere drops it.
+  function editQtyInline(el: HTMLElement, step: number) {
+    if (el.querySelector("input")) return;
+    const p = items.find((x) => x.variants.some((v: any) => v.id === el.dataset.vqty));
+    const v = p?.variants.find((x: any) => x.id === el.dataset.vqty);
+    if (!p || !v) return;
+    const from = Number(v.quantity) || 0;
+    const orig = el.innerHTML;
+    ieOpen++;
+    el.classList.add("qedit");
+    el.innerHTML = `<span class="qfrom">${from} →</span><button type="button" class="qbtn" data-d="-1" aria-label="One fewer">−</button><input class="ie-input qin" inputmode="numeric" aria-label="New stock count"><button type="button" class="qbtn" data-d="1" aria-label="One more">+</button><button type="button" class="qok"></button><button type="button" class="qno" aria-label="Cancel">✕</button>`;
+    const inp = el.querySelector<HTMLInputElement>(".qin")!;
+    inp.dataset.noscan = "1";
+    const ok = el.querySelector<HTMLButtonElement>(".qok")!;
+    // Whole numbers only: blank (cleared to retype) or a scanned barcode is
+    // never a count — Confirm / Enter stay off.
+    const val = () => { const t = inp.value.trim(); return /^\d{1,6}$/.test(t) && Number(t) <= 100000 ? Number(t) : null; };
+    const sync = () => {
+      const n = val();
+      ok.disabled = n === null || n === from;
+      ok.textContent = n === null ? "✓ Confirm" : `✓ Confirm ${from} → ${n}${n === from ? "" : ` (${n > from ? "+" : "−"}${Math.abs(n - from)})`}`;
+    };
+    inp.value = String(Math.max(0, from + step));
+    sync();
+    inp.focus(); inp.select();
+    let busy = false, ended = false;
+    // Back to "− n +" (n = the saved count after a Confirm), then let a
+    // waiting re-render run.
+    const close = () => {
+      if (ended) return;
+      ended = true;
+      document.removeEventListener("pointerdown", outside, true);
+      el.classList.remove("qedit");
+      el.innerHTML = orig;
+      const qn = el.querySelector(".qn"); if (qn) qn.textContent = String(v.quantity);
+      el.querySelectorAll<HTMLButtonElement>("[data-qstep]").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); editQtyInline(el, Number(b.dataset.qstep)); }));
+      ieEnd();
+    };
+    const outside = (e: Event) => { if (!busy && !el.contains(e.target as Node)) close(); };
+    document.addEventListener("pointerdown", outside, true);
+    const confirmIt = async () => {
+      const to = val();
+      if (busy || to === null || to === from) return;
+      busy = true; ok.disabled = true; ok.textContent = "Saving…";
+      try {
+        const j = await api({ action: "adjustStock", variantId: v.id, from, to });
+        v.quantity = Number(j.quantity) || 0;
+        renderWaiting = true;
+        close();
+        if (j.stale) alert(`The stock of ${rgTitle(p)} · ${condLabel(v)} changed meanwhile (a sale or another station) — it's ${v.quantity} now. Nothing was changed; try again if needed.`);
+        else toast(`✓ ${rgTitle(p)} · ${condLabel(v)}: stock ${from} → ${v.quantity}`);
+      } catch (e: any) { busy = false; sync(); alert(e.message); inp.focus(); }
+    };
+    el.querySelectorAll<HTMLButtonElement>("[data-d]").forEach((b) => b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const n = val() ?? from;
+      inp.value = String(Math.max(0, n + Number(b.dataset.d)));
+      sync(); inp.focus();
+    }));
+    inp.addEventListener("input", sync);
+    inp.addEventListener("click", (e) => e.stopPropagation());
+    inp.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key === "Enter") { e.preventDefault(); confirmIt(); }
+      else if (e.key === "Escape") { e.preventDefault(); close(); }
+    });
+    ok.addEventListener("click", (e) => { e.stopPropagation(); confirmIt(); });
+    el.querySelector(".qno")!.addEventListener("click", (e) => { e.stopPropagation(); close(); });
+  }
+
   function render() {
+    // An inline editor is open → after it closes. (Only while its box is
+    // really on the page — a lost count can never freeze the list.)
+    if (ieOpen && document.querySelector("#inv-list .ie-input")) { renderWaiting = true; return; }
+    ieOpen = 0; renderWaiting = false;
     renderPlatformFilter();
     const list = visible();
+    shownIds = new Set(list.map((p) => p.id));
     $("inv-count").textContent = `${list.length} product${list.length === 1 ? "" : "s"}`;
     $("inv-list").innerHTML = list.length ? list.map(cardHtml).join("") : `<p class="empty">No products match.</p>`;
-    document.querySelectorAll<HTMLElement>("[data-edit]").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); openModal(b.dataset.edit!); }));
+    document.querySelectorAll<HTMLElement>("[data-edit]").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); ieSettled().then(() => openModal(b.dataset.edit!)); }));
     // Click a card (not a control) → open the item's edit modal (owner spec:
     // the old shop-page popup 404'd through the host-split and hit dashboard).
     document.querySelectorAll<HTMLElement>(".inv-card").forEach((card) => {
       card.addEventListener("click", (e) => {
-        if ((e.target as HTMLElement).closest("button, a, input, select, label")) return;
-        openModal(card.dataset.p!);
+        if ((e.target as HTMLElement).closest("button, a, input, select, label, .ie-able, .qedit")) return;
+        ieSettled().then(() => openModal(card.dataset.p!));
       });
     });
+    // 🏷 Print on a card: its in-stock conditions (every one if none are).
+    document.querySelectorAll<HTMLButtonElement>("[data-cardprint]").forEach((b) => b.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      await ieSettled(); // a price typed a moment ago prints, not the old one
+      const p = items.find((x) => x.id === b.dataset.cardprint);
+      if (!p) return;
+      const vs = p.variants.some((v: any) => v.quantity > 0) ? p.variants.filter((v: any) => v.quantity > 0) : p.variants;
+      await fillLabelCodes(vs);
+      const lines = vs.filter((v: any) => v.internalCode || v.labelCode).map((v: any) => ({ item: labelItemOf(p, v), defaultCopies: 1, allCopies: v.quantity }));
+      if (!lines.length) { alert("This item has no label codes yet — reload the page and try again."); return; }
+      openPrintDialog(lines, lblTemplates, { title: `Print · ${rgTitle(p)}` });
+    }));
+    // Managers: click a title or a price to change it right here.
+    document.querySelectorAll<HTMLElement>("[data-ietitle]").forEach((el) => onActivate(el, () => editTitleInline(el)));
+    document.querySelectorAll<HTMLElement>("[data-ieprice]").forEach((el) => onActivate(el, () => editPriceInline(el)));
+    document.querySelectorAll<HTMLButtonElement>("[data-vqty] [data-qstep]").forEach((b) => b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      editQtyInline(b.closest<HTMLElement>("[data-vqty]")!, Number(b.dataset.qstep));
+    }));
     // Bulk-select checkboxes.
     document.querySelectorAll<HTMLInputElement>(".inv-check").forEach((cb) => {
       cb.addEventListener("change", () => {
@@ -1358,7 +1590,16 @@ const posData = {
     const bar = $("bulk-bar") as HTMLElement;
     bar.hidden = entryMode || selected.size === 0;
     $("bulk-n").textContent = String(selected.size);
+    const hidden = [...selected].filter((id) => !shownIds.has(id)).length;
+    $("bulk-hidden").textContent = hidden ? ` · ${hidden} not shown` : "";
   }
+  ($("bulk-keep") as HTMLInputElement).checked = keepSel;
+  $("bulk-keep").addEventListener("change", (e) => {
+    keepSel = (e.target as HTMLInputElement).checked;
+    try { localStorage.setItem("tl-inv-keepsel", keepSel ? "1" : "0"); } catch { /* private mode */ }
+    // Back to "this search only": drop picks that aren't on screen.
+    if (!keepSel) { [...selected].forEach((id) => { if (!shownIds.has(id)) selected.delete(id); }); render(); }
+  });
   $("bulk-clear").addEventListener("click", () => { selected.clear(); render(); });
   $("bulk-selall").addEventListener("click", () => { visible().forEach((p) => selected.add(p.id)); render(); });
 
@@ -1464,13 +1705,18 @@ const posData = {
   // Print labels for every condition of the selected items (1 each by default,
   // with the per-line "all N" escape hatch for full re-tags).
   $("bulk-print").addEventListener("click", async () => {
+    await ieSettled();
     await fillLabelCodes(items.filter((p) => selected.has(p.id)).flatMap((p) => p.variants));
     const lines: any[] = [];
     items.filter((p) => selected.has(p.id)).forEach((p) => p.variants.forEach((v: any) => {
       if (v.internalCode || v.labelCode) lines.push({ item: labelItemOf(p, v), defaultCopies: 1, allCopies: v.quantity });
     }));
     if (!lines.length) { alert("Selected items have no label codes yet."); return; }
-    openPrintDialog(lines, lblTemplates, { title: `Print labels — ${lines.length} condition${lines.length === 1 ? "" : "s"}` });
+    // Printed = done with this batch: the selection clears (cancel keeps it).
+    openPrintDialog(lines, lblTemplates, {
+      title: `Print labels — ${lines.length} condition${lines.length === 1 ? "" : "s"}`,
+      onPrinted: () => { selected.clear(); render(); },
+    });
   });
 
   /* ---------- Edit modal ---------- */
@@ -1577,7 +1823,14 @@ const posData = {
     const mPlat = document.getElementById("m-platform") as HTMLSelectElement | null;
     if (mPlat) {
       const raw = String(p.platform ?? "");
-      if (raw && ![...mPlat.options].some((o) => o.value === raw)) mPlat.insertBefore(new Option(raw, raw), mPlat.options[1] ?? null);
+      // Not in the list (e.g. an import's "nintendo 64"): keep it, listed
+      // right after "— none —". options[1] sits inside an <optgroup>, so it
+      // can't be the insertBefore anchor (that threw and left the window
+      // half set up).
+      if (raw && ![...mPlat.options].some((o) => o.value === raw)) {
+        const o = new Option(raw, raw);
+        if (mPlat.options[0]?.parentElement === mPlat) mPlat.options[0].after(o); else mPlat.prepend(o);
+      }
       mPlat.value = raw;
       mPlat.dataset.orig = raw;
     }
@@ -2092,16 +2345,18 @@ const posData = {
 
   /* ---------- Toolbar ---------- */
   $("inv-search").addEventListener("input", (e) => {
+    if ((e.target as HTMLInputElement).value.trim() !== (state.q || "").trim()) searchMoved();
     state.q = (e.target as HTMLInputElement).value;
     state.parsed = state.q.trim() ? parseQuery(state.q) : null;
     renderSmart();
     render();
   });
-  $("inv-cat").addEventListener("change", (e) => { state.cat = (e.target as HTMLSelectElement).value; render(); });
-  document.getElementById("inv-plat")?.addEventListener("change", (e) => { state.plat = (e.target as HTMLSelectElement).value; render(); });
-  document.getElementById("inv-region")?.addEventListener("change", (e) => { state.region = (e.target as HTMLSelectElement).value; render(); });
+  $("inv-cat").addEventListener("change", (e) => { searchMoved(); state.cat = (e.target as HTMLSelectElement).value; render(); });
+  document.getElementById("inv-plat")?.addEventListener("change", (e) => { searchMoved(); state.plat = (e.target as HTMLSelectElement).value; render(); });
+  document.getElementById("inv-region")?.addEventListener("change", (e) => { searchMoved(); state.region = (e.target as HTMLSelectElement).value; render(); });
   $("inv-sort").addEventListener("change", (e) => { state.sort = (e.target as HTMLSelectElement).value; render(); });
   document.querySelectorAll<HTMLElement>(".chip.filt").forEach((chip) => chip.addEventListener("click", () => {
+    searchMoved();
     chip.classList.toggle("active");
     (state as any)[chip.dataset.filt!] = chip.classList.contains("active");
     render();
@@ -2109,6 +2364,7 @@ const posData = {
   // Inventory-type chips: exclusive toggle (click again to clear).
   document.querySelectorAll<HTMLElement>(".chip.tfilt").forEach((chip) => chip.addEventListener("click", () => {
     const on = !chip.classList.contains("active");
+    searchMoved();
     document.querySelectorAll(".chip.tfilt").forEach((c) => c.classList.remove("active"));
     chip.classList.toggle("active", on);
     (state as any).invType = on ? chip.dataset.invtype : "";
@@ -3602,6 +3858,7 @@ const posData = {
       clearProductFields();
       addSaved = true;
       setAddOpen(true);
+      if ((state.q || "").trim()) searchMoved();
       ($("inv-search") as HTMLInputElement).value = ""; state.q = ""; state.parsed = null; renderSmart();
       render();
       const focusNext = () => (document.getElementById("np-title") as HTMLInputElement | null)?.focus();

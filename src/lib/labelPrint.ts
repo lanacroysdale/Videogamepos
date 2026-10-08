@@ -154,7 +154,9 @@ const lineTitle = (it: LabelItem) => {
 };
 
 // Shared chooser dialog. Returns immediately; printing happens on user action.
-export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], opts?: { title?: string; onClose?: () => void }): void {
+// `onPrinted` runs once labels actually went out (PDF opened, vector print
+// started, or a direct print fully sent) — not on Cancel or a stopped print.
+export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], opts?: { title?: string; onClose?: () => void; onPrinted?: () => void }): void {
   if (!lines.length) { alert("Nothing to print."); return; }
   document.getElementById("lp-dialog")?.remove();
   const tpls = templates.length ? templates : [{ ...DEFAULT_TEMPLATE }];
@@ -382,7 +384,7 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
   overlay.querySelector("#lp-browser")!.addEventListener("click", async (ev) => {
     const jobs = gatherJobs();
     if (!jobs) return;
-    if (await openPdf(jobs, ev.currentTarget as HTMLButtonElement)) close();
+    if (await openPdf(jobs, ev.currentTarget as HTMLButtonElement)) { opts?.onPrinted?.(); close(); }
   });
 
   // BEST, where available: the Zebra Browser Print agent — ZPL straight to
@@ -429,6 +431,7 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
         });
         btn.textContent = `✓ Sent ${n} label${n === 1 ? "" : "s"}`;
         sending = false;
+        opts?.onPrinted?.();
         setTimeout(close, 1200);
       } catch (e: any) {
         sending = false;
@@ -471,9 +474,10 @@ export function openPrintDialog(lines: PrintLine[], templates: LabelTemplate[], 
   overlay.querySelector("#lp-print")!.addEventListener("click", () => {
     const jobs = gatherJobs();
     if (!jobs) return;
-    const opts = { rotateDeg: rotDeg(), ...tune() };
+    const popts = { rotateDeg: rotDeg(), ...tune() };
+    opts?.onPrinted?.();
     close();
-    printLabels(jobs, chosenTpl(), opts);
+    printLabels(jobs, chosenTpl(), popts);
   });
 
   document.body.appendChild(overlay);
