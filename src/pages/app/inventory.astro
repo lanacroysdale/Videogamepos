@@ -367,7 +367,8 @@ const posData = {
   </div>
 
   <div id="bulk-bar" class="bulk-bar" hidden>
-    <span class="bulk-count"><strong id="bulk-n">0</strong> selected</span>
+    <span class="bulk-count"><strong id="bulk-n">0</strong> selected<span id="bulk-hidden" class="bulk-hidden"></span></span>
+    <label class="bulk-keep" title="Off: a new search or filter starts a fresh selection. On: what you've picked stays selected while you search for more — e.g. to build one batch of labels. Printing labels clears it either way."><input type="checkbox" id="bulk-keep" /> Keep across searches</label>
     <div class="bulk-actions">
       <button id="bulk-selall" class="btn btn-ghost btn-sm" type="button">Select all shown</button>
       <button id="bulk-print" class="btn btn-ghost btn-sm" type="button">🏷 Print labels</button>
@@ -557,6 +558,9 @@ const posData = {
   }
   .bulk-count { font-weight:700; }
   .bulk-count strong { color:var(--cyan); font-family:var(--font-mono); }
+  .bulk-hidden { font-weight:500; color:var(--muted); font-size:0.85rem; }
+  .bulk-keep { display:flex; align-items:center; gap:0.4rem; font-size:0.82rem; color:var(--muted); cursor:pointer; white-space:nowrap; }
+  .bulk-keep input { width:1rem; height:1rem; accent-color:var(--cyan); margin:0; }
   .bulk-actions { display:flex; flex-wrap:wrap; gap:0.5rem; }
   .bulk-region { width:auto; padding:0.3rem 0.45rem; font-size:0.84rem; }
   .m-vtag { display:flex; flex-direction:column; justify-content:flex-end; gap:0.2rem; }
@@ -879,6 +883,13 @@ const posData = {
   const toCents = (v: string) => Math.max(0, Math.round(parseFloat(v) * 100) || 0);
   const state = { q: "", cat: "", plat: "", region: "", sort: "title", instock: false, web: false, ebay: false, attention: false, needsupc: false, parsed: null as any };
   const selected = new Set<string>(); // product ids selected for bulk edit
+  let shownIds = new Set<string>(); // the cards on screen (render)
+  // Off (default): a new search or filter starts a fresh selection, so items
+  // picked earlier can't ride along unseen into Print labels / Publish. On:
+  // picks carry across searches (building one batch). Remembered per station.
+  let keepSel = false;
+  try { keepSel = localStorage.getItem("tl-inv-keepsel") === "1"; } catch { /* private mode */ }
+  const searchMoved = () => { if (!keepSel) selected.clear(); };
 
   // Regions (migration 20261005000001): a listing's market is a tag shown as a
   // badge next to its title. [] before the migration → no badges / controls.
@@ -1324,6 +1335,7 @@ const posData = {
   function render() {
     renderPlatformFilter();
     const list = visible();
+    shownIds = new Set(list.map((p) => p.id));
     $("inv-count").textContent = `${list.length} product${list.length === 1 ? "" : "s"}`;
     $("inv-list").innerHTML = list.length ? list.map(cardHtml).join("") : `<p class="empty">No products match.</p>`;
     document.querySelectorAll<HTMLElement>("[data-edit]").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); openModal(b.dataset.edit!); }));
@@ -1358,7 +1370,16 @@ const posData = {
     const bar = $("bulk-bar") as HTMLElement;
     bar.hidden = entryMode || selected.size === 0;
     $("bulk-n").textContent = String(selected.size);
+    const hidden = [...selected].filter((id) => !shownIds.has(id)).length;
+    $("bulk-hidden").textContent = hidden ? ` · ${hidden} not shown` : "";
   }
+  ($("bulk-keep") as HTMLInputElement).checked = keepSel;
+  $("bulk-keep").addEventListener("change", (e) => {
+    keepSel = (e.target as HTMLInputElement).checked;
+    try { localStorage.setItem("tl-inv-keepsel", keepSel ? "1" : "0"); } catch { /* private mode */ }
+    // Back to "this search only": drop picks that aren't on screen.
+    if (!keepSel) { [...selected].forEach((id) => { if (!shownIds.has(id)) selected.delete(id); }); render(); }
+  });
   $("bulk-clear").addEventListener("click", () => { selected.clear(); render(); });
   $("bulk-selall").addEventListener("click", () => { visible().forEach((p) => selected.add(p.id)); render(); });
 
@@ -1470,7 +1491,11 @@ const posData = {
       if (v.internalCode || v.labelCode) lines.push({ item: labelItemOf(p, v), defaultCopies: 1, allCopies: v.quantity });
     }));
     if (!lines.length) { alert("Selected items have no label codes yet."); return; }
-    openPrintDialog(lines, lblTemplates, { title: `Print labels — ${lines.length} condition${lines.length === 1 ? "" : "s"}` });
+    // Printed = done with this batch: the selection clears (cancel keeps it).
+    openPrintDialog(lines, lblTemplates, {
+      title: `Print labels — ${lines.length} condition${lines.length === 1 ? "" : "s"}`,
+      onPrinted: () => { selected.clear(); render(); },
+    });
   });
 
   /* ---------- Edit modal ---------- */
@@ -2092,16 +2117,18 @@ const posData = {
 
   /* ---------- Toolbar ---------- */
   $("inv-search").addEventListener("input", (e) => {
+    if ((e.target as HTMLInputElement).value.trim() !== (state.q || "").trim()) searchMoved();
     state.q = (e.target as HTMLInputElement).value;
     state.parsed = state.q.trim() ? parseQuery(state.q) : null;
     renderSmart();
     render();
   });
-  $("inv-cat").addEventListener("change", (e) => { state.cat = (e.target as HTMLSelectElement).value; render(); });
-  document.getElementById("inv-plat")?.addEventListener("change", (e) => { state.plat = (e.target as HTMLSelectElement).value; render(); });
-  document.getElementById("inv-region")?.addEventListener("change", (e) => { state.region = (e.target as HTMLSelectElement).value; render(); });
+  $("inv-cat").addEventListener("change", (e) => { searchMoved(); state.cat = (e.target as HTMLSelectElement).value; render(); });
+  document.getElementById("inv-plat")?.addEventListener("change", (e) => { searchMoved(); state.plat = (e.target as HTMLSelectElement).value; render(); });
+  document.getElementById("inv-region")?.addEventListener("change", (e) => { searchMoved(); state.region = (e.target as HTMLSelectElement).value; render(); });
   $("inv-sort").addEventListener("change", (e) => { state.sort = (e.target as HTMLSelectElement).value; render(); });
   document.querySelectorAll<HTMLElement>(".chip.filt").forEach((chip) => chip.addEventListener("click", () => {
+    searchMoved();
     chip.classList.toggle("active");
     (state as any)[chip.dataset.filt!] = chip.classList.contains("active");
     render();
@@ -2109,6 +2136,7 @@ const posData = {
   // Inventory-type chips: exclusive toggle (click again to clear).
   document.querySelectorAll<HTMLElement>(".chip.tfilt").forEach((chip) => chip.addEventListener("click", () => {
     const on = !chip.classList.contains("active");
+    searchMoved();
     document.querySelectorAll(".chip.tfilt").forEach((c) => c.classList.remove("active"));
     chip.classList.toggle("active", on);
     (state as any).invType = on ? chip.dataset.invtype : "";
