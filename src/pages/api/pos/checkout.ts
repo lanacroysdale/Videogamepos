@@ -23,7 +23,7 @@ export const GET: APIRoute = async ({ locals }) => {
   const { data, error } = await locals.supabase
     .from("transactions")
     .select(
-      "id, human_id, total_cents, created_at, note, customer:customers(first_name, last_name), transaction_items(id, variant_id, category_id, kind, description, qty, unit_price_cents, discount_cents, department)",
+      "id, human_id, total_cents, discount_cents, created_at, note, customer:customers(first_name, last_name), transaction_items(id, variant_id, category_id, kind, description, qty, unit_price_cents, discount_cents, department)",
     )
     .eq("type", "sale")
     .eq("status", "open")
@@ -60,15 +60,20 @@ export const POST: APIRoute = async ({ locals, request }) => {
 
   // Re-derive everything server-side; never trust client totals.
   const incoming = body.items as IncomingItem[];
-  const items = incoming.map((it) => ({
-    variant_id: it.variantId ?? null,
-    category_id: it.categoryId ?? null,
-    kind: it.kind === "service" ? "service" : "sale",
-    description: String(it.description ?? "Item").trim().slice(0, 200),
-    qty: Math.max(1, parseInt(String(it.qty)) || 1),
-    unit_price_cents: Math.max(0, Math.round(Number(it.unitPriceCents)) || 0),
-    discount_cents: Math.max(0, Math.round(Number(it.discountCents)) || 0),
-  }));
+  const items = incoming.map((it) => {
+    const qty = Math.max(1, parseInt(String(it.qty)) || 1);
+    const unit = Math.max(0, Math.round(Number(it.unitPriceCents)) || 0);
+    return {
+      variant_id: it.variantId ?? null,
+      category_id: it.categoryId ?? null,
+      kind: it.kind === "service" ? "service" : "sale",
+      description: String(it.description ?? "Item").trim().slice(0, 200),
+      qty,
+      unit_price_cents: unit,
+      // Never more than the line (a qty lowered after typing a discount).
+      discount_cents: Math.min(qty * unit, Math.max(0, Math.round(Number(it.discountCents)) || 0)),
+    };
+  });
   // Lines typed at the register (＋ Custom item, service tiles, add-ons) have
   // no listing behind them, so check them here — before anything is written:
   // a bad one would otherwise fail AFTER the sale row exists (a sale with no
@@ -132,32 +137,45 @@ export const POST: APIRoute = async ({ locals, request }) => {
     totalDiscount = subtotal - total;
   }
 
-  // On completion the sale-level discount (cart discount, or Mark paid's
-  // shortfall) is spread over the lines, so each line's net adds up to what
-  // was paid — Reports (net sales, by hour / category / department) and
-  // Returns read the lines. Held sales keep their lines as typed (the
-  // register loads line discounts back as-is).
+  // On completion the lines are made to add up to what was paid: the sale-
+  // level discount (cart discount, Mark paid's shortfall) is spread over the
+  // lines; if Mark paid is MORE than the lines' net (their own discounts were
+  // bigger than the real haggle) those discounts are given back. Reports
+  // (net sales, by hour / category / department) and Returns read the lines.
+  // Held sales keep their lines as typed (the register loads them back).
   const lines = stamped.map((it) => ({ ...it }));
-  const extra = totalDiscount - itemDiscounts;
-  if (status === "completed" && extra > 0) {
-    const nets = lines.map((it) => Math.max(0, it.unit_price_cents * it.qty - it.discount_cents));
-    const base = nets.reduce((a, n) => a + n, 0);
-    let left = extra;
-    let big = 0;
-    lines.forEach((it, i) => {
-      if (nets[i] > nets[big]) big = i;
-      const share = base ? Math.min(nets[i], Math.floor((extra * nets[i]) / base)) : 0;
-      it.discount_cents += share;
-      left -= share;
-    });
-    // Rounding pennies: on the biggest lines that still have room.
-    for (const i of [big, ...lines.keys()]) {
-      if (left <= 0) break;
-      const room = lines[i].unit_price_cents * lines[i].qty - lines[i].discount_cents;
-      const add = Math.min(room, left);
-      lines[i].discount_cents += add;
-      left -= add;
+  if (status === "completed") {
+    const gross = lines.map((it) => it.unit_price_cents * it.qty);
+    const netNow = lines.reduce((a, it, i) => a + gross[i] - it.discount_cents, 0);
+    let delta = netNow - total; // > 0: more discount needed; < 0: give some back
+    if (delta > 0) {
+      const base = netNow;
+      lines.forEach((it, i) => {
+        const room = gross[i] - it.discount_cents;
+        const share = base ? Math.min(room, Math.floor((delta * room) / base)) : 0;
+        it.discount_cents += share;
+      });
+      delta = lines.reduce((a, it, i) => a + gross[i] - it.discount_cents, 0) - total;
+      for (const it of [...lines].sort((a, b) => (b.unit_price_cents * b.qty - b.discount_cents) - (a.unit_price_cents * a.qty - a.discount_cents))) {
+        if (delta <= 0) break;
+        const add = Math.min(it.unit_price_cents * it.qty - it.discount_cents, delta);
+        it.discount_cents += add; delta -= add;
+      }
+    } else if (delta < 0) {
+      let give = -delta;
+      const discTotal = lines.reduce((a, it) => a + it.discount_cents, 0);
+      lines.forEach((it) => {
+        const back = discTotal ? Math.min(it.discount_cents, Math.floor((give * it.discount_cents) / discTotal)) : 0;
+        it.discount_cents -= back;
+      });
+      give = total - lines.reduce((a, it, i) => a + gross[i] - it.discount_cents, 0);
+      for (const it of [...lines].sort((a, b) => b.discount_cents - a.discount_cents)) {
+        if (give <= 0) break;
+        const back = Math.min(it.discount_cents, give);
+        it.discount_cents -= back; give -= back;
+      }
     }
+    totalDiscount = lines.reduce((a, it) => a + it.discount_cents, 0);
   }
 
   // Resuming a held sale updates that same transaction in place (so completing
@@ -168,6 +186,13 @@ export const POST: APIRoute = async ({ locals, request }) => {
   // The line ids this register last loaded / saved: if the sale changed on
   // another screen since, nothing is overwritten.
   const expected = Array.isArray(body.expectedLineIds) && body.expectedLineIds.every(isUuid) ? (body.expectedLineIds as string[]) : null;
+  // This attempt's id, and the register's earlier attempts that got no answer
+  // (so a retry isn't mistaken for "changed on another screen").
+  const saveRef = isUuid(body.saveRef) ? body.saveRef : null;
+  const prevRefs = Array.isArray(body.prevSaveRefs) ? (body.prevSaveRefs as unknown[]).filter(isUuid).slice(-20) as string[] : null;
+  // The login that opened this screen (a different one can't see that
+  // login's sales — not "deleted").
+  const otherLogin = typeof body.pageUserId === "string" && body.pageUserId && body.pageUserId !== locals.user.id;
   const fields = {
     customer_id: body.customerId ?? null,
     status,
@@ -180,13 +205,18 @@ export const POST: APIRoute = async ({ locals, request }) => {
   };
   // A save that didn't go through: say what the sale is now, so the register
   // never offers to save a completed sale again as a new one.
-  const gone = (state: string, humanId?: number | null) => json({
-    error: state === "completed" ? `Sale${humanId ? ` #${humanId}` : ""} is already completed — nothing was changed.`
-      : state === "changed" ? `Sale${humanId ? ` #${humanId}` : ""} was changed on another screen since this one loaded it — nothing was saved here.`
-      : state === "tab" ? "That's a bar tab — use the Tabs screen."
-      : "That held sale no longer exists (deleted).",
-    state, humanId: humanId ?? null,
-  }, 409);
+  const gone = (state0: string, humanId?: number | null, id?: string | null) => {
+    const state = (state0 === "missing" || state0 === "hidden") && otherLogin ? "wrong_user" : state0;
+    return json({
+      error: state === "completed" ? `Sale${humanId ? ` #${humanId}` : ""} is already completed — nothing was changed.`
+        : state === "changed" ? `Sale${humanId ? ` #${humanId}` : ""} was changed on another screen since this one loaded it — nothing was saved here.`
+        : state === "tab" ? "That's a bar tab — use the Tabs screen."
+        : state === "wrong_user" ? "This screen was opened by a different login, and that sale isn't visible to the one signed in now. Log in as that person (or a manager) in a new tab, then save again here. Nothing was saved."
+        : state === "hidden" ? "That sale belongs to another login — nothing was saved. Log in as that person (or a manager) in a new tab, then save again here."
+        : "That held sale no longer exists (deleted).",
+      state, humanId: humanId ?? null, id: id ?? null,
+    }, 409);
+  };
 
   // Preferred: one database transaction (migration 20261009000001) — header,
   // lines and stock land together or not at all, and a retry is safe.
@@ -197,15 +227,19 @@ export const POST: APIRoute = async ({ locals, request }) => {
     p_fields: { ...fields, customer_id: fields.customer_id ?? "" },
     p_items: lines,
     p_expected: resumeId ? expected : null,
+    p_save_ref: saveRef,
+    p_prev_refs: prevRefs,
   });
-  const noRpc = rpc.error && (rpc.error.code === "PGRST202" || rpc.error.code === "42883" || /could not find the function|does not exist/i.test(rpc.error.message || ""));
+  // Only "the function isn't installed yet" falls back — any other error is
+  // reported (a broken atomic save must not quietly use the old path).
+  const noRpc = rpc.error && (rpc.error.code === "PGRST202" || /could not find the function/i.test(rpc.error.message || ""));
   if (!noRpc) {
     if (rpc.error) {
       if (rpc.error.code === "23503") return json({ error: "An item in this cart is no longer in inventory (deleted) — remove it and try again. Nothing was saved.", state: "item_gone" }, 409);
       return json({ error: rpc.error.message }, 500);
     }
     const r: any = rpc.data;
-    if (!r?.ok) return gone(r?.state || "missing", r?.human_id);
+    if (!r?.ok) return gone(r?.state || "missing", r?.human_id, r?.id);
     return json({ ok: true, id: r.id, humanId: r.human_id, lineIds: r.line_ids ?? [], total, change, status });
   }
 
@@ -224,6 +258,17 @@ export const POST: APIRoute = async ({ locals, request }) => {
     if (varIds.some((v) => !found.has(v))) return json({ error: "An item in this cart is no longer in inventory (deleted) — remove it and try again. Nothing was saved.", state: "item_gone" }, 409);
   }
 
+  // What the sale holds right now (after a partial save, so the register's
+  // "press Save again" isn't refused as changed by its own lines).
+  const currentLineIds = async (id: string) => {
+    const out: string[] = [];
+    for (let off = 0; ; off += 1000) {
+      const { data: page } = await locals.supabase.from("transaction_items").select("id").eq("transaction_id", id).order("id").range(off, off + 999);
+      out.push(...((page ?? []) as any[]).map((r) => r.id));
+      if (!page || page.length < 1000) break;
+    }
+    return out;
+  };
   let txn: any;
   let lineIds: string[] = [];
   if (resumeId) {
@@ -233,8 +278,8 @@ export const POST: APIRoute = async ({ locals, request }) => {
     const { data: cur, error: cErr } = await locals.supabase.from("transactions").select("id, status, is_tab, human_id").eq("id", resumeId).maybeSingle();
     if (cErr) return json({ error: `Couldn't read the sale: ${cErr.message}. Nothing was saved.` }, 500);
     if (!cur) return gone("missing");
-    if (cur.is_tab) return gone("tab", cur.human_id);
-    if (cur.status !== "open") return gone(cur.status, cur.human_id);
+    if (cur.is_tab) return gone("tab", cur.human_id, cur.id);
+    if (cur.status !== "open") return gone(cur.status, cur.human_id, cur.id);
     const oldIds: string[] = [];
     for (let off = 0; ; off += 1000) {
       const { data: page, error: oErr } = await locals.supabase.from("transaction_items").select("id").eq("transaction_id", resumeId).order("id").range(off, off + 999);
@@ -252,7 +297,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
     for (let i = 0; i < oldIds.length; i += 100) {
       let { error: dErr } = await locals.supabase.from("transaction_items").delete().in("id", oldIds.slice(i, i + 100));
       if (dErr) ({ error: dErr } = await locals.supabase.from("transaction_items").delete().in("id", oldIds.slice(i, i + 100)));
-      if (dErr) return json({ error: `Not fully saved — press 💾 Save again here (your screen is right; don't reopen it from Held sales until it saves): ${dErr.message}`, state: "retry" }, 500);
+      if (dErr) return json({ error: `Not fully saved — press 💾 Save again here (your screen is right; don't reopen it from Held sales until it saves): ${dErr.message}`, state: "retry", lineIds: await currentLineIds(resumeId) }, 500);
     }
     const { data, error } = await locals.supabase
       .from("transactions")
@@ -262,7 +307,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
       .eq("is_tab", false) // never let held-sale resume touch a bar tab
       .select()
       .maybeSingle();
-    if (error) return json({ error: `Not fully saved — press 💾 Save again here: ${error.message}`, state: "retry" }, 500);
+    if (error) return json({ error: `Not fully saved — press 💾 Save again here: ${error.message}`, state: "retry", lineIds: await currentLineIds(resumeId) }, 500);
     if (!data) return gone("completed", cur.human_id);
     txn = data;
   } else {

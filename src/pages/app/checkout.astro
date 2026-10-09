@@ -546,7 +546,9 @@ const posData = { catalog, categories: categories ?? [], customer, regions, canM
       const key = line.dataset.key!;
       const item = cart.find((i) => i.key === key)!;
       line.querySelector<HTMLInputElement>("[data-qty]")!.addEventListener("change", (e) => {
-        item.qty = Math.max(1, parseInt((e.target as HTMLInputElement).value) || 1); renderCart();
+        item.qty = Math.max(1, parseInt((e.target as HTMLInputElement).value) || 1);
+        item.discountCents = Math.min(item.discountCents, item.unitPriceCents * item.qty);
+        renderCart();
       });
       line.querySelector<HTMLInputElement>("[data-disc]")!.addEventListener("change", (e) => {
         item.discountCents = Math.min(item.unitPriceCents * item.qty, Math.max(0, Math.round(parseFloat((e.target as HTMLInputElement).value) * 100) || 0)); renderCart();
@@ -758,6 +760,14 @@ const posData = { catalog, categories: categories ?? [], customer, regions, canM
 
   function resumeHeld(h: any) {
     if (!h) return;
+    // This computer has unsaved changes to that very sale (from before a
+    // reload) — offer them rather than silently loading the older server copy.
+    if (parked && parked.heldId === h.id) {
+      if (confirm(`This computer has changes to sale #${h.human_id} that weren't saved (from ${new Date(parked.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}).\n\nOK = continue with those changes · Cancel = open the last saved version (the changes stay offered above)`)) {
+        applyParked(parked);
+        return;
+      }
+    }
     if (cart.length && heldId !== h.id && !confirm(`Replace the current cart with held sale #${h.human_id}?`)) return;
     cart = (h.transaction_items || []).map((it: any) => {
       const cv = catalog.find((c) => c.variantId === it.variant_id);
@@ -777,11 +787,16 @@ const posData = { catalog, categories: categories ?? [], customer, regions, canM
     heldId = h.id;
     heldLineIds = (h.transaction_items || []).map((it: any) => it.id).filter(Boolean);
     cartRef = crypto.randomUUID();
+    unanswered = []; lostSig = "";
     savedAt = null;
+    // The sale-level discount it was held with (its total discount minus the
+    // lines' own); no cash tendered carried over.
+    const lineDisc = (h.transaction_items || []).reduce((a: number, it: any) => a + (it.discount_cents || 0), 0);
+    ($("cart-disc") as HTMLInputElement).value = (Math.max(0, (h.discount_cents || 0) - lineDisc) / 100).toFixed(2).replace(/\.00$/, "");
+    ($("cash-in") as HTMLInputElement).value = "";
     $("receipt").hidden = true;
     renderResumeBanner(h.human_id);
     savedSig = sig();
-    dropParked(h.id);
     renderCart();
     loadHeld();
   }
@@ -811,10 +826,17 @@ const posData = { catalog, categories: categories ?? [], customer, regions, canM
   let cartRef = crypto.randomUUID();
   let heldLineIds: string[] | null = null;
   let savedSig = "";
+  // Saves that got no answer (wifi / time-out): sent with the next save so the
+  // server recognises its own earlier write instead of "changed elsewhere";
+  // `lostSig` = what such a save sent.
+  let unanswered: string[] = [];
+  let lostSig = "";
   const sig = () => JSON.stringify([cart.map((i) => [i.variantId, i.title, i.qty, i.unitPriceCents, i.discountCents]), ($("cart-disc") as HTMLInputElement).value]);
   // A fresh register: no cart, no open sale.
   function newCart() {
     cart = []; heldId = null; heldLineIds = null; cartRef = crypto.randomUUID(); savedSig = "";
+    unanswered = []; lostSig = "";
+    ($("cart-disc") as HTMLInputElement).value = "0"; ($("cash-in") as HTMLInputElement).value = "";
     renderResumeBanner(null);
   }
   function renderResumeBanner(humanId: number | null) {
@@ -839,14 +861,14 @@ const posData = { catalog, categories: categories ?? [], customer, regions, canM
   let parked: any = null; // the copy offered back after a reload
   function backup() {
     try {
-      if (cart.length) localStorage.setItem(BK, JSON.stringify({ at: Date.now(), heldId, heldHuman, heldLineIds, cartRef, cart, cartDisc: ($("cart-disc") as HTMLInputElement).value, dirty: sig() !== savedSig }));
+      if (cart.length) localStorage.setItem(BK, JSON.stringify({ at: Date.now(), heldId, heldHuman, heldLineIds, cartRef, unanswered, cart, cartDisc: ($("cart-disc") as HTMLInputElement).value, dirty: sig() !== savedSig || unanswered.length > 0 }));
       else localStorage.removeItem(BK);
     } catch { /* private mode / full */ }
   }
   // This tab took over (resumed / saved / completed) the parked copy's sale →
   // the copy is stale.
   function dropParked(saleId?: string | null) {
-    if (!parked || (saleId !== undefined && parked.heldId !== saleId)) return;
+    if (!parked || saleId === null || (saleId !== undefined && parked.heldId !== saleId)) return;
     parked = null;
     try { localStorage.removeItem(BK_PREV); } catch {}
     const el = $("restore-banner") as HTMLElement; el.hidden = true; el.innerHTML = "";
@@ -872,16 +894,20 @@ const posData = { catalog, categories: categories ?? [], customer, regions, canM
     $("rb-restore").addEventListener("click", () => {
       if (busy) return;
       if (cart.length && !confirm("Replace the current cart with the unfinished one?")) return;
+      applyParked(prev);
+    });
+    $("rb-drop").addEventListener("click", () => { if (confirm("Discard the unfinished cart? This can't be undone.")) dropParked(); });
+  }
+  function applyParked(prev: any) {
       cart = prev.cart;
       heldId = prev.heldId || null;
       heldLineIds = Array.isArray(prev.heldLineIds) ? prev.heldLineIds : null;
       cartRef = prev.cartRef || crypto.randomUUID();
+      unanswered = Array.isArray(prev.unanswered) ? prev.unanswered : [];
       ($("cart-disc") as HTMLInputElement).value = prev.cartDisc || "0";
       savedAt = null; savedSig = ""; // restored = not saved yet
       renderResumeBanner(heldId ? prev.heldHuman : null);
       dropParked(); renderCart(); loadHeld();
-    });
-    $("rb-drop").addEventListener("click", () => { if (confirm("Discard the unfinished cart? This can't be undone.")) dropParked(); });
   }
 
   // ---------- ✓ Mark paid (managers) ----------
@@ -941,30 +967,44 @@ const posData = { catalog, categories: categories ?? [], customer, regions, canM
       let asNew = false;
       for (;;) {
         const st = asNew ? "open" : status;
+        // What this attempt sends (edits made while it's in flight stay
+        // unsaved / stay on the register).
+        const sentSig = sig();
+        const sentQty = new Map(cart.map((i) => [i.key, i.qty]));
+        const saveRef = crypto.randomUUID();
         let res: Response | null = null, j: any = null;
         try {
           res = await fetch("/api/pos/checkout", {
             method: "POST", headers: { "content-type": "application/json" },
             body: JSON.stringify({
-              customerId: customer?.id ?? null, status: st, resumeId: asNew ? null : heldId, clientRef: cartRef,
-              expectedLineIds: asNew ? null : heldLineIds, cartDiscountCents: cartDisc, cashCents: cash,
+              customerId: customer?.id ?? null, status: st, resumeId: heldId, clientRef: cartRef,
+              expectedLineIds: heldLineIds, saveRef, prevSaveRefs: unanswered, pageUserId: data.userId || null,
+              cartDiscountCents: cartDisc, cashCents: cash,
               ...(opts?.manual && !asNew ? { manualPayment: opts.manual } : {}),
               items: cart.map((i) => ({ variantId: i.variantId, categoryId: i.categoryId, kind: i.kind, description: i.title, qty: i.qty, unitPriceCents: i.unitPriceCents, discountCents: i.discountCents, ...(i.custom ? { custom: true } : {}) })),
             }),
           });
           j = await res.json().catch(() => null);
         } catch { res = null; }
-        if (!res || !j) {
-          // No answer (wifi, time-out): it may or may not have saved.
+        if (!res || !j || (res.status >= 500 && j.state !== "retry")) {
+          // No (usable) answer: it may or may not have saved. Remember this
+          // attempt so the next save is recognised as its own.
+          unanswered = [...unanswered, saveRef].slice(-20); lostSig = sentSig;
+          backup();
+          if (res && j && j.error) { alert(`Could not save: ${j.error}\n\nIt may or may not have gone through — check the Held sales strip at the top before trying again.`); loadHeld(); return; }
           alert("Couldn't confirm the save — no answer from the server (connection or time-out).\n\nIt may or may not have gone through: look at the Held sales strip at the top before trying again. Your cart is still here and backed up on this computer.");
           loadHeld();
           return;
         }
+        // A definite answer: earlier lost attempts are settled.
+        const prevLost = lostSig;
+        unanswered = []; lostSig = "";
         if (res.ok && j.ok) {
           if (st === "open" && (opts?.stay || asNew)) {
-            // Saved — still open here; the banner shows when.
+            // Saved — still open here; the banner shows when. Edits made
+            // while it was saving stay marked unsaved.
             heldId = j.id; heldLineIds = Array.isArray(j.lineIds) ? j.lineIds : null;
-            savedAt = Date.now(); savedSig = sig();
+            savedAt = Date.now(); savedSig = sentSig;
             renderResumeBanner(j.humanId);
             dropParked(j.id);
             backup();
@@ -981,8 +1021,14 @@ const posData = { catalog, categories: categories ?? [], customer, regions, canM
             ? `<h3>✓ Sale #${j.humanId} ${opts?.manual ? "paid" : "complete"}</h3><p>Total ${money(j.total)}${opts?.manual ? ` · ${money(opts.manual.cashCents)} cash + ${money(opts.manual.cardCents)} card` : ""}${j.change ? ` · Change due <strong>${money(j.change)}</strong>` : ""}</p>`
             : `<h3>⏸ Held as #${j.humanId}</h3><p>Saved — resume it anytime from the Held sales bar above.</p>`;
           dropParked(j.id);
+          // Anything scanned while it was saving wasn't in it — it stays on
+          // the register as the next sale.
+          const carry = [
+            ...cart.filter((i) => !sentQty.has(i.key)),
+            ...cart.filter((i) => sentQty.has(i.key) && i.qty > sentQty.get(i.key)!).map((i) => ({ ...i, key: crypto.randomUUID(), qty: i.qty - sentQty.get(i.key)!, discountCents: 0 })),
+          ];
           newCart();
-          ($("cart-disc") as HTMLInputElement).value = "0"; ($("cash-in") as HTMLInputElement).value = "";
+          cart = carry;
           renderCart();
           loadHeld();
           rc.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -994,22 +1040,35 @@ const posData = { catalog, categories: categories ?? [], customer, regions, canM
           return;
         }
         if (res.status === 409 && j.state === "completed") {
-          // Already completed (e.g. an earlier try that lost its answer) —
-          // never saved again.
-          alert(`${j.error}\n\nThe register is cleared. See Reports for that sale.`);
-          dropParked(heldId);
-          newCart(); renderCart(); loadHeld();
-          return;
-        }
-        if (res.status === 409 && !asNew && (j.state === "missing" || j.state === "changed")) {
+          // Already completed — never saved again. If this screen holds
+          // nothing beyond what was saved / sent before, that's it (e.g. a
+          // try whose answer was lost); otherwise its extra items are offered
+          // as a new held sale instead of being wiped.
+          const nothingNew = sig() === savedSig || (!!prevLost && (sig() === prevLost || sentSig === prevLost));
+          if (nothingNew || asNew) {
+            alert(`${j.error}\n\nThe register is cleared. See Reports for that sale.`);
+            if (heldId) dropParked(heldId);
+            newCart(); renderCart(); loadHeld();
+            return;
+          }
+          if (!confirm(`${j.error}\n\nThis screen has items that may not be in it. Keep this cart as a NEW held sale so you can compare? (Nothing gets completed.)`)) return;
+        } else if (res.status === 409 && !asNew && (j.state === "missing" || j.state === "changed")) {
           const q = j.state === "changed"
             ? `${j.error}\n\nKeep what's on THIS screen as a separate NEW held sale? (Nothing gets completed — compare both in Held sales.)`
             : `${j.error}\n\nSave this cart as a NEW held sale?`;
-          if (confirm(q)) { asNew = true; cartRef = crypto.randomUUID(); continue; }
+          if (!confirm(q)) return;
+        } else {
+          if (j.state === "retry" && Array.isArray(j.lineIds)) { heldLineIds = j.lineIds; backup(); }
+          alert("Could not save: " + (j.error || `error ${res.status}`));
           return;
         }
-        alert("Could not save: " + (j.error || `error ${res.status}`));
-        return;
+        // Keep this cart as a NEW held sale: the screen becomes a fresh cart
+        // first (its own new id), so a retry after a lost answer finds that
+        // new sale instead of making another.
+        asNew = true;
+        heldId = null; heldLineIds = null; cartRef = crypto.randomUUID(); savedSig = "";
+        renderResumeBanner(null);
+        backup();
       }
     } finally {
       busy = false;
