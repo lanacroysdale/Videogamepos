@@ -66,9 +66,9 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
       </div>
       <form id="custom-form" class="custom-form" hidden>
         <p class="custom-note">Not in inventory — nothing comes out of stock.</p>
-        <label class="cf-wide">What is it<input id="cf-desc" maxlength="200" placeholder="e.g. Used controller cable" autocomplete="off" required /></label>
-        <label>Price $<input id="cf-price" inputmode="decimal" placeholder="0.00" autocomplete="off" required /></label>
-        <label>Qty<input id="cf-qty" type="number" min="1" max="999" value="1" /></label>
+        <label class="cf-wide">What is it<input id="cf-desc" maxlength="200" placeholder="e.g. Used controller cable" autocomplete="off" required data-noscan="1" /></label>
+        <label>Price $<input id="cf-price" inputmode="decimal" placeholder="0.00" autocomplete="off" required data-noscan="1" /></label>
+        <label>Qty<input id="cf-qty" type="number" min="1" max="999" value="1" data-noscan="1" /></label>
         <label class="cf-wide">Category <span class="muted">(optional — for reports)</span>
           <select id="cf-cat"><option value="">—</option>{(categories ?? []).map((c: any) => <option value={c.id}>{c.name}</option>)}</select>
         </label>
@@ -92,11 +92,11 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
         <div class="row" id="t-disc-row"><span>Discounts <small id="t-disc-pct" class="muted"></small></span><span id="t-disc">-$0.00</span></div>
         <div class="row">
           <span>Cart discount $</span>
-          <input id="cart-disc" type="number" min="0" step="0.01" value="0" style="width:6rem;text-align:right;" />
+          <input id="cart-disc" type="number" min="0" step="0.01" value="0" style="width:6rem;text-align:right;" data-noscan="1" />
         </div>
         <div class="row grand"><span>Total</span><span id="t-total">$0.00</span></div>
         <div class="row" style="margin-top:0.5rem;"><span>Cash tendered $</span>
-          <input id="cash-in" type="number" min="0" step="0.01" placeholder="0.00" style="width:6rem;text-align:right;" /></div>
+          <input id="cash-in" type="number" min="0" step="0.01" placeholder="0.00" style="width:6rem;text-align:right;" data-noscan="1" /></div>
         <div class="row" id="change-row" hidden><span>Change due</span><span id="t-change" style="color:var(--green);font-weight:700;">$0.00</span></div>
       </div>
 
@@ -519,7 +519,7 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
       });
       line.querySelector("[data-remove]")!.addEventListener("click", () => { cart = cart.filter((i) => i.key !== key); renderCart(); });
     });
-    if (flashKey) { el.scrollTop = 0; flashKey = null; }
+    flashKey = null;
     recalc();
   }
 
@@ -766,6 +766,12 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
 
   // ---------- Submit ----------
   async function submit(status: "completed" | "open") {
+    // A custom item typed but not added yet would be left off the sale.
+    if (!cform.hidden && (($("cf-desc") as HTMLInputElement).value.trim() || ($("cf-price") as HTMLInputElement).value.trim())) {
+      alert("Add the custom item to the cart (or Cancel it) first.");
+      ($("cf-price") as HTMLInputElement).focus();
+      return;
+    }
     if (!cart.length) return;
     const cartDisc = Math.round(parseFloat(($("cart-disc") as HTMLInputElement).value) * 100) || 0;
     const cash = Math.round(parseFloat(($("cash-in") as HTMLInputElement).value) * 100) || 0;
