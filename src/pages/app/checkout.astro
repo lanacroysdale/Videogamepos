@@ -60,7 +60,23 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
 
     <!-- RIGHT: cart -->
     <div class="pos-panel cart-panel">
-      <h2>Cart</h2>
+      <div class="cart-head">
+        <h2>Cart</h2>
+        <button id="custom-btn" class="btn btn-ghost btn-sm" type="button" title="Sell something that isn't in inventory — type what it is and the price">＋ Custom item</button>
+      </div>
+      <form id="custom-form" class="custom-form" hidden>
+        <p class="custom-note">Not in inventory — nothing comes out of stock.</p>
+        <label class="cf-wide">What is it<input id="cf-desc" maxlength="200" placeholder="e.g. Used controller cable" autocomplete="off" required /></label>
+        <label>Price $<input id="cf-price" inputmode="decimal" placeholder="0.00" autocomplete="off" required /></label>
+        <label>Qty<input id="cf-qty" type="number" min="1" max="999" value="1" /></label>
+        <label class="cf-wide">Category <span class="muted">(optional — for reports)</span>
+          <select id="cf-cat"><option value="">—</option>{(categories ?? []).map((c: any) => <option value={c.id}>{c.name}</option>)}</select>
+        </label>
+        <div class="cf-actions">
+          <button class="btn btn-primary btn-sm" type="submit">Add to cart</button>
+          <button class="btn btn-ghost btn-sm" type="button" id="cf-cancel">Cancel</button>
+        </div>
+      </form>
       <div id="resume-banner" class="resume-banner" hidden></div>
       <div id="cart" class="cart"></div>
       <p id="cart-empty" class="empty">Cart is empty — tap a category or search to add items.</p>
@@ -143,6 +159,19 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
   .prod-title-line .rg-badge { flex:none; }
   .prod-title { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
   .pick-head .rg-badge, .cart-line .rg-badge { margin-left:0.35rem; }
+  .cart-head { display:flex; align-items:center; justify-content:space-between; gap:0.6rem; }
+  .cart-head h2 { margin:0; }
+  .custom-form { display:grid; grid-template-columns:1fr 1fr; gap:0.5rem 0.7rem; margin:0.7rem 0; padding:0.75rem; border:1px solid var(--cyan); background:rgba(44,230,224,.05); }
+  .custom-form[hidden] { display:none; }
+  .custom-form label { display:grid; gap:0.2rem; font-size:0.78rem; font-weight:600; color:var(--muted); }
+  .custom-form .cf-wide { grid-column:1 / -1; }
+  .custom-note { grid-column:1 / -1; margin:0; font-size:0.78rem; color:var(--muted-2); }
+  .cf-actions { grid-column:1 / -1; display:flex; gap:0.5rem; }
+
+  /* The line just scanned / added (it's on top) — a brief highlight. */
+  .cart-line.cart-new { animation: cart-new 1.6s ease-out; }
+  @keyframes cart-new { 0% { background: rgba(44,230,224,.22); } 100% { background: transparent; } }
+  @media (prefers-reduced-motion: reduce) { .cart-line.cart-new { animation: none; outline: 1px solid var(--cyan); } }
   /* Region filter chips (built at runtime; only when regions are on). */
   .rg-chips { display:flex; gap:0.4rem; flex-wrap:wrap; align-items:center; margin-bottom:0.8rem; }
   .rg-chips[hidden] { display:none; }
@@ -163,7 +192,7 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
   import { displayTitle, peelRegion, regionBadgeHtml, regionNorm, regionOf, regionTag, regionsOn, type Region } from "../../lib/regions";
   // title = the line's saved text (transaction_items.description) — for a
   // stocked item displayTitle() ("Okami HD [JP]"), set ONCE when it's added.
-  type Item = { key: string; variantId: string | null; categoryId: string | null; kind: string; title: string; meta: string; unitPriceCents: number; qty: number; discountCents: number; regionCode?: string };
+  type Item = { key: string; variantId: string | null; categoryId: string | null; kind: string; title: string; meta: string; unitPriceCents: number; qty: number; discountCents: number; regionCode?: string; custom?: boolean };
   const data = JSON.parse(document.getElementById("pos-data")!.textContent!);
   const catalog: any[] = data.catalog;
   const categories: any[] = data.categories;
@@ -397,20 +426,60 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
       return;
     }
     const existing = cart.find((i) => i.variantId === variantId);
-    if (existing) existing.qty++;
-    // The region tag goes into the line's text HERE, once (it's the saved
-    // description) — hold/resume reuse that text as-is.
-    else cart.push({ key: crypto.randomUUID(), variantId, categoryId: v.categoryId, kind: "sale", title: displayTitle(v.title, v.regionCode, regions), meta: `${v.platform} · ${v.condition}`, unitPriceCents: v.priceCents, qty: 1, discountCents: 0, regionCode: v.regionCode });
+    if (existing) {
+      // Scanned again: one more, and it becomes the latest line (top).
+      existing.qty++;
+      cart = [...cart.filter((i) => i !== existing), existing];
+      flashKey = existing.key;
+    } else {
+      // The region tag goes into the line's text HERE, once (it's the saved
+      // description) — hold/resume reuse that text as-is.
+      const key = crypto.randomUUID();
+      cart.push({ key, variantId, categoryId: v.categoryId, kind: "sale", title: displayTitle(v.title, v.regionCode, regions), meta: `${v.platform} · ${v.condition}`, unitPriceCents: v.priceCents, qty: 1, discountCents: 0, regionCode: v.regionCode });
+      flashKey = key;
+    }
     renderCart();
   }
-  function addCustom(cat: any) {
-    const label = prompt(`Add ${cat.name} item — description:`, cat.name === "Disc Repair" ? "Disc resurfacing" : cat.name);
-    if (label === null) return;
-    const amt = parseFloat(prompt(`Price for "${label}" ($):`, "4.99") || "0");
-    if (!Number.isFinite(amt) || amt <= 0) return;
-    cart.push({ key: crypto.randomUUID(), variantId: null, categoryId: cat.id, kind: cat.is_trackable ? "sale" : "service", title: label, meta: cat.name, unitPriceCents: Math.round(amt * 100), qty: 1, discountCents: 0 });
-    renderCart();
+  // A service tile (e.g. Disc Repair) opens the same form, set to it.
+  function addCustom(cat: any) { openCustom(true, cat); }
+
+  // ＋ Custom item: an ad-hoc sale line that isn't in inventory (no listing,
+  // no stock change) — a typed description + price, optional category for
+  // reports. Saved like any other line (variant_id null).
+  const cform = $("custom-form") as HTMLFormElement;
+  function openCustom(on: boolean, cat?: any) {
+    cform.hidden = !on;
+    if (on) {
+      cform.reset();
+      ($("cf-qty") as HTMLInputElement).value = "1";
+      ($("cf-cat") as HTMLSelectElement).value = cat?.id ?? "";
+      ($("cf-desc") as HTMLInputElement).value = cat ? (cat.name === "Disc Repair" ? "Disc resurfacing" : cat.name) : "";
+      const first = $(cat ? "cf-price" : "cf-desc") as HTMLInputElement;
+      first.focus(); first.select();
+      cform.scrollIntoView({ block: "nearest" });
+    } else ($("prod-search") as HTMLInputElement).focus();
   }
+  $("custom-btn").addEventListener("click", () => openCustom(cform.hidden));
+  $("cf-cancel").addEventListener("click", () => openCustom(false));
+  cform.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); openCustom(false); } });
+  cform.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const desc = ($("cf-desc") as HTMLInputElement).value.trim();
+    const priceRaw = ($("cf-price") as HTMLInputElement).value.replace(/[$,\s]/g, "");
+    const price = Number(priceRaw);
+    const qty = Math.min(999, Math.max(1, parseInt(($("cf-qty") as HTMLInputElement).value) || 1));
+    if (!desc) { alert("Type what you're selling."); ($("cf-desc") as HTMLInputElement).focus(); return; }
+    if (!priceRaw || !Number.isFinite(price) || price <= 0 || price > 100000) { alert("Type a price, e.g. 12.99"); ($("cf-price") as HTMLInputElement).focus(); return; }
+    const cat = categories.find((c: any) => c.id === ($("cf-cat") as HTMLSelectElement).value) || null;
+    const key = crypto.randomUUID();
+    // A service category (Disc Repair…) stays a service line as before;
+    // anything else is a custom retail item.
+    const service = !!cat && !cat.is_trackable;
+    cart.push({ key, variantId: null, categoryId: cat?.id ?? null, kind: service ? "service" : "sale", title: desc, meta: service ? cat.name : cat ? `Custom · ${cat.name}` : "Custom item", unitPriceCents: Math.round(price * 100), qty, discountCents: 0, custom: !service });
+    flashKey = key;
+    openCustom(false);
+    renderCart();
+  });
 
   // On screen a line's "[JP]" shows as the badge (the saved text keeps it).
   function cartTitleHtml(i: Item): string {
@@ -420,10 +489,15 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
     return esc(i.title.toLowerCase().endsWith(tag.toLowerCase()) ? i.title.slice(0, -tag.length) : i.title) + badge;
   }
 
+  // Newest first: the line just scanned / added is on top (the cart array —
+  // and the saved sale — stay in the order things were added). Shipping-
+  // protection add-ons stay at the bottom. `flashKey` = the line to highlight.
+  let flashKey: string | null = null;
   function renderCart() {
     const el = $("cart");
-    el.innerHTML = cart.map((i) => `
-      <div class="cart-line" data-key="${i.key}">
+    const shown = [...cart.filter((i) => !i.key.startsWith("upsell:")).reverse(), ...cart.filter((i) => i.key.startsWith("upsell:"))];
+    el.innerHTML = shown.map((i) => `
+      <div class="cart-line${i.key === flashKey ? " cart-new" : ""}" data-key="${i.key}">
         <div><span class="title">${cartTitleHtml(i)}</span><span class="meta" style="display:block;">${esc(i.meta)}</span></div>
         <div class="price">${money(i.unitPriceCents * i.qty - i.discountCents)}</div>
         <div style="display:flex;align-items:center;gap:0.5rem;">
@@ -445,9 +519,11 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
       });
       line.querySelector("[data-remove]")!.addEventListener("click", () => { cart = cart.filter((i) => i.key !== key); renderCart(); });
     });
+    if (flashKey) { el.scrollTop = 0; flashKey = null; }
     recalc();
   }
 
+  const upsellBoxes = () => [...document.querySelectorAll<HTMLInputElement>("[data-upsell]")];
   function syncUpsells() {
     document.querySelectorAll<HTMLInputElement>("[data-upsell]").forEach((cb) => {
       cb.checked = cart.some((i) => i.key === "upsell:" + cb.dataset.upsell);
@@ -647,10 +723,16 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
     cart = (h.transaction_items || []).map((it: any) => {
       const cv = catalog.find((c) => c.variantId === it.variant_id);
       const cat = categories.find((c) => c.id === it.category_id);
+      // A shipping-protection add-on gets its "upsell:" key back (its box
+      // shows ticked; ticking again doesn't add a second one) — matched by
+      // its label. A custom item is a retail line with no listing.
+      const up = !it.variant_id && it.kind === "service" ? upsellBoxes().find((b) => b.dataset.label === it.description) : undefined;
+      const custom = !it.variant_id && it.department === "retail";
       return {
-        key: crypto.randomUUID(), variantId: it.variant_id, categoryId: it.category_id, kind: it.kind,
-        title: it.description, meta: cv ? `${cv.platform} · ${cv.condition}` : (cat?.name || ""),
-        unitPriceCents: it.unit_price_cents, qty: it.qty, discountCents: it.discount_cents, regionCode: cv?.regionCode,
+        key: up ? "upsell:" + up.dataset.upsell : crypto.randomUUID(), variantId: it.variant_id, categoryId: it.category_id, kind: it.kind,
+        title: it.description,
+        meta: cv ? `${cv.platform} · ${cv.condition}` : up ? "Shipping protection" : custom ? (cat ? `Custom · ${cat.name}` : "Custom item") : (cat?.name || ""),
+        unitPriceCents: it.unit_price_cents, qty: it.qty, discountCents: it.discount_cents, regionCode: cv?.regionCode, custom,
       };
     });
     heldId = h.id;
@@ -694,7 +776,7 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({
           customerId: customer?.id ?? null, status, resumeId: heldId, cartDiscountCents: cartDisc, cashCents: cash,
-          items: cart.map((i) => ({ variantId: i.variantId, categoryId: i.categoryId, kind: i.kind, description: i.title, qty: i.qty, unitPriceCents: i.unitPriceCents, discountCents: i.discountCents })),
+          items: cart.map((i) => ({ variantId: i.variantId, categoryId: i.categoryId, kind: i.kind, description: i.title, qty: i.qty, unitPriceCents: i.unitPriceCents, discountCents: i.discountCents, ...(i.custom ? { custom: true } : {}) })),
         }),
       });
       const j = await res.json();

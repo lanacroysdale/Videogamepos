@@ -78,6 +78,12 @@ export function summarize(txns: Txn[], items: Item[], costOf: Map<string, number
         const c = it.variant_id ? (costOf.get(it.variant_id) ?? 0) : (menuCostOf!.get(it.menu_item_id!) ?? 0);
         if (c > 0) { cogs += c * it.qty; costKnownUnits += it.qty; }
         else costUnknownUnits += it.qty;
+      } else if (it.kind === "sale" && !it.menu_item_id) {
+        // A goods sale with no listing (＋ Custom item at checkout, or a
+        // purged product's old line): its cost is unknown — counted so the
+        // "cost known for X of Y units" warning shows instead of a silent
+        // 100% margin.
+        costUnknownUnits += it.qty;
       }
     } else if (it.kind === "return") {
       returns += lineNet(it);

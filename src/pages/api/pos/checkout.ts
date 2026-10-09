@@ -7,6 +7,7 @@ const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
 
 interface IncomingItem {
+  custom?: boolean; // ＋ Custom item: sold at checkout, not in inventory
   variantId?: string | null;
   categoryId?: string | null;
   kind?: string;
@@ -22,7 +23,7 @@ export const GET: APIRoute = async ({ locals }) => {
   const { data, error } = await locals.supabase
     .from("transactions")
     .select(
-      "id, human_id, total_cents, created_at, note, customer:customers(first_name, last_name), transaction_items(variant_id, category_id, kind, description, qty, unit_price_cents, discount_cents)",
+      "id, human_id, total_cents, created_at, note, customer:customers(first_name, last_name), transaction_items(variant_id, category_id, kind, description, qty, unit_price_cents, discount_cents, department)",
     )
     .eq("type", "sale")
     .eq("status", "open")
@@ -58,15 +59,32 @@ export const POST: APIRoute = async ({ locals, request }) => {
   const status = body.status === "open" ? "open" : "completed";
 
   // Re-derive everything server-side; never trust client totals.
-  const items = (body.items as IncomingItem[]).map((it) => ({
+  const incoming = body.items as IncomingItem[];
+  const items = incoming.map((it) => ({
     variant_id: it.variantId ?? null,
     category_id: it.categoryId ?? null,
     kind: it.kind === "service" ? "service" : "sale",
-    description: String(it.description ?? "Item").slice(0, 200),
+    description: String(it.description ?? "Item").trim().slice(0, 200),
     qty: Math.max(1, parseInt(String(it.qty)) || 1),
     unit_price_cents: Math.max(0, Math.round(Number(it.unitPriceCents)) || 0),
     discount_cents: Math.max(0, Math.round(Number(it.discountCents)) || 0),
   }));
+  // Lines typed at the register (＋ Custom item, service tiles, add-ons) have
+  // no listing behind them, so check them here — before anything is written:
+  // a bad one would otherwise fail AFTER the sale row exists (a sale with no
+  // lines). Any line: sane qty / price (int4 totals).
+  for (const it of items) {
+    if (!it.description) return json({ error: "Every item needs a description." }, 400);
+    if (it.qty > 9999 || it.unit_price_cents > 10_000_000) return json({ error: `“${it.description}” — that price or quantity looks wrong.` }, 400);
+    if (!it.variant_id && it.unit_price_cents <= 0) return json({ error: `“${it.description}” needs a price.` }, 400);
+  }
+  const catIds = [...new Set(items.map((it) => it.category_id).filter(Boolean) as string[])];
+  if (catIds.length) {
+    const okIds = catIds.filter((id) => /^[0-9a-f-]{36}$/i.test(id));
+    const { data: cats } = okIds.length ? await locals.supabase.from("categories").select("id").in("id", okIds) : { data: [] as any[] };
+    const known = new Set((cats ?? []).map((c: any) => c.id));
+    if (catIds.some((id) => !known.has(id))) return json({ error: "One of the categories no longer exists — reload the page and try again." }, 400);
+  }
 
   // Inventory-type pass — LIVE read (never the page's cached flags, so the expo
   // block toggle bites immediately): refuse blocked pools, then stamp each
@@ -82,9 +100,10 @@ export const POST: APIRoute = async ({ locals, request }) => {
   // Region snapshot (the listing's region_code at sale time) — same guard:
   // pre-migration the region key is OMITTED, never sent empty.
   const { ready: regionsReady, map: regionMap } = await regionMapByVariant(locals.supabase, items.filter((it) => it.variant_id).map((it) => it.variant_id as string));
-  const stamped = items.map((it) => ({
+  const stamped = items.map((it, i) => ({
     ...it,
-    department: it.variant_id ? "retail" : null,
+    // Custom items are retail goods too (Reports → Retail, not "Other").
+    department: it.variant_id || (incoming[i].custom && !incoming[i].variantId) ? "retail" : null,
     ...(typesReady ? { inventory_type: it.variant_id ? (typeMap.get(it.variant_id as string)?.key ?? null) : null } : {}),
     ...(regionsReady ? { region: it.variant_id ? (regionMap.get(it.variant_id as string) ?? null) : null } : {}),
   }));
