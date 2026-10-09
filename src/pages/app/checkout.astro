@@ -27,7 +27,11 @@ if (customerId) {
   customer = data;
 }
 
-const posData = { catalog, categories: categories ?? [], customer, regions };
+// "✓ Mark paid" (typed-in cash + card totals) — manager-level only; the
+// server checks the same permission.
+const canMarkPaid = Astro.locals.can("data.elevated");
+
+const posData = { catalog, categories: categories ?? [], customer, regions, canMarkPaid };
 ---
 
 <AppLayout title="Checkout" active="checkout">
@@ -77,6 +81,7 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
           <button class="btn btn-ghost btn-sm" type="button" id="cf-cancel">Cancel</button>
         </div>
       </form>
+      <div id="restore-banner" class="restore-banner" hidden></div>
       <div id="resume-banner" class="resume-banner" hidden></div>
       <div id="cart" class="cart"></div>
       <p id="cart-empty" class="empty">Cart is empty — tap a category or search to add items.</p>
@@ -102,9 +107,23 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
 
       <div id="cart-actions" style="margin-top:1rem;display:flex;gap:0.6rem;flex-wrap:wrap;" hidden>
         <button id="complete-btn" class="btn btn-primary" style="flex:1;">Complete sale →</button>
-        <button id="suspend-btn" class="btn btn-ghost btn-sm" title="Save this cart to resume later">⏸ Hold</button>
+        <button id="save-btn" class="btn btn-ghost btn-sm" title="Save this sale and keep working on it (it stays open here)">💾 Save</button>
+        <button id="suspend-btn" class="btn btn-ghost btn-sm" title="Save this sale and clear the register for the next customer — it waits in Held sales">⏸ Hold</button>
+        {canMarkPaid && <button id="paid-btn" class="btn btn-ghost btn-sm" title="Managers: complete it with the cash and card actually collected — e.g. one sale for a whole expo day">✓ Mark paid…</button>}
         <button id="clear-btn" class="btn btn-ghost btn-sm">Clear</button>
       </div>
+      {canMarkPaid && (
+        <form id="paid-form" class="paid-form" hidden>
+          <p class="pf-head">✓ Mark paid — what was actually collected</p>
+          <label>Cash $<input id="pf-cash" inputmode="decimal" placeholder="0.00" autocomplete="off" data-noscan="1" /></label>
+          <label>Card $<input id="pf-card" inputmode="decimal" placeholder="0.00" autocomplete="off" data-noscan="1" /></label>
+          <p id="pf-sum" class="pf-sum"></p>
+          <div class="pf-actions">
+            <button type="submit" class="btn btn-primary btn-sm" id="pf-go">Complete as paid</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="pf-cancel">Cancel</button>
+          </div>
+        </form>
+      )}
 
       <div id="receipt" class="receipt" hidden></div>
     </div>
@@ -132,8 +151,19 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
   /* Held sales bar (static template elements). */
   .held-bar { display:flex; align-items:center; gap:0.8rem; margin-bottom:1rem; padding:0.65rem 0.85rem; background:rgba(255,210,63,.08); border:1px solid rgba(255,210,63,.35); }
   .held-bar-title { font-weight:800; font-size:0.9rem; white-space:nowrap; }
+  .held-bar[hidden] { display:none; } /* display:flex above beat the hidden attribute */
   .held-list { display:flex; gap:0.55rem; overflow-x:auto; padding-bottom:0.15rem; }
   .resume-banner { margin-bottom:0.8rem; padding:0.5rem 0.75rem; background:rgba(44,230,224,.1); border:1px solid rgba(44,230,224,.35); font-size:0.85rem; }
+  .restore-banner { margin-bottom:0.8rem; padding:0.5rem 0.75rem; background:rgba(255,210,63,.1); border:1px solid rgba(255,210,63,.45); font-size:0.85rem; }
+  .restore-banner[hidden] { display:none; }
+  .paid-form { display:grid; grid-template-columns:1fr 1fr; gap:0.5rem 0.7rem; margin-top:0.8rem; padding:0.75rem; border:1px solid var(--cyan); background:rgba(44,230,224,.05); }
+  .paid-form[hidden] { display:none; }
+  .paid-form label { display:grid; gap:0.2rem; font-size:0.78rem; font-weight:600; color:var(--muted); }
+  .pf-head, .pf-sum, .pf-actions { grid-column:1 / -1; margin:0; }
+  .pf-head { font-weight:700; font-size:0.85rem; }
+  .pf-sum { font-size:0.82rem; color:var(--muted); }
+  .pf-sum .bad { color:var(--magenta,#ff49d0); font-weight:700; }
+  .pf-actions { display:flex; gap:0.5rem; }
 </style>
 
 <!-- Held-sale chips are built via innerHTML, so their styles must be global
@@ -493,6 +523,7 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
   // and the saved sale — stay in the order things were added). Shipping-
   // protection add-ons stay at the bottom. `flashKey` = the line to highlight.
   let flashKey: string | null = null;
+  let backupOn = false;
   function renderCart() {
     const el = $("cart");
     const shown = [...cart.filter((i) => !i.key.startsWith("upsell:")).reverse(), ...cart.filter((i) => i.key.startsWith("upsell:"))];
@@ -558,6 +589,7 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
     const change = cash > total ? cash - total : 0;
     ($("change-row") as HTMLElement).hidden = change <= 0;
     $("t-change").textContent = money(change);
+    if (backupOn) backup();
   }
 
   // ---------- Live catalog ----------
@@ -756,16 +788,92 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
     } catch (err: any) { alert("Could not delete: " + err.message); }
   }
 
+  // The open sale's number, and when 💾 Save last stored it.
+  let heldHuman: number | null = null;
+  let savedAt: number | null = null;
   function renderResumeBanner(humanId: number | null) {
     const el = $("resume-banner") as HTMLElement;
-    if (heldId == null) { el.hidden = true; el.innerHTML = ""; return; }
+    heldHuman = humanId;
+    if (heldId == null) { el.hidden = true; el.innerHTML = ""; savedAt = null; return; }
     el.hidden = false;
-    el.innerHTML = `▶ Resuming held sale <strong>#${humanId}</strong> · <button class="link-btn" id="resume-cancel" type="button">start a new sale</button>`;
-    $("resume-cancel").addEventListener("click", () => { heldId = null; cart = []; renderResumeBanner(null); renderCart(); loadHeld(); });
+    const when = savedAt ? new Date(savedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
+    el.innerHTML = `▶ Sale <strong>#${humanId}</strong>${when ? ` · 💾 saved ${when}` : " · resumed"} · <button class="link-btn" id="resume-cancel" type="button">start a new sale</button>`;
+    $("resume-cancel").addEventListener("click", () => {
+      if (cart.length && !confirm(`Put sale #${humanId} aside and start a new one? Save it first if you changed it.`)) return;
+      heldId = null; cart = []; renderResumeBanner(null); renderCart(); loadHeld();
+    });
+  }
+
+  // ---------- Backup of the cart on this computer ----------
+  // The cart lives in this tab until it's saved; a refresh / crash would lose
+  // it. Every change is copied to localStorage; after a reload the copy is
+  // offered back (never applied on its own). Cleared once completed / held.
+  const BK = "tl-checkout-cart", BK_PREV = "tl-checkout-cart-prev";
+  function backup() {
+    try {
+      if (cart.length) localStorage.setItem(BK, JSON.stringify({ at: Date.now(), heldId, heldHuman, cart, cartDisc: ($("cart-disc") as HTMLInputElement).value }));
+      else localStorage.removeItem(BK);
+    } catch { /* private mode / full */ }
+  }
+  function offerRestore() {
+    let prev: any = null;
+    try {
+      const raw = localStorage.getItem(BK) || localStorage.getItem(BK_PREV);
+      prev = raw ? JSON.parse(raw) : null;
+      // Park it so this session's own backups can't overwrite it before a choice.
+      if (prev) { localStorage.setItem(BK_PREV, JSON.stringify(prev)); localStorage.removeItem(BK); }
+    } catch { prev = null; }
+    const el = $("restore-banner") as HTMLElement;
+    if (!prev || !Array.isArray(prev.cart) || !prev.cart.length) { el.hidden = true; return; }
+    const n = prev.cart.reduce((s: number, i: any) => s + (i.qty || 1), 0);
+    const sum = prev.cart.reduce((s: number, i: any) => s + i.unitPriceCents * i.qty - (i.discountCents || 0), 0);
+    const when = new Date(prev.at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+    el.hidden = false;
+    el.innerHTML = `↺ A cart from <strong>${esc(when)}</strong>${prev.heldHuman ? ` (sale #${prev.heldHuman})` : ""} wasn't finished — ${n} item${n === 1 ? "" : "s"} · ${money(sum)}. <button class="link-btn" id="rb-restore" type="button">Restore it</button> · <button class="link-btn" id="rb-drop" type="button">Discard</button>`;
+    const done = () => { el.hidden = true; el.innerHTML = ""; try { localStorage.removeItem(BK_PREV); } catch {} };
+    $("rb-restore").addEventListener("click", () => {
+      if (cart.length && !confirm("Replace the current cart with the unfinished one?")) return;
+      cart = prev.cart;
+      heldId = prev.heldId || null;
+      ($("cart-disc") as HTMLInputElement).value = prev.cartDisc || "0";
+      savedAt = null;
+      renderResumeBanner(heldId ? prev.heldHuman : null);
+      done(); renderCart(); loadHeld();
+    });
+    $("rb-drop").addEventListener("click", () => { if (confirm("Discard the unfinished cart? This can't be undone.")) done(); });
+  }
+
+  // ---------- ✓ Mark paid (managers) ----------
+  const pform = document.getElementById("paid-form") as HTMLFormElement | null;
+  const pfCents = (id: string) => { const t = ($(id) as HTMLInputElement).value.replace(/[$,\s]/g, ""); if (!t) return 0; const n = Number(t); return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) : NaN; };
+  const itemsTotal = () => cart.reduce((s, i) => s + i.unitPriceCents * i.qty, 0);
+  function pfSync() {
+    const cash = pfCents("pf-cash"), card = pfCents("pf-card"), sub = itemsTotal(), paid = cash + card;
+    const el = $("pf-sum");
+    if (!Number.isFinite(paid)) { el.innerHTML = `<span class="bad">Type amounts like 125.50</span>`; return; }
+    el.innerHTML = `Items ${money(sub)} · paid <strong>${money(paid)}</strong>` + (paid > sub ? ` · <span class="bad">more than the items — an item is missing?</span>` : paid < sub ? ` · ${money(sub - paid)} recorded as discount` : "");
+  }
+  if (pform) {
+    $("paid-btn").addEventListener("click", () => {
+      pform.hidden = !pform.hidden;
+      if (!pform.hidden) { pform.reset(); pfSync(); ($("pf-cash") as HTMLInputElement).focus(); pform.scrollIntoView({ block: "nearest" }); }
+    });
+    $("pf-cancel").addEventListener("click", () => { pform.hidden = true; });
+    pform.addEventListener("input", pfSync);
+    pform.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const cash = pfCents("pf-cash"), card = pfCents("pf-card"), sub = itemsTotal(), paid = cash + card;
+      if (!Number.isFinite(paid) || paid <= 0) { alert("Type the cash and/or card amount that was paid."); return; }
+      if (paid > sub) { alert(`Paid (${money(paid)}) is more than the items (${money(sub)}) — an item is missing, or check the amounts.`); return; }
+      if (!confirm(`Mark this sale paid?\n\n${money(cash)} cash + ${money(card)} card = ${money(paid)}\nItems ${money(sub)}${paid < sub ? ` — ${money(sub - paid)} recorded as discount` : ""}\n\nEvery item comes out of stock.`)) return;
+      submit("completed", { manual: { cashCents: cash, cardCents: card } });
+    });
   }
 
   // ---------- Submit ----------
-  async function submit(status: "completed" | "open") {
+  // stay: 💾 Save — store it and keep working (the sale stays open here).
+  // manual: ✓ Mark paid — the typed-in cash + card totals.
+  async function submit(status: "completed" | "open", opts?: { stay?: boolean; manual?: { cashCents: number; cardCents: number }; asNew?: boolean }) {
     // A custom item typed but not added yet would be left off the sale.
     if (!cform.hidden && (($("cf-desc") as HTMLInputElement).value.trim() || ($("cf-price") as HTMLInputElement).value.trim())) {
       alert("Add the custom item to the cart (or Cancel it) first.");
@@ -775,22 +883,43 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
     if (!cart.length) return;
     const cartDisc = Math.round(parseFloat(($("cart-disc") as HTMLInputElement).value) * 100) || 0;
     const cash = Math.round(parseFloat(($("cash-in") as HTMLInputElement).value) * 100) || 0;
-    const btn = (status === "completed" ? $("complete-btn") : $("suspend-btn")) as HTMLButtonElement;
+    const btn = $(opts?.manual ? "pf-go" : opts?.stay ? "save-btn" : status === "completed" ? "complete-btn" : "suspend-btn") as HTMLButtonElement;
     const orig = btn.textContent; btn.disabled = true; btn.textContent = "Saving…";
     try {
       const res = await fetch("/api/pos/checkout", {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          customerId: customer?.id ?? null, status, resumeId: heldId, cartDiscountCents: cartDisc, cashCents: cash,
+          customerId: customer?.id ?? null, status, resumeId: opts?.asNew ? null : heldId, cartDiscountCents: cartDisc, cashCents: cash,
+          ...(opts?.manual ? { manualPayment: opts.manual } : {}),
           items: cart.map((i) => ({ variantId: i.variantId, categoryId: i.categoryId, kind: i.kind, description: i.title, qty: i.qty, unitPriceCents: i.unitPriceCents, discountCents: i.discountCents, ...(i.custom ? { custom: true } : {}) })),
         }),
       });
-      const j = await res.json();
-      if (!res.ok || !j.ok) throw new Error(j.error || "Failed");
+      const j = await res.json().catch(() => ({ error: `The server answered ${res.status} — nothing was saved.` }));
+      if (!res.ok || !j.ok) {
+        // The sale this cart came from is gone (completed / deleted elsewhere,
+        // or an old backup): offer to store the cart as a new sale.
+        if (res.status === 409 && heldId && !opts?.asNew && /no longer available/i.test(j.error || "")
+          && confirm(`${j.error}\n\nSave this cart as a NEW sale instead?`)) {
+          btn.disabled = false; btn.textContent = orig;
+          return submit(status, { ...opts, asNew: true });
+        }
+        throw new Error(j.error || "Failed");
+      }
+      if (opts?.stay) {
+        // Saved — still open here; the banner shows when.
+        heldId = j.id; savedAt = Date.now();
+        renderResumeBanner(j.humanId);
+        backup();
+        loadHeld();
+        return;
+      }
+      if (pform) pform.hidden = true;
+      if (Array.isArray(j.stockMissed) && j.stockMissed.length)
+        alert(`Sale saved — but stock couldn't be updated for ${j.stockMissed.length} item${j.stockMissed.length === 1 ? "" : "s"} (fix their counts in Inventory):\n\n${j.stockMissed.slice(0, 20).join("\n")}${j.stockMissed.length > 20 ? "\n…" : ""}`);
       const rc = $("receipt");
       rc.hidden = false;
       rc.innerHTML = status === "completed"
-        ? `<h3>✓ Sale #${j.humanId} complete</h3><p>Total ${money(j.total)}${j.change ? ` · Change due <strong>${money(j.change)}</strong>` : ""}</p>`
+        ? `<h3>✓ Sale #${j.humanId} ${opts?.manual ? "paid" : "complete"}</h3><p>Total ${money(j.total)}${opts?.manual ? ` · ${money(opts.manual.cashCents)} cash + ${money(opts.manual.cardCents)} card` : ""}${j.change ? ` · Change due <strong>${money(j.change)}</strong>` : ""}</p>`
         : `<h3>⏸ Held as #${j.humanId}</h3><p>Saved — resume it anytime from the Held sales bar above.</p>`;
       cart = []; heldId = null; renderResumeBanner(null);
       ($("cart-disc") as HTMLInputElement).value = "0"; ($("cash-in") as HTMLInputElement).value = "";
@@ -804,12 +933,19 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
     }
   }
   $("complete-btn").addEventListener("click", () => submit("completed"));
+  $("save-btn").addEventListener("click", () => submit("open", { stay: true }));
   $("suspend-btn").addEventListener("click", () => submit("open"));
-  $("clear-btn").addEventListener("click", () => { cart = []; heldId = null; renderResumeBanner(null); renderCart(); $("receipt").hidden = true; loadHeld(); });
+  $("clear-btn").addEventListener("click", () => {
+    if (cart.length && !confirm(heldId ? `Clear the register? Sale #${heldHuman} keeps its last 💾 save in Held sales.` : "Clear the cart? These items aren't saved anywhere.")) return;
+    cart = []; heldId = null; renderResumeBanner(null); renderCart(); $("receipt").hidden = true; loadHeld();
+  });
 
-  // initial paint
+  // initial paint (an unfinished cart from before a reload is offered back
+  // first — only then do this session's changes start being backed up)
   renderRegionChips();
   renderProducts();
+  offerRestore();
+  backupOn = true;
   renderCart();
   // Deep link from Inventory's "🛒 Sell" — drop that variant straight in the cart.
   {

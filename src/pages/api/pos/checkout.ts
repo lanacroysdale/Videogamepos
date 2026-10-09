@@ -111,13 +111,26 @@ export const POST: APIRoute = async ({ locals, request }) => {
   const cartDiscount = Math.max(0, Math.round(Number(body.cartDiscountCents)) || 0);
   const subtotal = items.reduce((s, it) => s + it.unit_price_cents * it.qty, 0);
   const itemDiscounts = items.reduce((s, it) => s + it.discount_cents, 0);
-  const totalDiscount = Math.min(subtotal, itemDiscounts + cartDiscount);
-  const total = Math.max(0, subtotal - totalDiscount);
+  let totalDiscount = Math.min(subtotal, itemDiscounts + cartDiscount);
+  let total = Math.max(0, subtotal - totalDiscount);
   // Cash the customer handed over (may exceed the total → change is given).
   const tendered = status === "completed" ? Math.max(0, Math.round(Number(body.cashCents)) || 0) : 0;
-  const cash = Math.min(total, tendered); // amount applied to the sale
-  const card = status === "completed" ? total - cash : 0; // remainder on card
-  const change = tendered > total ? tendered - total : 0;
+  let cash = Math.min(total, tendered); // amount applied to the sale
+  let card = status === "completed" ? total - cash : 0; // remainder on card
+  let change = tendered > total ? tendered - total : 0;
+  // "Mark paid" (managers): the cash + card actually collected, typed in —
+  // e.g. one sale for a whole expo day. That IS the total; anything under the
+  // items' price is recorded as the sale's discount. More than the items is
+  // refused (an item is missing, or a typo).
+  if (status === "completed" && body.manualPayment) {
+    if (!locals.can("data.elevated")) return json({ error: "Only a manager can mark a sale paid with typed-in amounts." }, 403);
+    const mc = Math.round(Number(body.manualPayment.cashCents)), md = Math.round(Number(body.manualPayment.cardCents));
+    if (!Number.isFinite(mc) || !Number.isFinite(md) || mc < 0 || md < 0 || mc + md <= 0) return json({ error: "Type the cash and/or card amount that was paid." }, 400);
+    if (mc + md > subtotal) return json({ error: `Paid (${(mc + md) / 100}) is more than the items in this sale (${subtotal / 100}) — an item is missing, or check the amounts.` }, 400);
+    cash = mc; card = md; change = 0;
+    total = mc + md;
+    totalDiscount = subtotal - total;
+  }
 
   // Resuming a held sale updates that same transaction in place (so completing
   // or re-holding never creates a duplicate); otherwise we insert a new one.
@@ -135,6 +148,22 @@ export const POST: APIRoute = async ({ locals, request }) => {
 
   let txn: any;
   if (resumeId) {
+    // Never a moment where the saved sale has no lines: the new lines go in
+    // FIRST, then the old ones are removed by id, then the sale row is
+    // updated. If anything fails part-way, the last good save stays as it was.
+    const { data: cur } = await locals.supabase.from("transactions").select("id, status, is_tab").eq("id", resumeId).maybeSingle();
+    if (!cur || cur.status !== "open" || cur.is_tab) return json({ error: "That held sale is no longer available (completed, deleted, or a bar tab)." }, 409);
+    const { data: oldRows, error: oErr } = await locals.supabase.from("transaction_items").select("id").eq("transaction_id", resumeId);
+    if (oErr) return json({ error: oErr.message }, 500);
+    const { error: iErr } = await locals.supabase
+      .from("transaction_items")
+      .insert(stamped.map((it) => ({ ...it, transaction_id: resumeId })));
+    if (iErr) return json({ error: `Couldn't save the items (the last save is unchanged): ${iErr.message}` }, 500);
+    const oldIds = (oldRows ?? []).map((r: any) => r.id);
+    for (let i = 0; i < oldIds.length; i += 100) {
+      const { error: dErr } = await locals.supabase.from("transaction_items").delete().in("id", oldIds.slice(i, i + 100));
+      if (dErr) return json({ error: `Saved, but the old copy of the items couldn't be cleared — don't complete it yet; reload and check: ${dErr.message}` }, 500);
+    }
     const { data, error } = await locals.supabase
       .from("transactions")
       .update(fields)
@@ -145,11 +174,6 @@ export const POST: APIRoute = async ({ locals, request }) => {
       .single();
     if (error || !data) return json({ error: error?.message || "That held sale is no longer available." }, 409);
     txn = data;
-    await locals.supabase.from("transaction_items").delete().eq("transaction_id", resumeId);
-    const { error: iErr } = await locals.supabase
-      .from("transaction_items")
-      .insert(stamped.map((it) => ({ ...it, transaction_id: resumeId })));
-    if (iErr) return json({ error: iErr.message }, 500);
   } else {
     const { data, error } = await locals.supabase
       .from("transactions")
@@ -161,25 +185,48 @@ export const POST: APIRoute = async ({ locals, request }) => {
     const { error: iErr } = await locals.supabase
       .from("transaction_items")
       .insert(stamped.map((it) => ({ ...it, transaction_id: txn.id })));
-    if (iErr) return json({ error: iErr.message }, 500);
-  }
-
-  // Decrement stock for completed sales (inventory variants only).
-  if (status === "completed") {
-    const variantItems = items.filter((it) => it.variant_id);
-    if (variantItems.length) {
-      const ids = variantItems.map((it) => it.variant_id as string);
-      const { data: vars } = await locals.supabase.from("product_variants").select("id, quantity").in("id", ids);
-      const qtyMap = new Map((vars ?? []).map((v) => [v.id, v.quantity]));
-      for (const it of variantItems) {
-        const cur = qtyMap.get(it.variant_id as string) ?? 0;
-        await locals.supabase
-          .from("product_variants")
-          .update({ quantity: Math.max(0, cur - it.qty) })
-          .eq("id", it.variant_id as string);
-      }
+    if (iErr) {
+      // Don't leave a sale with no lines behind.
+      await locals.supabase.from("transactions").delete().eq("id", txn.id).eq("status", status);
+      return json({ error: `Couldn't save the items: ${iErr.message}` }, 500);
     }
   }
 
-  return json({ ok: true, id: txn.id, humanId: txn.human_id, total, change, status });
+  // Take the sold copies out of stock (inventory lines only). A whole expo
+  // day can be hundreds of listings, so counts are read in batches (one huge
+  // id list can fail — the old code then wrote 0 for EVERY item) and written
+  // a few at a time in parallel (stays well inside the function time limit).
+  // Each write only lands on the count it read (a sale elsewhere meanwhile →
+  // re-read once); a count that can't be read is never guessed — those items
+  // are reported back so stock can be fixed by hand.
+  const stockMissed: string[] = [];
+  if (status === "completed") {
+    const sold = new Map<string, { qty: number; desc: string }>();
+    for (const it of items) {
+      if (!it.variant_id) continue;
+      const m = sold.get(it.variant_id) ?? { qty: 0, desc: it.description };
+      m.qty += it.qty;
+      sold.set(it.variant_id, m);
+    }
+    const ids = [...sold.keys()];
+    const counts = new Map<string, number>();
+    for (let i = 0; i < ids.length; i += 80) {
+      const { data: vars, error } = await locals.supabase.from("product_variants").select("id, quantity").in("id", ids.slice(i, i + 80));
+      if (!error) for (const v of (vars ?? []) as any[]) counts.set(v.id, v.quantity ?? 0);
+    }
+    const takeOut = async (id: string) => {
+      const n = sold.get(id)!.qty;
+      let cur = counts.get(id);
+      for (let attempt = 0; attempt < 2 && cur != null; attempt++) {
+        const { data, error } = await locals.supabase.from("product_variants").update({ quantity: Math.max(0, cur - n) }).eq("id", id).eq("quantity", cur).select("id");
+        if (!error && data && data.length) return;
+        const { data: again } = await locals.supabase.from("product_variants").select("quantity").eq("id", id).maybeSingle();
+        cur = again ? (again.quantity ?? 0) : undefined;
+      }
+      stockMissed.push(sold.get(id)!.desc);
+    };
+    for (let i = 0; i < ids.length; i += 10) await Promise.all(ids.slice(i, i + 10).map(takeOut));
+  }
+
+  return json({ ok: true, id: txn.id, humanId: txn.human_id, total, change, status, ...(stockMissed.length ? { stockMissed } : {}) });
 };

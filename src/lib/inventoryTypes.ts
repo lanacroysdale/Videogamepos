@@ -33,11 +33,16 @@ export async function typeMapByVariant(
   const map = new Map<string, VariantTypeInfo>();
   const ids = [...new Set(variantIds.filter(Boolean))];
   if (!ids.length) return { ready: false, map };
-  const { data, error } = await client
-    .from("product_variants")
-    .select("id, inventory_type:store_inventory_types(key, name, block_at_checkout, allow_website_sync)")
-    .in("id", ids);
-  if (error || !data) return { ready: false, map };
+  // In batches: a whole expo day's sale can be hundreds of ids.
+  const data: any[] = [];
+  for (let i = 0; i < ids.length; i += 80) {
+    const { data: part, error } = await client
+      .from("product_variants")
+      .select("id, inventory_type:store_inventory_types(key, name, block_at_checkout, allow_website_sync)")
+      .in("id", ids.slice(i, i + 80));
+    if (error || !part) return { ready: false, map };
+    data.push(...part);
+  }
   for (const v of data as any[]) {
     const t = v.inventory_type;
     if (t) map.set(v.id, { key: t.key, name: t.name, block_at_checkout: !!t.block_at_checkout, allow_website_sync: !!t.allow_website_sync });
@@ -58,11 +63,15 @@ export async function regionMapByVariant(
   if (!ids.length) return { ready: false, map };
   const { error: colErr } = await client.from("transaction_items").select("region").limit(1);
   if (colErr) return { ready: false, map };
-  const { data, error } = await client
-    .from("product_variants")
-    .select("id, product:products(region_code)")
-    .in("id", ids);
-  if (error || !data) return { ready: false, map };
+  const data: any[] = [];
+  for (let i = 0; i < ids.length; i += 80) {
+    const { data: part, error } = await client
+      .from("product_variants")
+      .select("id, product:products(region_code)")
+      .in("id", ids.slice(i, i + 80));
+    if (error || !part) return { ready: false, map };
+    data.push(...part);
+  }
   for (const v of data as any[]) {
     const code = v.product?.region_code;
     if (code) map.set(v.id, String(code));
