@@ -23,7 +23,7 @@ export const GET: APIRoute = async ({ locals }) => {
   const { data, error } = await locals.supabase
     .from("transactions")
     .select(
-      "id, human_id, total_cents, created_at, note, customer:customers(first_name, last_name), transaction_items(variant_id, category_id, kind, description, qty, unit_price_cents, discount_cents, department)",
+      "id, human_id, total_cents, created_at, note, customer:customers(first_name, last_name), transaction_items(id, variant_id, category_id, kind, description, qty, unit_price_cents, discount_cents, department)",
     )
     .eq("type", "sale")
     .eq("status", "open")
@@ -132,9 +132,42 @@ export const POST: APIRoute = async ({ locals, request }) => {
     totalDiscount = subtotal - total;
   }
 
+  // On completion the sale-level discount (cart discount, or Mark paid's
+  // shortfall) is spread over the lines, so each line's net adds up to what
+  // was paid — Reports (net sales, by hour / category / department) and
+  // Returns read the lines. Held sales keep their lines as typed (the
+  // register loads line discounts back as-is).
+  const lines = stamped.map((it) => ({ ...it }));
+  const extra = totalDiscount - itemDiscounts;
+  if (status === "completed" && extra > 0) {
+    const nets = lines.map((it) => Math.max(0, it.unit_price_cents * it.qty - it.discount_cents));
+    const base = nets.reduce((a, n) => a + n, 0);
+    let left = extra;
+    let big = 0;
+    lines.forEach((it, i) => {
+      if (nets[i] > nets[big]) big = i;
+      const share = base ? Math.min(nets[i], Math.floor((extra * nets[i]) / base)) : 0;
+      it.discount_cents += share;
+      left -= share;
+    });
+    // Rounding pennies: on the biggest lines that still have room.
+    for (const i of [big, ...lines.keys()]) {
+      if (left <= 0) break;
+      const room = lines[i].unit_price_cents * lines[i].qty - lines[i].discount_cents;
+      const add = Math.min(room, left);
+      lines[i].discount_cents += add;
+      left -= add;
+    }
+  }
+
   // Resuming a held sale updates that same transaction in place (so completing
   // or re-holding never creates a duplicate); otherwise we insert a new one.
   const resumeId = body.resumeId ?? null;
+  const isUuid = (x: unknown) => typeof x === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(x);
+  const clientRef = isUuid(body.clientRef) ? body.clientRef : null;
+  // The line ids this register last loaded / saved: if the sale changed on
+  // another screen since, nothing is overwritten.
+  const expected = Array.isArray(body.expectedLineIds) && body.expectedLineIds.every(isUuid) ? (body.expectedLineIds as string[]) : null;
   const fields = {
     customer_id: body.customerId ?? null,
     status,
@@ -145,24 +178,81 @@ export const POST: APIRoute = async ({ locals, request }) => {
     card_cents: card,
     completed_at: status === "completed" ? new Date().toISOString() : null,
   };
+  // A save that didn't go through: say what the sale is now, so the register
+  // never offers to save a completed sale again as a new one.
+  const gone = (state: string, humanId?: number | null) => json({
+    error: state === "completed" ? `Sale${humanId ? ` #${humanId}` : ""} is already completed — nothing was changed.`
+      : state === "changed" ? `Sale${humanId ? ` #${humanId}` : ""} was changed on another screen since this one loaded it — nothing was saved here.`
+      : state === "tab" ? "That's a bar tab — use the Tabs screen."
+      : "That held sale no longer exists (deleted).",
+    state, humanId: humanId ?? null,
+  }, 409);
+
+  // Preferred: one database transaction (migration 20261009000001) — header,
+  // lines and stock land together or not at all, and a retry is safe.
+  const rpc = await locals.supabase.rpc("save_sale", {
+    p_id: isUuid(resumeId) ? resumeId : null,
+    p_client_ref: clientRef,
+    p_status: status,
+    p_fields: { ...fields, customer_id: fields.customer_id ?? "" },
+    p_items: lines,
+    p_expected: resumeId ? expected : null,
+  });
+  const noRpc = rpc.error && (rpc.error.code === "PGRST202" || rpc.error.code === "42883" || /could not find the function|does not exist/i.test(rpc.error.message || ""));
+  if (!noRpc) {
+    if (rpc.error) {
+      if (rpc.error.code === "23503") return json({ error: "An item in this cart is no longer in inventory (deleted) — remove it and try again. Nothing was saved.", state: "item_gone" }, 409);
+      return json({ error: rpc.error.message }, 500);
+    }
+    const r: any = rpc.data;
+    if (!r?.ok) return gone(r?.state || "missing", r?.human_id);
+    return json({ ok: true, id: r.id, humanId: r.human_id, lineIds: r.line_ids ?? [], total, change, status });
+  }
+
+  // ---- Fallback until the migration is applied: step by step, ordered so a
+  // failure part-way never loses the last good save. ----
+  // A listing deleted since the cart was rung up would fail the line insert
+  // after the sale row exists — refuse first.
+  const varIds = [...new Set(lines.map((it) => it.variant_id).filter(Boolean) as string[])];
+  if (varIds.length) {
+    const found = new Set<string>();
+    for (let i = 0; i < varIds.length; i += 80) {
+      const { data: vs, error: vErr } = await locals.supabase.from("product_variants").select("id").in("id", varIds.slice(i, i + 80));
+      if (vErr) return json({ error: `Couldn't check the items: ${vErr.message}. Nothing was saved.` }, 500);
+      for (const v of (vs ?? []) as any[]) found.add(v.id);
+    }
+    if (varIds.some((v) => !found.has(v))) return json({ error: "An item in this cart is no longer in inventory (deleted) — remove it and try again. Nothing was saved.", state: "item_gone" }, 409);
+  }
 
   let txn: any;
+  let lineIds: string[] = [];
   if (resumeId) {
-    // Never a moment where the saved sale has no lines: the new lines go in
-    // FIRST, then the old ones are removed by id, then the sale row is
-    // updated. If anything fails part-way, the last good save stays as it was.
-    const { data: cur } = await locals.supabase.from("transactions").select("id, status, is_tab").eq("id", resumeId).maybeSingle();
-    if (!cur || cur.status !== "open" || cur.is_tab) return json({ error: "That held sale is no longer available (completed, deleted, or a bar tab)." }, 409);
-    const { data: oldRows, error: oErr } = await locals.supabase.from("transaction_items").select("id").eq("transaction_id", resumeId);
-    if (oErr) return json({ error: oErr.message }, 500);
-    const { error: iErr } = await locals.supabase
+    // New lines go in FIRST, then the old ones are removed by id, then the
+    // sale row is updated — if anything fails part-way the last good save
+    // stays.
+    const { data: cur, error: cErr } = await locals.supabase.from("transactions").select("id, status, is_tab, human_id").eq("id", resumeId).maybeSingle();
+    if (cErr) return json({ error: `Couldn't read the sale: ${cErr.message}. Nothing was saved.` }, 500);
+    if (!cur) return gone("missing");
+    if (cur.is_tab) return gone("tab", cur.human_id);
+    if (cur.status !== "open") return gone(cur.status, cur.human_id);
+    const oldIds: string[] = [];
+    for (let off = 0; ; off += 1000) {
+      const { data: page, error: oErr } = await locals.supabase.from("transaction_items").select("id").eq("transaction_id", resumeId).order("id").range(off, off + 999);
+      if (oErr) return json({ error: `Couldn't read the sale's items: ${oErr.message}. Nothing was saved.` }, 500);
+      oldIds.push(...((page ?? []) as any[]).map((r) => r.id));
+      if (!page || page.length < 1000) break;
+    }
+    if (expected && [...oldIds].sort().join() !== [...expected].sort().join()) return gone("changed", cur.human_id);
+    const { data: ins, error: iErr } = await locals.supabase
       .from("transaction_items")
-      .insert(stamped.map((it) => ({ ...it, transaction_id: resumeId })));
+      .insert(lines.map((it) => ({ ...it, transaction_id: resumeId })))
+      .select("id");
     if (iErr) return json({ error: `Couldn't save the items (the last save is unchanged): ${iErr.message}` }, 500);
-    const oldIds = (oldRows ?? []).map((r: any) => r.id);
+    lineIds = ((ins ?? []) as any[]).map((r) => r.id);
     for (let i = 0; i < oldIds.length; i += 100) {
-      const { error: dErr } = await locals.supabase.from("transaction_items").delete().in("id", oldIds.slice(i, i + 100));
-      if (dErr) return json({ error: `Saved, but the old copy of the items couldn't be cleared — don't complete it yet; reload and check: ${dErr.message}` }, 500);
+      let { error: dErr } = await locals.supabase.from("transaction_items").delete().in("id", oldIds.slice(i, i + 100));
+      if (dErr) ({ error: dErr } = await locals.supabase.from("transaction_items").delete().in("id", oldIds.slice(i, i + 100)));
+      if (dErr) return json({ error: `Not fully saved — press 💾 Save again here (your screen is right; don't reopen it from Held sales until it saves): ${dErr.message}`, state: "retry" }, 500);
     }
     const { data, error } = await locals.supabase
       .from("transactions")
@@ -171,8 +261,9 @@ export const POST: APIRoute = async ({ locals, request }) => {
       .eq("status", "open") // only an open (held) sale can be resumed
       .eq("is_tab", false) // never let held-sale resume touch a bar tab
       .select()
-      .single();
-    if (error || !data) return json({ error: error?.message || "That held sale is no longer available." }, 409);
+      .maybeSingle();
+    if (error) return json({ error: `Not fully saved — press 💾 Save again here: ${error.message}`, state: "retry" }, 500);
+    if (!data) return gone("completed", cur.human_id);
     txn = data;
   } else {
     const { data, error } = await locals.supabase
@@ -182,27 +273,28 @@ export const POST: APIRoute = async ({ locals, request }) => {
       .single();
     if (error) return json({ error: error.message }, 500);
     txn = data;
-    const { error: iErr } = await locals.supabase
+    const { data: ins, error: iErr } = await locals.supabase
       .from("transaction_items")
-      .insert(stamped.map((it) => ({ ...it, transaction_id: txn.id })));
+      .insert(lines.map((it) => ({ ...it, transaction_id: txn.id })))
+      .select("id");
     if (iErr) {
-      // Don't leave a sale with no lines behind.
-      await locals.supabase.from("transactions").delete().eq("id", txn.id).eq("status", status);
-      return json({ error: `Couldn't save the items: ${iErr.message}` }, 500);
+      // Don't leave a sale with no lines behind: remove it — or, where this
+      // employee may not delete sales, void it so it counts for nothing.
+      const { data: del } = await locals.supabase.from("transactions").delete().eq("id", txn.id).select("id");
+      if (!del?.length) await locals.supabase.from("transactions").update({ status: "void", subtotal_cents: 0, discount_cents: 0, total_cents: 0, cash_cents: 0, card_cents: 0, completed_at: null }).eq("id", txn.id);
+      return json({ error: `Couldn't save the items — nothing was saved: ${iErr.message}` }, 500);
     }
+    lineIds = ((ins ?? []) as any[]).map((r) => r.id);
   }
 
-  // Take the sold copies out of stock (inventory lines only). A whole expo
-  // day can be hundreds of listings, so counts are read in batches (one huge
-  // id list can fail — the old code then wrote 0 for EVERY item) and written
-  // a few at a time in parallel (stays well inside the function time limit).
-  // Each write only lands on the count it read (a sale elsewhere meanwhile →
-  // re-read once); a count that can't be read is never guessed — those items
-  // are reported back so stock can be fixed by hand.
+  // Take the sold copies out of stock (inventory lines only): counts read in
+  // batches, written 10 at a time, each write only on the count it read (a
+  // sale elsewhere meanwhile → re-read once); a count that can't be read is
+  // never guessed — reported back to fix by hand.
   const stockMissed: string[] = [];
   if (status === "completed") {
     const sold = new Map<string, { qty: number; desc: string }>();
-    for (const it of items) {
+    for (const it of lines) {
       if (!it.variant_id) continue;
       const m = sold.get(it.variant_id) ?? { qty: 0, desc: it.description };
       m.qty += it.qty;
@@ -228,5 +320,5 @@ export const POST: APIRoute = async ({ locals, request }) => {
     for (let i = 0; i < ids.length; i += 10) await Promise.all(ids.slice(i, i + 10).map(takeOut));
   }
 
-  return json({ ok: true, id: txn.id, humanId: txn.human_id, total, change, status, ...(stockMissed.length ? { stockMissed } : {}) });
+  return json({ ok: true, id: txn.id, humanId: txn.human_id, lineIds, total, change, status, ...(stockMissed.length ? { stockMissed } : {}) });
 };
