@@ -121,4 +121,9 @@ const isManager = Astro.locals.can("returns.override");
     } catch (e: any) { alert(e.message); }
     finally { btn.disabled = false; btn.textContent = "Process refund →"; }
   });
+  // From the Sales page ("↩ Return items"): /returns?ticket=81 opens that sale.
+  {
+    const t = new URLSearchParams(location.search).get("ticket");
+    if (t && /^\d+$/.test(t)) { ($("ret-ticket") as HTMLInputElement).value = t; $("ret-lookup").click(); }
+  }
 </script>

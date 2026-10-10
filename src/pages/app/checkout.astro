@@ -2,7 +2,6 @@
 export const prerender = false;
 
 import AppLayout from "../../layouts/AppLayout.astro";
-import { fmt, fullName } from "../../lib/money";
 import { themeSettings } from "../../lib/themeSettings";
 import { loadPosCatalog } from "../../lib/posCatalog";
 import { loadRegions, regionsOn } from "../../lib/regions";
@@ -27,7 +26,11 @@ if (customerId) {
   customer = data;
 }
 
-const posData = { catalog, categories: categories ?? [], customer, regions };
+// "✓ Mark paid" (typed-in cash + card totals) — manager-level only; the
+// server checks the same permission.
+const canMarkPaid = Astro.locals.can("data.elevated");
+
+const posData = { catalog, categories: categories ?? [], customer, regions, canMarkPaid, userId: Astro.locals.user?.id ?? "" };
 ---
 
 <AppLayout title="Checkout" active="checkout">
@@ -39,12 +42,6 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
   <div class="checkout-grid">
     <!-- LEFT: catalog -->
     <div class="pos-panel">
-      {customer && (
-        <div class="cust-bar">
-          <span>🧑 <strong>{fullName(customer)}</strong> · {customer.membership}</span>
-          <span class="muted">{fmt(customer.store_credit_cents)} store credit</span>
-        </div>
-      )}
 
       <div class="search" style="margin-bottom:0.8rem;">
         <span class="mag" aria-hidden="true">🔎</span>
@@ -64,6 +61,22 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
         <h2>Cart</h2>
         <button id="custom-btn" class="btn btn-ghost btn-sm" type="button" title="Sell something that isn't in inventory — type what it is and the price">＋ Custom item</button>
       </div>
+      <div class="sale-meta">
+        <div id="cust-slot" class="cust-slot"></div>
+        <input id="sale-name" maxlength="120" placeholder="Name this sale (optional) — e.g. PRGE Day 1" autocomplete="off" data-noscan="1" />
+      </div>
+      <div id="cust-pick" class="cust-pick" hidden>
+        <input id="cust-q" type="search" placeholder="Find a customer — name, phone or email" autocomplete="off" data-noscan="1" />
+        <div id="cust-results" class="cust-results"></div>
+        <form id="cust-new" class="cust-new" hidden>
+          <input id="cn-first" placeholder="First name *" required data-noscan="1" />
+          <input id="cn-last" placeholder="Last name" data-noscan="1" />
+          <input id="cn-phone" placeholder="Phone" inputmode="tel" data-noscan="1" />
+          <input id="cn-email" placeholder="Email" type="email" data-noscan="1" />
+          <div class="cn-actions"><button class="btn btn-primary btn-sm" type="submit">Add customer</button><button class="btn btn-ghost btn-sm" type="button" id="cn-cancel">Cancel</button></div>
+        </form>
+        <div class="cust-pick-foot"><button class="link-btn" type="button" id="cust-new-btn">＋ New customer</button> · <button class="link-btn" type="button" id="cust-close">Close</button></div>
+      </div>
       <form id="custom-form" class="custom-form" hidden>
         <p class="custom-note">Not in inventory — nothing comes out of stock.</p>
         <label class="cf-wide">What is it<input id="cf-desc" maxlength="200" placeholder="e.g. Used controller cable" autocomplete="off" required data-noscan="1" /></label>
@@ -77,6 +90,8 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
           <button class="btn btn-ghost btn-sm" type="button" id="cf-cancel">Cancel</button>
         </div>
       </form>
+      <div id="auth-warn" class="auth-warn" hidden>⚠ <strong>Your login has expired</strong> — saving won't work and items added since won't show. Open a <strong>new tab</strong>, log in to the POS there, then come back to this tab (don't reload it — your cart is here).</div>
+      <div id="restore-banner" class="restore-banner" hidden></div>
       <div id="resume-banner" class="resume-banner" hidden></div>
       <div id="cart" class="cart"></div>
       <p id="cart-empty" class="empty">Cart is empty — tap a category or search to add items.</p>
@@ -102,9 +117,23 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
 
       <div id="cart-actions" style="margin-top:1rem;display:flex;gap:0.6rem;flex-wrap:wrap;" hidden>
         <button id="complete-btn" class="btn btn-primary" style="flex:1;">Complete sale →</button>
-        <button id="suspend-btn" class="btn btn-ghost btn-sm" title="Save this cart to resume later">⏸ Hold</button>
+        <button id="save-btn" class="btn btn-ghost btn-sm" title="Save this sale and keep working on it (it stays open here)">💾 Save</button>
+        <button id="suspend-btn" class="btn btn-ghost btn-sm" title="Save this sale and clear the register for the next customer — it waits in Held sales">⏸ Hold</button>
+        {canMarkPaid && <button id="paid-btn" class="btn btn-ghost btn-sm" title="Managers: complete it with the cash and card actually collected — e.g. one sale for a whole expo day">✓ Mark paid…</button>}
         <button id="clear-btn" class="btn btn-ghost btn-sm">Clear</button>
       </div>
+      {canMarkPaid && (
+        <form id="paid-form" class="paid-form" hidden>
+          <p class="pf-head">✓ Mark paid — what was actually collected</p>
+          <label>Cash $<input id="pf-cash" inputmode="decimal" placeholder="0.00" autocomplete="off" data-noscan="1" /></label>
+          <label>Card $<input id="pf-card" inputmode="decimal" placeholder="0.00" autocomplete="off" data-noscan="1" /></label>
+          <p id="pf-sum" class="pf-sum"></p>
+          <div class="pf-actions">
+            <button type="submit" class="btn btn-primary btn-sm" id="pf-go">Complete as paid</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="pf-cancel">Cancel</button>
+          </div>
+        </form>
+      )}
 
       <div id="receipt" class="receipt" hidden></div>
     </div>
@@ -117,9 +146,19 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
   .checkout-grid { display: grid; gap: 1rem; align-items: start; }
   @media (min-width: 980px) { .checkout-grid { grid-template-columns: 1.5fr 1fr; } }
   .cart-panel { position: sticky; top: 90px; }
-  .cust-bar { display:flex; justify-content:space-between; gap:1rem; padding:0.6rem 0.8rem; margin-bottom:0.8rem; background:rgba(44,230,224,.08); border:1px solid rgba(44,230,224,.3); border-radius:10px; font-size:0.9rem; }
+  /* Customer + sale name, under the Cart heading. */
+  .sale-meta { display:grid; grid-template-columns:auto minmax(0, 1fr); gap:0.5rem; align-items:center; margin:0.6rem 0; }
+  .sale-meta input { min-width:0; font-size:0.85rem; padding:0.35rem 0.5rem; }
+  .cust-pick { margin:0 0 0.8rem; padding:0.6rem; border:1px solid var(--cyan); background:rgba(44,230,224,.05); display:grid; gap:0.45rem; }
+  .cust-pick[hidden], .cust-new[hidden] { display:none; }
+  .cust-results { display:grid; gap:0.25rem; max-height:14rem; overflow:auto; }
+  .cust-new { display:grid; grid-template-columns:1fr 1fr; gap:0.4rem; }
+  .cn-actions { grid-column:1 / -1; display:flex; gap:0.5rem; }
+  .cust-pick-foot { font-size:0.82rem; }
+  /* A long cart scrolls on its own, so the newest line (top) and the totals
+     stay on screen. */
+  #cart { max-height:min(56vh, 34rem); overflow-y:auto; overscroll-behavior:contain; }
   .receipt { margin-top:1rem; padding:1rem; border:1px solid rgba(128,255,114,.4); background:rgba(128,255,114,.08); border-radius:12px; text-align:center; }
-  .receipt h3 { color:var(--green); margin-bottom:0.3rem; }
 
   /* Shipping-protection upsells */
   .upsells { margin:0.8rem 0; padding:0.7rem 0.85rem; border:1px dashed var(--border); background:rgba(255,255,255,.02); }
@@ -132,13 +171,34 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
   /* Held sales bar (static template elements). */
   .held-bar { display:flex; align-items:center; gap:0.8rem; margin-bottom:1rem; padding:0.65rem 0.85rem; background:rgba(255,210,63,.08); border:1px solid rgba(255,210,63,.35); }
   .held-bar-title { font-weight:800; font-size:0.9rem; white-space:nowrap; }
+  .held-bar[hidden] { display:none; } /* display:flex above beat the hidden attribute */
   .held-list { display:flex; gap:0.55rem; overflow-x:auto; padding-bottom:0.15rem; }
   .resume-banner { margin-bottom:0.8rem; padding:0.5rem 0.75rem; background:rgba(44,230,224,.1); border:1px solid rgba(44,230,224,.35); font-size:0.85rem; }
+  .restore-banner { margin-bottom:0.8rem; padding:0.5rem 0.75rem; background:rgba(255,210,63,.1); border:1px solid rgba(255,210,63,.45); font-size:0.85rem; }
+  .restore-banner[hidden] { display:none; }
+  .auth-warn { margin-bottom:0.8rem; padding:0.55rem 0.75rem; background:rgba(255,73,208,.12); border:1px solid var(--magenta,#ff49d0); font-size:0.85rem; }
+  .auth-warn[hidden] { display:none; }
+  .paid-form { display:grid; grid-template-columns:1fr 1fr; gap:0.5rem 0.7rem; margin-top:0.8rem; padding:0.75rem; border:1px solid var(--cyan); background:rgba(44,230,224,.05); }
+  .paid-form[hidden] { display:none; }
+  .paid-form label { display:grid; gap:0.2rem; font-size:0.78rem; font-weight:600; color:var(--muted); }
+  .pf-head, .pf-sum, .pf-actions { grid-column:1 / -1; margin:0; }
+  .pf-head { font-weight:700; font-size:0.85rem; }
+  .pf-sum { font-size:0.82rem; color:var(--muted); }
+  .pf-sum .bad { color:var(--magenta,#ff49d0); font-weight:700; }
+  .pf-actions { display:flex; gap:0.5rem; }
 </style>
 
 <!-- Held-sale chips are built via innerHTML, so their styles must be global
      (Astro scoped styles don't reach runtime-inserted elements). -->
 <style is:global>
+  /* Customer chip, customer search results and the receipt are built via
+     innerHTML too. */
+  .cust-chip { display:inline-flex; align-items:center; gap:0.4rem; padding:0.3rem 0.55rem; border:1px solid rgba(44,230,224,.4); background:rgba(44,230,224,.08); font-size:0.85rem; white-space:nowrap; }
+  .cust-chip .muted { font-size:0.76rem; }
+  .cust-results button { text-align:left; font:inherit; padding:0.4rem 0.55rem; background:rgba(255,255,255,.03); border:1px solid var(--border); color:var(--text); cursor:pointer; }
+  .cust-results button:hover { border-color:var(--cyan); }
+  .cust-results .muted { font-size:0.76rem; }
+  .receipt h3 { color:var(--green); margin-bottom:0.3rem; }
   .held-chip { position:relative; flex:0 0 auto; }
   .held-chip-main { display:grid; grid-template-columns:auto auto; gap:0.05rem 0.6rem; align-items:baseline; width:100%; padding:0.45rem 1.5rem 0.45rem 0.7rem; background:var(--panel); border:1px solid var(--border); cursor:pointer; text-align:left; color:var(--text); transition:border-color .15s; }
   .held-chip-main:hover { border-color:var(--cyan); }
@@ -196,7 +256,7 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
   const data = JSON.parse(document.getElementById("pos-data")!.textContent!);
   const catalog: any[] = data.catalog;
   const categories: any[] = data.categories;
-  const customer: any = data.customer;
+  let customer: any = data.customer; // the sale's customer (none = walk-in)
   const regions: Region[] = data.regions || []; // [] = regions off
 
   const money = (c: number) => (c / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
@@ -443,6 +503,115 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
   // A service tile (e.g. Disc Repair) opens the same form, set to it.
   function addCustom(cat: any) { openCustom(true, cat); }
 
+  // ---------- Customer ----------
+  let custT: any, custSeq = 0;
+  // Who the sale is for (optional). Saved with the sale; shows in Sales.
+  function setCustomer(c: any) {
+    customer = c && c.id ? { id: c.id, first_name: c.first_name ?? "", last_name: c.last_name ?? "", store_credit_cents: c.store_credit_cents ?? 0 } : null;
+    const slot = $("cust-slot");
+    if (customer) {
+      const nm = `${customer.first_name} ${customer.last_name}`.trim() || "Customer";
+      slot.innerHTML = `<span class="cust-chip">👤 <strong>${esc(nm)}</strong>${customer.store_credit_cents ? ` <span class="muted">${money(customer.store_credit_cents)} credit</span>` : ""} <button class="link-btn" type="button" id="cust-change" title="Change customer">change</button> <button class="link-btn" type="button" id="cust-clear" title="Remove the customer">✕</button></span>`;
+      $("cust-change").addEventListener("click", () => openCustPick(true));
+      $("cust-clear").addEventListener("click", () => { if (!busy) { setCustomer(null); recalc(); } });
+    } else {
+      slot.innerHTML = `<button class="btn btn-ghost btn-sm" type="button" id="cust-add">👤 Add customer</button>`;
+      $("cust-add").addEventListener("click", () => openCustPick(true));
+    }
+  }
+  function openCustPick(on: boolean) {
+    clearTimeout(custT); custSeq++; // an answer still on its way is dropped
+    ($("cust-pick") as HTMLElement).hidden = !on;
+    ($("cust-new") as HTMLElement).hidden = true;
+    if (on) { ($("cust-q") as HTMLInputElement).value = ""; $("cust-results").innerHTML = ""; ($("cust-q") as HTMLInputElement).focus(); }
+    else ($("prod-search") as HTMLInputElement).focus();
+  }
+  $("cust-q").addEventListener("input", () => {
+    clearTimeout(custT);
+    const q = ($("cust-q") as HTMLInputElement).value.trim();
+    if (!q) { custSeq++; $("cust-results").innerHTML = ""; return; }
+    custT = setTimeout(async () => {
+      const seq = ++custSeq;
+      try {
+        const r = await fetch(`/api/pos/customers?q=${encodeURIComponent(q)}`);
+        const j = await r.json();
+        if (seq !== custSeq) return; // a newer search answered first
+        if (r.status === 401) { ($("auth-warn") as HTMLElement).hidden = false; return; }
+        const list: any[] = j.results || [];
+        $("cust-results").innerHTML = list.length
+          ? list.map((c, i) => `<button type="button" data-c="${i}"><strong>${esc(`${c.first_name ?? ""} ${c.last_name ?? ""}`.trim())}</strong> <span class="muted">${esc([c.phone, c.email].filter(Boolean).join(" · "))}${c.store_credit_cents ? ` · ${money(c.store_credit_cents)} credit` : ""}</span></button>`).join("")
+          : `<p class="muted" style="margin:0;font-size:0.82rem;">No match — add them with ＋ New customer.</p>`;
+        $("cust-results").querySelectorAll<HTMLButtonElement>("[data-c]").forEach((b) => b.addEventListener("click", () => {
+          setCustomer(list[Number(b.dataset.c)]); openCustPick(false); recalc();
+        }));
+      } catch { /* offline — keep typing */ }
+    }, 220);
+  });
+  $("cust-q").addEventListener("keydown", (e) => { if (e.key === "Escape") openCustPick(false); });
+  $("cust-close").addEventListener("click", () => openCustPick(false));
+  $("cust-new-btn").addEventListener("click", () => {
+    const f = $("cust-new") as HTMLFormElement;
+    f.hidden = false; f.reset();
+    // A typed name starts the form.
+    const q = ($("cust-q") as HTMLInputElement).value.trim();
+    if (q && !/[@\d]/.test(q)) { const [a, ...b] = q.split(/\s+/); ($("cn-first") as HTMLInputElement).value = a; ($("cn-last") as HTMLInputElement).value = b.join(" "); }
+    else if (/^[\d\s()+-]{7,}$/.test(q)) ($("cn-phone") as HTMLInputElement).value = q;
+    else if (q.includes("@")) ($("cn-email") as HTMLInputElement).value = q;
+    ($("cn-first") as HTMLInputElement).focus();
+  });
+  $("cn-cancel").addEventListener("click", () => { ($("cust-new") as HTMLElement).hidden = true; });
+  ($("cust-new") as HTMLFormElement).addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const v = (id: string) => ($(id) as HTMLInputElement).value.trim();
+    if (!v("cn-first")) { alert("First name is needed."); return; }
+    const btn = ($("cust-new") as HTMLFormElement).querySelector<HTMLButtonElement>("button[type=submit]")!;
+    btn.disabled = true;
+    try {
+      const r = await fetch("/api/pos/customer", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ first_name: v("cn-first"), last_name: v("cn-last"), phone: v("cn-phone"), email: v("cn-email") }) });
+      const j = await r.json().catch(() => ({}));
+      if (r.status === 401) { ($("auth-warn") as HTMLElement).hidden = false; throw new Error("Your login has expired — log in again in a new tab."); }
+      if (!r.ok || !j.ok) throw new Error(j.error || "Couldn't add the customer.");
+      setCustomer({ id: j.id, first_name: v("cn-first"), last_name: v("cn-last"), store_credit_cents: 0 });
+      openCustPick(false); recalc();
+    } catch (err: any) { alert(err.message); }
+    finally { btn.disabled = false; }
+  });
+  // Enter in the name box → back to the search / scan box. A barcode scanned
+  // while the name box has focus (a scanner types fast, then Enter) is taken
+  // back out of the name and rung up instead.
+  {
+    const nameIn = $("sale-name") as HTMLInputElement;
+    let burst = "", last = 0, before = "";
+    nameIn.addEventListener("keydown", (e) => {
+      if (e.isComposing || e.keyCode === 229) return; // Japanese / Chinese input confirming a word
+      if (e.key === "Shift" || e.key === "CapsLock") return; // a scanner presses Shift for each capital
+      const now = performance.now();
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const code = burst, fast = now - last < 80;
+        burst = "";
+        const ps = $("prod-search") as HTMLInputElement;
+        if (code.length >= 6 && fast) {
+          nameIn.value = before;
+          nameIn.dispatchEvent(new Event("input"));
+          ps.value = code;
+          ps.focus();
+          ps.dispatchEvent(new Event("input"));
+        } else ps.focus();
+        return;
+      }
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (!burst || now - last > 50) { burst = ""; before = nameIn.value; }
+        burst += e.key; last = now;
+      } else burst = "";
+    });
+  }
+  ($("sale-name") as HTMLInputElement).addEventListener("input", () => {
+    recalc();
+    const nm = ($("sale-name") as HTMLInputElement).value.trim(), el = document.getElementById("rb-name");
+    if (el) el.textContent = nm ? ` · ${nm}` : "";
+  });
+
   // ＋ Custom item: an ad-hoc sale line that isn't in inventory (no listing,
   // no stock change) — a typed description + price, optional category for
   // reports. Saved like any other line (variant_id null).
@@ -493,6 +662,7 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
   // and the saved sale — stay in the order things were added). Shipping-
   // protection add-ons stay at the bottom. `flashKey` = the line to highlight.
   let flashKey: string | null = null;
+  let backupOn = false;
   function renderCart() {
     const el = $("cart");
     const shown = [...cart.filter((i) => !i.key.startsWith("upsell:")).reverse(), ...cart.filter((i) => i.key.startsWith("upsell:"))];
@@ -512,13 +682,16 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
       const key = line.dataset.key!;
       const item = cart.find((i) => i.key === key)!;
       line.querySelector<HTMLInputElement>("[data-qty]")!.addEventListener("change", (e) => {
-        item.qty = Math.max(1, parseInt((e.target as HTMLInputElement).value) || 1); renderCart();
+        item.qty = Math.max(1, parseInt((e.target as HTMLInputElement).value) || 1);
+        item.discountCents = Math.min(item.discountCents, item.unitPriceCents * item.qty);
+        renderCart();
       });
       line.querySelector<HTMLInputElement>("[data-disc]")!.addEventListener("change", (e) => {
         item.discountCents = Math.min(item.unitPriceCents * item.qty, Math.max(0, Math.round(parseFloat((e.target as HTMLInputElement).value) * 100) || 0)); renderCart();
       });
       line.querySelector("[data-remove]")!.addEventListener("click", () => { cart = cart.filter((i) => i.key !== key); renderCart(); });
     });
+    if (flashKey) el.scrollTop = 0; // the newest line is on top
     flashKey = null;
     recalc();
   }
@@ -558,6 +731,7 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
     const change = cash > total ? cash - total : 0;
     ($("change-row") as HTMLElement).hidden = change <= 0;
     $("t-change").textContent = money(change);
+    if (backupOn) backup();
   }
 
   // ---------- Live catalog ----------
@@ -574,6 +748,10 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
     refreshInFlight = (async () => {
       try {
         const r = await fetch("/api/pos/catalog", { cache: "no-store" });
+        // Logged out (an expired login in a tab left open): say so — the
+        // list would otherwise just stop updating, and saves would fail.
+        ($("auth-warn") as HTMLElement).hidden = r.status !== 401;
+        if (r.status === 401) return false;
         const j = await r.json();
         if (!r.ok || !j.ok || !Array.isArray(j.catalog)) return false;
         lastRefreshAt = Date.now();
@@ -711,7 +889,7 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
       }).join("");
       ($("held-bar") as HTMLElement).hidden = held.length === 0;
       $("held-list").querySelectorAll<HTMLButtonElement>("[data-resume]").forEach((b) =>
-        b.addEventListener("click", () => resumeHeld(all.find((x) => x.id === b.dataset.resume))));
+        b.addEventListener("click", () => { if (!busy) resumeHeld(all.find((x) => x.id === b.dataset.resume)); }));
       $("held-list").querySelectorAll<HTMLButtonElement>("[data-del]").forEach((b) =>
         b.addEventListener("click", () => deleteHeld(all.find((x) => x.id === b.dataset.del))));
     } catch { /* leave the bar as-is */ }
@@ -719,6 +897,14 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
 
   function resumeHeld(h: any) {
     if (!h) return;
+    // This computer has unsaved changes to that very sale (from before a
+    // reload) — offer them rather than silently loading the older server copy.
+    if (parked && parked.heldId === h.id) {
+      if (confirm(`This computer has changes to sale #${h.human_id} that weren't saved (from ${new Date(parked.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}).\n\nOK = continue with those changes · Cancel = open the last saved version (the changes stay offered above)`)) {
+        applyParked(parked);
+        return;
+      }
+    }
     if (cart.length && heldId !== h.id && !confirm(`Replace the current cart with held sale #${h.human_id}?`)) return;
     cart = (h.transaction_items || []).map((it: any) => {
       const cv = catalog.find((c) => c.variantId === it.variant_id);
@@ -736,8 +922,21 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
       };
     });
     heldId = h.id;
+    heldLineIds = (h.transaction_items || []).map((it: any) => it.id).filter(Boolean);
+    cartRef = crypto.randomUUID();
+    unanswered = []; lostSig = "";
+    savedAt = null;
+    // The sale-level discount it was held with (its total discount minus the
+    // lines' own); no cash tendered carried over.
+    const lineDisc = (h.transaction_items || []).reduce((a: number, it: any) => a + (it.discount_cents || 0), 0);
+    ($("cart-disc") as HTMLInputElement).value = (Math.max(0, (h.discount_cents || 0) - lineDisc) / 100).toFixed(2).replace(/\.00$/, "");
+    ($("cash-in") as HTMLInputElement).value = "";
+    ($("sale-name") as HTMLInputElement).value = h.note || "";
+    loadedName = (h.note || "").trim();
+    setCustomer(h.customer?.id ? h.customer : null);
     $("receipt").hidden = true;
     renderResumeBanner(h.human_id);
+    savedSig = sig();
     renderCart();
     loadHeld();
   }
@@ -751,21 +950,151 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
       });
       const j = await res.json();
       if (!res.ok || !j.ok) throw new Error(j.error || "Delete failed");
-      if (heldId === h.id) { heldId = null; cart = []; renderResumeBanner(null); renderCart(); }
+      if (heldId === h.id) { newCart(); renderCart(); }
+      dropParked(h.id);
       loadHeld();
     } catch (err: any) { alert("Could not delete: " + err.message); }
   }
 
+  // The open sale's number, and when 💾 Save last stored it.
+  let heldHuman: number | null = null;
+  let savedAt: number | null = null;
+  // This cart's id (a retry after a lost answer finds the same sale instead of
+  // making a second one), the sale's line ids as last loaded / saved here (a
+  // save never overwrites a newer one from another screen), and what the cart
+  // looked like then (= nothing unsaved).
+  let cartRef = crypto.randomUUID();
+  let heldLineIds: string[] | null = null;
+  let savedSig = "";
+  // Saves that got no answer (wifi / time-out): sent with the next save so the
+  // server recognises its own earlier write instead of "changed elsewhere";
+  // `lostSig` = what such a save sent.
+  let unanswered: string[] = [];
+  let lostSig = "";
+  // The sale's name as last loaded / saved here: a save only sends the name
+  // when it was changed on this screen (a rename in Sales isn't undone).
+  let loadedName = "";
+  const sig = () => JSON.stringify([cart.map((i) => [i.variantId, i.title, i.qty, i.unitPriceCents, i.discountCents]), ($("cart-disc") as HTMLInputElement).value, customer?.id ?? null, ($("sale-name") as HTMLInputElement).value.trim()]);
+  // A fresh register: no cart, no open sale.
+  function newCart() {
+    cart = []; heldId = null; heldLineIds = null; cartRef = crypto.randomUUID(); savedSig = "";
+    unanswered = []; lostSig = ""; loadedName = "";
+    ($("cart-disc") as HTMLInputElement).value = "0"; ($("cash-in") as HTMLInputElement).value = "";
+    ($("sale-name") as HTMLInputElement).value = "";
+    setCustomer(null);
+    renderResumeBanner(null);
+  }
   function renderResumeBanner(humanId: number | null) {
     const el = $("resume-banner") as HTMLElement;
-    if (heldId == null) { el.hidden = true; el.innerHTML = ""; return; }
+    heldHuman = humanId;
+    if (heldId == null) { el.hidden = true; el.innerHTML = ""; savedAt = null; return; }
     el.hidden = false;
-    el.innerHTML = `▶ Resuming held sale <strong>#${humanId}</strong> · <button class="link-btn" id="resume-cancel" type="button">start a new sale</button>`;
-    $("resume-cancel").addEventListener("click", () => { heldId = null; cart = []; renderResumeBanner(null); renderCart(); loadHeld(); });
+    const when = savedAt ? new Date(savedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
+    const nm = ($("sale-name") as HTMLInputElement).value.trim();
+    el.innerHTML = `▶ Sale <strong>#${humanId}</strong><span id="rb-name">${nm ? ` · ${esc(nm)}` : ""}</span>${when ? ` · 💾 saved ${when}` : " · resumed"} · <button class="link-btn" id="resume-cancel" type="button"${busy ? " disabled" : ""}>start a new sale</button>`;
+    $("resume-cancel").addEventListener("click", () => {
+      if (busy) return;
+      if (cart.length && sig() !== savedSig && !confirm(`Put sale #${humanId} aside and start a new one? Your changes since the last 💾 Save are NOT saved.`)) return;
+      newCart(); renderCart(); loadHeld();
+    });
+  }
+
+  // ---------- Backup of the cart on this computer ----------
+  // The cart lives in this tab until it's saved; a refresh / crash would lose
+  // it. Every change is copied to localStorage (per employee); after a reload
+  // a copy with unsaved changes is offered back (never applied on its own).
+  // A copy that's fully saved on the server is just dropped.
+  const BK = `tl-checkout-cart:${data.userId || "anon"}`, BK_PREV = `${BK}:prev`;
+  let parked: any = null; // the copy offered back after a reload
+  function backup() {
+    try {
+      if (cart.length) localStorage.setItem(BK, JSON.stringify({ at: Date.now(), heldId, heldHuman, heldLineIds, cartRef, unanswered, cart, cartDisc: ($("cart-disc") as HTMLInputElement).value, customer, saleName: ($("sale-name") as HTMLInputElement).value, loadedName, dirty: sig() !== savedSig || unanswered.length > 0 }));
+      else localStorage.removeItem(BK);
+    } catch { /* private mode / full */ }
+  }
+  // This tab took over (resumed / saved / completed) the parked copy's sale →
+  // the copy is stale.
+  function dropParked(saleId?: string | null) {
+    if (!parked || saleId === null || (saleId !== undefined && parked.heldId !== saleId)) return;
+    parked = null;
+    try { localStorage.removeItem(BK_PREV); } catch {}
+    const el = $("restore-banner") as HTMLElement; el.hidden = true; el.innerHTML = "";
+  }
+  function offerRestore() {
+    let prev: any = null;
+    try {
+      const raw = localStorage.getItem(BK) || localStorage.getItem(BK_PREV);
+      prev = raw ? JSON.parse(raw) : null;
+      if (prev && prev.heldId && !prev.dirty) prev = null; // all of it is in that saved sale
+      // Park it so this session's own backups can't overwrite it before a choice.
+      localStorage.removeItem(BK);
+      if (prev) localStorage.setItem(BK_PREV, JSON.stringify(prev)); else localStorage.removeItem(BK_PREV);
+    } catch { prev = null; }
+    const el = $("restore-banner") as HTMLElement;
+    if (!prev || !Array.isArray(prev.cart) || !prev.cart.length) { el.hidden = true; return; }
+    parked = prev;
+    const n = prev.cart.reduce((s: number, i: any) => s + (i.qty || 1), 0);
+    const sum = prev.cart.reduce((s: number, i: any) => s + i.unitPriceCents * i.qty - (i.discountCents || 0), 0);
+    const when = new Date(prev.at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+    el.hidden = false;
+    el.innerHTML = `↺ A cart from <strong>${esc(when)}</strong>${prev.heldHuman ? ` (sale #${prev.heldHuman}, with changes after its last save)` : ""} wasn't finished — ${n} item${n === 1 ? "" : "s"} · ${money(sum)}. <button class="link-btn" id="rb-restore" type="button">Restore it</button> · <button class="link-btn" id="rb-drop" type="button">Discard</button>`;
+    $("rb-restore").addEventListener("click", () => {
+      if (busy) return;
+      if (cart.length && !confirm("Replace the current cart with the unfinished one?")) return;
+      applyParked(prev);
+    });
+    $("rb-drop").addEventListener("click", () => { if (confirm("Discard the unfinished cart? This can't be undone.")) dropParked(); });
+  }
+  function applyParked(prev: any) {
+      cart = prev.cart;
+      heldId = prev.heldId || null;
+      heldLineIds = Array.isArray(prev.heldLineIds) ? prev.heldLineIds : null;
+      cartRef = prev.cartRef || crypto.randomUUID();
+      unanswered = Array.isArray(prev.unanswered) ? prev.unanswered : [];
+      ($("sale-name") as HTMLInputElement).value = prev.saleName || "";
+      loadedName = typeof prev.loadedName === "string" ? prev.loadedName : "";
+      setCustomer(prev.customer || null);
+      ($("cart-disc") as HTMLInputElement).value = prev.cartDisc || "0";
+      savedAt = null; savedSig = ""; // restored = not saved yet
+      renderResumeBanner(heldId ? prev.heldHuman : null);
+      dropParked(); renderCart(); loadHeld();
+  }
+
+  // ---------- ✓ Mark paid (managers) ----------
+  const pform = document.getElementById("paid-form") as HTMLFormElement | null;
+  const pfCents = (id: string) => { const t = ($(id) as HTMLInputElement).value.replace(/[$,\s]/g, ""); if (!t) return 0; const n = Number(t); return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) : NaN; };
+  const itemsTotal = () => cart.reduce((s, i) => s + i.unitPriceCents * i.qty, 0);
+  function pfSync() {
+    const cash = pfCents("pf-cash"), card = pfCents("pf-card"), sub = itemsTotal(), paid = cash + card;
+    const el = $("pf-sum");
+    if (!Number.isFinite(paid)) { el.innerHTML = `<span class="bad">Type amounts like 125.50</span>`; return; }
+    el.innerHTML = `Items ${money(sub)} · paid <strong>${money(paid)}</strong>` + (paid > sub ? ` · <span class="bad">more than the items — an item is missing?</span>` : paid < sub ? ` · ${money(sub - paid)} recorded as discount` : "");
+  }
+  if (pform) {
+    $("paid-btn").addEventListener("click", () => {
+      pform.hidden = !pform.hidden;
+      if (!pform.hidden) { pform.reset(); pfSync(); ($("pf-cash") as HTMLInputElement).focus(); pform.scrollIntoView({ block: "nearest" }); }
+    });
+    $("pf-cancel").addEventListener("click", () => { pform.hidden = true; });
+    pform.addEventListener("input", pfSync);
+    pform.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const cash = pfCents("pf-cash"), card = pfCents("pf-card"), sub = itemsTotal(), paid = cash + card;
+      if (!Number.isFinite(paid) || paid <= 0) { alert("Type the cash and/or card amount that was paid."); return; }
+      if (paid > sub) { alert(`Paid (${money(paid)}) is more than the items (${money(sub)}) — an item is missing, or check the amounts.`); return; }
+      if (!confirm(`Mark this sale paid?\n\n${money(cash)} cash + ${money(card)} card = ${money(paid)}\nItems ${money(sub)}${paid < sub ? ` — ${money(sub - paid)} recorded as discount` : ""}\n\nEvery item comes out of stock.`)) return;
+      submit("completed", { manual: { cashCents: cash, cardCents: card } });
+    });
   }
 
   // ---------- Submit ----------
-  async function submit(status: "completed" | "open") {
+  // stay: 💾 Save — store it and keep working (the sale stays open here).
+  // manual: ✓ Mark paid — the typed-in cash + card totals.
+  // One save at a time: every register action is locked while it runs.
+  let busy = false;
+  const lockables = () => [...document.querySelectorAll<HTMLButtonElement>("#cart-actions button, #pf-go, #resume-cancel, #held-list button, #rb-restore, #rb-drop, #custom-btn")];
+  async function submit(status: "completed" | "open", opts?: { stay?: boolean; manual?: { cashCents: number; cardCents: number } }) {
+    if (busy) return;
     // A custom item typed but not added yet would be left off the sale.
     if (!cform.hidden && (($("cf-desc") as HTMLInputElement).value.trim() || ($("cf-price") as HTMLInputElement).value.trim())) {
       alert("Add the custom item to the cart (or Cancel it) first.");
@@ -773,43 +1102,185 @@ const posData = { catalog, categories: categories ?? [], customer, regions };
       return;
     }
     if (!cart.length) return;
+    busy = true;
     const cartDisc = Math.round(parseFloat(($("cart-disc") as HTMLInputElement).value) * 100) || 0;
     const cash = Math.round(parseFloat(($("cash-in") as HTMLInputElement).value) * 100) || 0;
-    const btn = (status === "completed" ? $("complete-btn") : $("suspend-btn")) as HTMLButtonElement;
-    const orig = btn.textContent; btn.disabled = true; btn.textContent = "Saving…";
+    const btn = $(opts?.manual ? "pf-go" : opts?.stay ? "save-btn" : status === "completed" ? "complete-btn" : "suspend-btn") as HTMLButtonElement;
+    const orig = btn.textContent;
+    const locked = lockables();
+    locked.forEach((b) => (b.disabled = true));
+    btn.textContent = "Saving…";
     try {
-      const res = await fetch("/api/pos/checkout", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          customerId: customer?.id ?? null, status, resumeId: heldId, cartDiscountCents: cartDisc, cashCents: cash,
-          items: cart.map((i) => ({ variantId: i.variantId, categoryId: i.categoryId, kind: i.kind, description: i.title, qty: i.qty, unitPriceCents: i.unitPriceCents, discountCents: i.discountCents, ...(i.custom ? { custom: true } : {}) })),
-        }),
-      });
-      const j = await res.json();
-      if (!res.ok || !j.ok) throw new Error(j.error || "Failed");
-      const rc = $("receipt");
-      rc.hidden = false;
-      rc.innerHTML = status === "completed"
-        ? `<h3>✓ Sale #${j.humanId} complete</h3><p>Total ${money(j.total)}${j.change ? ` · Change due <strong>${money(j.change)}</strong>` : ""}</p>`
-        : `<h3>⏸ Held as #${j.humanId}</h3><p>Saved — resume it anytime from the Held sales bar above.</p>`;
-      cart = []; heldId = null; renderResumeBanner(null);
-      ($("cart-disc") as HTMLInputElement).value = "0"; ($("cash-in") as HTMLInputElement).value = "";
-      renderCart();
-      loadHeld();
-      rc.scrollIntoView({ behavior: "smooth", block: "center" });
-    } catch (err: any) {
-      alert("Could not save: " + err.message);
+      // asNew: this cart's sale is gone / changed elsewhere → it can be kept
+      // as a NEW held sale (never completed that way — someone completes it
+      // on purpose after checking).
+      let asNew = false;
+      for (;;) {
+        const st = asNew ? "open" : status;
+        // What this attempt sends (edits made while it's in flight stay
+        // unsaved / stay on the register).
+        const sentSig = sig();
+        const sentQty = new Map(cart.map((i) => [i.key, i.qty]));
+        const sentName = ($("sale-name") as HTMLInputElement).value.trim();
+        const sendName = asNew || !heldId || unanswered.length > 0 || sentName !== loadedName;
+        const saveRef = crypto.randomUUID();
+        let res: Response | null = null, j: any = null;
+        try {
+          res = await fetch("/api/pos/checkout", {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              customerId: customer?.id ?? null, status: st, resumeId: heldId, clientRef: cartRef,
+              expectedLineIds: heldLineIds, saveRef, prevSaveRefs: unanswered, pageUserId: data.userId || null,
+              cartDiscountCents: cartDisc, cashCents: cash, ...(sendName ? { note: sentName } : {}),
+              ...(opts?.manual && !asNew ? { manualPayment: opts.manual } : {}),
+              items: cart.map((i) => ({ variantId: i.variantId, categoryId: i.categoryId, kind: i.kind, description: i.title, qty: i.qty, unitPriceCents: i.unitPriceCents, discountCents: i.discountCents, ...(i.custom ? { custom: true } : {}) })),
+            }),
+          });
+          j = await res.json().catch(() => null);
+        } catch { res = null; }
+        if (!res || !j || (res.status >= 500 && j.state !== "retry")) {
+          // No (usable) answer: it may or may not have saved. Remember this
+          // attempt so the next save is recognised as its own.
+          unanswered = [...unanswered, saveRef].slice(-20); lostSig = sentSig;
+          backup();
+          if (res && j && j.error) { alert(`Could not save: ${j.error}\n\nIt may or may not have gone through — check the Held sales strip at the top before trying again.`); loadHeld(); return; }
+          alert("Couldn't confirm the save — no answer from the server (connection or time-out).\n\nIt may or may not have gone through: look at the Held sales strip at the top before trying again. Your cart is still here and backed up on this computer.");
+          loadHeld();
+          return;
+        }
+        // A definite answer: earlier lost attempts are settled.
+        const prevLost = lostSig;
+        unanswered = []; lostSig = "";
+        if (res.ok && j.ok) {
+          if (st === "open" && (opts?.stay || asNew)) {
+            // Saved — still open here; the banner shows when. Edits made
+            // while it was saving stay marked unsaved.
+            heldId = j.id; heldLineIds = Array.isArray(j.lineIds) ? j.lineIds : null;
+            savedAt = Date.now(); savedSig = sentSig;
+            if (sendName) loadedName = sentName;
+            renderResumeBanner(j.humanId);
+            dropParked(j.id);
+            backup();
+            loadHeld();
+            if (asNew) alert(`Saved as a new held sale #${j.humanId}.`);
+            return;
+          }
+          if (pform) pform.hidden = true;
+          if (Array.isArray(j.stockMissed) && j.stockMissed.length)
+            alert(`Sale saved — but stock couldn't be updated for ${j.stockMissed.length} item${j.stockMissed.length === 1 ? "" : "s"} (fix their counts in Inventory):\n\n${j.stockMissed.slice(0, 20).join("\n")}${j.stockMissed.length > 20 ? "\n…" : ""}`);
+          const rc = $("receipt");
+          rc.hidden = false;
+          rc.innerHTML = st === "completed"
+            ? `<h3>✓ Sale #${j.humanId} ${opts?.manual ? "paid" : "complete"}</h3><p>Total ${money(j.total)}${opts?.manual ? ` · ${money(opts.manual.cashCents)} cash + ${money(opts.manual.cardCents)} card` : ""}${j.change ? ` · Change due <strong>${money(j.change)}</strong>` : ""}</p><p><a href="/sales?id=${encodeURIComponent(j.id)}">See the full breakdown in Sales →</a>${data.canMarkPaid ? ` · <button class="link-btn" type="button" id="rc-undo" data-id="${esc(j.id)}" data-num="${j.humanId}">↶ Undo (back to Held)</button>` : ""}</p>`
+            : `<h3>⏸ Held as #${j.humanId}</h3><p>Saved — resume it anytime from the Held sales bar above.</p>`;
+          dropParked(j.id);
+          // Anything scanned while it was saving wasn't in it — it stays on
+          // the register as the next sale.
+          const carry = [
+            ...cart.filter((i) => !sentQty.has(i.key)),
+            ...cart.filter((i) => sentQty.has(i.key) && i.qty > sentQty.get(i.key)!).map((i) => ({ ...i, key: crypto.randomUUID(), qty: i.qty - sentQty.get(i.key)!, discountCents: 0 })),
+          ];
+          newCart();
+          cart = carry;
+          renderCart();
+          loadHeld();
+          document.getElementById("rc-undo")?.addEventListener("click", (e) => undoSale((e.currentTarget as HTMLElement).dataset.id!, Number((e.currentTarget as HTMLElement).dataset.num)));
+          rc.scrollIntoView({ behavior: "smooth", block: "center" });
+          return;
+        }
+        if (res.status === 401) {
+          ($("auth-warn") as HTMLElement).hidden = false;
+          alert("Your login has expired, so NOTHING was saved.\n\nOpen a NEW tab, log in to the POS there, then come back to THIS tab and press the button again. Don't reload this tab — your cart is here (and backed up on this computer).");
+          return;
+        }
+        if (res.status === 409 && j.state === "completed") {
+          // Already completed — never saved again. If this screen holds
+          // nothing beyond what was saved / sent before, that's it (e.g. a
+          // try whose answer was lost); otherwise its extra items are offered
+          // as a new held sale instead of being wiped.
+          const items = (x: string) => { try { return x ? JSON.stringify(JSON.parse(x)[0]) : ""; } catch { return x; } };
+          const nowItems = items(sig());
+          const nothingNew = nowItems === items(savedSig) || (!!prevLost && (nowItems === items(prevLost) || items(sentSig) === items(prevLost)));
+          if (nothingNew || asNew) {
+            alert(`${j.error}\n\nThe register is cleared. See Reports for that sale.`);
+            if (heldId) dropParked(heldId);
+            newCart(); renderCart(); loadHeld();
+            return;
+          }
+          if (!confirm(`${j.error}\n\nThis screen has items that may not be in it. Keep this cart as a NEW held sale so you can compare? (Nothing gets completed.)`)) return;
+        } else if (res.status === 409 && !asNew && (j.state === "missing" || j.state === "changed")) {
+          const q = j.state === "changed"
+            ? `${j.error}\n\nKeep what's on THIS screen as a separate NEW held sale? (Nothing gets completed — compare both in Held sales.)`
+            : `${j.error}\n\nSave this cart as a NEW held sale?`;
+          if (!confirm(q)) return;
+        } else {
+          if (j.state === "retry" && Array.isArray(j.lineIds)) { heldLineIds = j.lineIds; backup(); }
+          alert("Could not save: " + (j.error || `error ${res.status}`));
+          return;
+        }
+        // Keep this cart as a NEW held sale: the screen becomes a fresh cart
+        // first (its own new id), so a retry after a lost answer finds that
+        // new sale instead of making another.
+        asNew = true;
+        heldId = null; heldLineIds = null; cartRef = crypto.randomUUID(); savedSig = "";
+        renderResumeBanner(null);
+        backup();
+      }
     } finally {
-      btn.disabled = false; btn.textContent = orig;
+      busy = false;
+      locked.forEach((b) => { if (b.isConnected) b.disabled = false; });
+      // (a banner redrawn during the save drew its button disabled)
+      const rcBtn = document.getElementById("resume-cancel") as HTMLButtonElement | null;
+      if (rcBtn) rcBtn.disabled = false;
+      btn.textContent = orig;
     }
   }
+  // ↶ Undo a sale just completed (managers, same day): it goes back to Held
+  // sales — and straight back into this cart to fix and complete again.
+  async function undoSale(id: string, num: number) {
+    if (busy) return;
+    if (!confirm(`Undo sale #${num}?\n\nIt goes back to Held sales (and into this cart), its items go back into stock, and its payment is cleared — complete it again after any changes.`)) return;
+    // The register is locked while it runs (nothing gets completed meanwhile).
+    busy = true;
+    const ub = document.getElementById("rc-undo") as HTMLButtonElement | null;
+    const locked = [...lockables(), ...(ub ? [ub] : [])];
+    locked.forEach((b) => (b.disabled = true));
+    let done = false;
+    try {
+      const r = await fetch("/api/pos/sales", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "undo", id }) });
+      const j = await r.json().catch(() => ({ error: `Server answered ${r.status}` }));
+      if (r.status === 401) { ($("auth-warn") as HTMLElement).hidden = false; throw new Error("Your login has expired — log in again in a new tab, then try again."); }
+      if (!r.ok || !j.ok) throw new Error(j.error || "Couldn't undo.");
+      done = true;
+      $("receipt").hidden = true;
+      await loadHeld();
+    } catch (err: any) { alert(err.message); }
+    finally {
+      busy = false;
+      locked.forEach((b) => { if (b.isConnected) b.disabled = false; });
+      const rcBtn = document.getElementById("resume-cancel") as HTMLButtonElement | null;
+      if (rcBtn) rcBtn.disabled = false;
+    }
+    if (!done) return;
+    const h = heldCache.find((x) => x.id === id);
+    if (h) resumeHeld(h); else alert(`Sale #${num} is back in Held sales.`);
+  }
   $("complete-btn").addEventListener("click", () => submit("completed"));
+  $("save-btn").addEventListener("click", () => submit("open", { stay: true }));
   $("suspend-btn").addEventListener("click", () => submit("open"));
-  $("clear-btn").addEventListener("click", () => { cart = []; heldId = null; renderResumeBanner(null); renderCart(); $("receipt").hidden = true; loadHeld(); });
+  $("clear-btn").addEventListener("click", () => {
+    if (busy) return;
+    if (cart.length && !confirm(heldId ? `Clear the register? Sale #${heldHuman} keeps its last 💾 save in Held sales${sig() !== savedSig ? " — changes since then are lost" : ""}.` : "Clear the cart? These items aren't saved anywhere.")) return;
+    newCart(); renderCart(); $("receipt").hidden = true; loadHeld();
+  });
 
-  // initial paint
+  // initial paint (an unfinished cart from before a reload is offered back
+  // first — only then do this session's changes start being backed up)
   renderRegionChips();
   renderProducts();
+  setCustomer(customer);
+  offerRestore();
+  backupOn = true;
   renderCart();
   // Deep link from Inventory's "🛒 Sell" — drop that variant straight in the cart.
   {
