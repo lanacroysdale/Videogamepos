@@ -23,7 +23,7 @@ export const GET: APIRoute = async ({ locals }) => {
   const { data, error } = await locals.supabase
     .from("transactions")
     .select(
-      "id, human_id, total_cents, discount_cents, created_at, note, customer:customers(first_name, last_name), transaction_items(id, variant_id, category_id, kind, description, qty, unit_price_cents, discount_cents, department)",
+      "id, human_id, total_cents, discount_cents, created_at, note, customer:customers(id, first_name, last_name, store_credit_cents), transaction_items(id, variant_id, category_id, kind, description, qty, unit_price_cents, discount_cents, department)",
     )
     .eq("type", "sale")
     .eq("status", "open")
@@ -194,7 +194,9 @@ export const POST: APIRoute = async ({ locals, request }) => {
   // login's sales — not "deleted").
   const otherLogin = typeof body.pageUserId === "string" && body.pageUserId && body.pageUserId !== locals.user.id;
   const fields = {
-    customer_id: body.customerId ?? null,
+    customer_id: isUuid(body.customerId) ? body.customerId : null,
+    // The sale's name (e.g. "PRGE Day 1") — shown in Sales.
+    note: typeof body.note === "string" && body.note.trim() ? body.note.trim().slice(0, 120) : null,
     status,
     subtotal_cents: subtotal,
     discount_cents: totalDiscount,
@@ -224,7 +226,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
     p_id: isUuid(resumeId) ? resumeId : null,
     p_client_ref: clientRef,
     p_status: status,
-    p_fields: { ...fields, customer_id: fields.customer_id ?? "" },
+    p_fields: { ...fields, customer_id: fields.customer_id ?? "", note: fields.note ?? "" },
     p_items: lines,
     p_expected: resumeId ? expected : null,
     p_save_ref: saveRef,

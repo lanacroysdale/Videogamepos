@@ -9,7 +9,7 @@ interface Props {
   title: string;
   active?:
     | "dashboard" | "leads" | "checkout" | "tradein" | "inventory" | "returns"
-    | "repairs" | "schedule" | "customers" | "reports" | "pricing" | "settings" | "todos" | "sops" | "menu" | "tabs" | "scan" | "labelmaker";
+    | "repairs" | "schedule" | "customers" | "reports" | "pricing" | "settings" | "todos" | "sops" | "menu" | "tabs" | "scan" | "labelmaker" | "sales";
 }
 const { title, active } = Astro.props;
 
@@ -40,6 +40,7 @@ const nav = [
   { key: "dashboard", label: "Dashboard", href: "/dashboard", icon: "🏠" },
   { key: "leads", label: "Leads", href: "/leads", icon: "📥" },
   { key: "checkout", label: "Checkout", href: "/checkout", icon: "🧾" },
+  { key: "sales", label: "Sales", href: "/sales", icon: "💵" },
   ...(fnbEnabled ? [{ key: "tabs", label: "Tabs", href: "/tabs", icon: "🍻" }] : []),
   { key: "tradein", label: "Trade-In", href: "/trade-in", icon: "🔁" },
   { key: "returns", label: "Returns", href: "/returns", icon: "↩️" },

@@ -1,0 +1,268 @@
+---
+export const prerender = false;
+
+import AppLayout from "../../layouts/AppLayout.astro";
+import { compAbbrev } from "../../lib/conditionDisplay";
+
+const supabase = Astro.locals.supabase;
+// Condition labels for the line breakdown ("CIB", "Loose"…).
+const { data: comp } = await supabase.from("completeness_levels").select("code, label");
+const { data: grades } = await supabase.from("condition_grades").select("code, label, icon");
+const compShort = Object.fromEntries((comp ?? []).map((c: any) => [c.code, compAbbrev(c.code, (comp ?? []) as any)]));
+const gradeShort = Object.fromEntries((grades ?? []).map((g: any) => [g.code, g.icon || g.label]));
+const pageData = { compShort, gradeShort, canEditPayment: Astro.locals.can("data.elevated") };
+---
+
+<AppLayout title="Sales" active="sales">
+  <div class="sales-grid">
+    <section class="pos-panel">
+      <div class="sales-head">
+        <h2>Sales</h2>
+        <div class="sales-tabs" role="tablist">
+          <button type="button" class="chip active" data-status="completed">Completed</button>
+          <button type="button" class="chip" data-status="open">Held</button>
+        </div>
+      </div>
+      <div class="sales-filters">
+        <input id="s-q" type="search" placeholder="Sale # or name — e.g. 81 or PRGE" autocomplete="off" data-noscan="1" />
+        <select id="s-days">
+          <option value="1">Today</option>
+          <option value="7" selected>Last 7 days</option>
+          <option value="30">Last 30 days</option>
+          <option value="0">All time</option>
+        </select>
+      </div>
+      <div id="s-list" class="s-list"><p class="muted">Loading…</p></div>
+      <button id="s-more" class="btn btn-ghost btn-sm" type="button" hidden>Load older</button>
+    </section>
+
+    <section class="pos-panel" id="s-detail">
+      <p class="muted">Pick a sale to see everything in it.</p>
+    </section>
+  </div>
+  <script type="application/json" id="sales-data" set:html={JSON.stringify(pageData)}></script>
+</AppLayout>
+
+<style>
+  .sales-grid { display:grid; grid-template-columns:minmax(0, 1fr) minmax(0, 1.35fr); gap:1rem; align-items:start; }
+  @media (max-width: 1000px) { .sales-grid { grid-template-columns:1fr; } }
+  .sales-head { display:flex; align-items:center; justify-content:space-between; gap:0.6rem; flex-wrap:wrap; }
+  .sales-head h2 { margin:0; }
+  .sales-tabs { display:flex; gap:0.4rem; }
+  .sales-filters { display:flex; gap:0.5rem; margin:0.8rem 0; flex-wrap:wrap; }
+  .sales-filters input { flex:1 1 12rem; }
+  .s-list { display:grid; gap:0.35rem; }
+  #s-more { margin-top:0.6rem; }
+  #s-more[hidden] { display:none; } /* .btn's display beat the hidden attribute */
+</style>
+<style is:global>
+  .s-row { display:grid; grid-template-columns:auto minmax(0, 1fr) auto; gap:0.2rem 0.8rem; align-items:center; width:100%; text-align:left; padding:0.55rem 0.7rem; background:rgba(255,255,255,.02); border:1px solid var(--border); color:var(--text); cursor:pointer; font:inherit; }
+  .s-row:hover { border-color:var(--border-strong); }
+  .s-row.active { border-color:var(--cyan); box-shadow:inset 0 0 0 1px var(--cyan); }
+  .s-row .s-num { font-family:var(--font-mono); font-weight:700; color:var(--cyan); }
+  .s-row .s-name { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .s-row .s-name.none { color:var(--muted-2); font-weight:500; }
+  .s-row .s-total { font-weight:700; font-variant-numeric:tabular-nums; text-align:right; }
+  .s-row .s-meta { grid-column:2 / -1; font-size:0.78rem; color:var(--muted); }
+  .sd-head { display:flex; align-items:baseline; gap:0.7rem; flex-wrap:wrap; }
+  .sd-head h2 { margin:0; }
+  .sd-meta { color:var(--muted); font-size:0.85rem; margin:0.3rem 0 0.8rem; }
+  .sd-name { display:flex; gap:0.5rem; margin-bottom:0.9rem; }
+  .sd-name input { flex:1; }
+  .sd-totals { display:grid; grid-template-columns:repeat(auto-fit, minmax(8.5rem, 1fr)); gap:0.5rem; margin-bottom:0.9rem; }
+  .sd-tot { padding:0.55rem 0.7rem; border:1px solid var(--border); background:rgba(255,255,255,.02); }
+  .sd-tot small { display:block; color:var(--muted); font-size:0.72rem; text-transform:uppercase; letter-spacing:0.04em; }
+  .sd-tot strong { font-size:1.05rem; font-variant-numeric:tabular-nums; }
+  .sd-tot.big strong { color:var(--cyan); font-size:1.25rem; }
+  .sd-pay { display:flex; gap:0.5rem; align-items:flex-end; flex-wrap:wrap; margin:-0.3rem 0 0.9rem; padding:0.6rem 0.7rem; border:1px solid var(--cyan); background:rgba(44,230,224,.05); }
+  .sd-pay label { display:grid; gap:0.2rem; font-size:0.75rem; font-weight:600; color:var(--muted); }
+  .sd-pay input { width:8rem; }
+  .sd-actions { display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.9rem; }
+  .sd-roll { display:flex; flex-wrap:wrap; gap:0.4rem; margin-bottom:0.9rem; }
+  .sd-roll span { font-size:0.78rem; padding:0.2rem 0.5rem; border:1px solid var(--border); color:var(--muted); }
+  .sd-roll span b { color:var(--text); }
+  .sd-lines { width:100%; border-collapse:collapse; font-size:0.86rem; }
+  .sd-lines th { text-align:left; font-size:0.72rem; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted); padding:0.35rem 0.4rem; border-bottom:1px solid var(--border-strong); }
+  .sd-lines td { padding:0.4rem; border-bottom:1px solid var(--border); vertical-align:top; }
+  .sd-lines td.n { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .sd-lines .sub { display:block; color:var(--muted-2); font-size:0.76rem; }
+  .sd-lines-wrap { overflow-x:auto; }
+</style>
+
+<script>
+  const data = JSON.parse(document.getElementById("sales-data")!.textContent!);
+  const $ = (id: string) => document.getElementById(id)!;
+  const esc = (s: any) => String(s ?? "").replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m] as string));
+  const money = (c: number) => ((c || 0) / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
+  const when = (iso: string) => new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  const cents = (v: string) => { const t = v.replace(/[$,\s]/g, ""); if (!t) return 0; const n = Number(t); return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) : NaN; };
+  const custName = (c: any) => (c ? `${c.first_name ?? ""} ${c.last_name ?? ""}`.trim() : "");
+
+  let status: "completed" | "open" = "completed";
+  let rows: any[] = [];
+  let openId: string | null = new URLSearchParams(location.search).get("id");
+
+  async function api(url: string, body?: any) {
+    const r = await fetch(url, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : undefined);
+    const j = await r.json().catch(() => ({ error: `Server answered ${r.status}` }));
+    if (!r.ok || j.ok === false) throw new Error(j.error || "Failed");
+    return j;
+  }
+
+  // ---------- List ----------
+  async function loadList(more = false) {
+    const q = ($("s-q") as HTMLInputElement).value.trim();
+    const days = ($("s-days") as HTMLSelectElement).value;
+    const p = new URLSearchParams({ status, days, ...(q ? { q } : {}) });
+    const col = status === "open" ? "created_at" : "completed_at";
+    if (more && rows.length) p.set("before", rows[rows.length - 1][col]);
+    try {
+      const j = await api(`/api/pos/sales?${p}`);
+      rows = more ? [...rows, ...j.sales] : j.sales;
+      ($("s-more") as HTMLElement).hidden = j.sales.length < 50;
+      renderList();
+    } catch (e: any) { $("s-list").innerHTML = `<p class="muted">Couldn't load sales: ${esc(e.message)}</p>`; }
+  }
+  function renderList() {
+    const list = $("s-list");
+    if (!rows.length) { list.innerHTML = `<p class="muted">No ${status === "open" ? "held" : "completed"} sales here.</p>`; return; }
+    list.innerHTML = rows.map((t) => {
+      const pay = status === "completed" ? [t.cash_cents ? `cash ${money(t.cash_cents)}` : "", t.card_cents ? `card ${money(t.card_cents)}` : "", t.store_credit_cents ? `credit ${money(t.store_credit_cents)}` : ""].filter(Boolean).join(" · ") : "held";
+      const who = [t.employee?.full_name, custName(t.customer)].filter(Boolean).join(" → ");
+      return `<button type="button" class="s-row${t.id === openId ? " active" : ""}" data-id="${t.id}">
+        <span class="s-num">#${t.human_id}</span>
+        <span class="s-name${t.note ? "" : " none"}">${esc(t.note || "Untitled sale")}</span>
+        <span class="s-total">${money(t.total_cents)}</span>
+        <span class="s-meta">${esc(when(t.completed_at || t.created_at))} · ${t.units} item${t.units === 1 ? "" : "s"} · ${esc(pay)}${who ? ` · ${esc(who)}` : ""}</span>
+      </button>`;
+    }).join("");
+    list.querySelectorAll<HTMLButtonElement>("[data-id]").forEach((b) => b.addEventListener("click", () => openSale(b.dataset.id!)));
+  }
+  document.querySelectorAll<HTMLButtonElement>("[data-status]").forEach((b) => b.addEventListener("click", () => {
+    status = b.dataset.status === "open" ? "open" : "completed";
+    document.querySelectorAll("[data-status]").forEach((x) => x.classList.toggle("active", x === b));
+    loadList();
+  }));
+  let qT: any;
+  $("s-q").addEventListener("input", () => { clearTimeout(qT); qT = setTimeout(() => loadList(), 250); });
+  $("s-days").addEventListener("change", () => loadList());
+  $("s-more").addEventListener("click", () => loadList(true));
+
+  // ---------- Detail ----------
+  let cur: any = null;
+  async function openSale(id: string) {
+    openId = id;
+    history.replaceState(null, "", `?id=${id}`);
+    document.querySelectorAll(".s-row").forEach((r) => r.classList.toggle("active", (r as HTMLElement).dataset.id === id));
+    $("s-detail").innerHTML = `<p class="muted">Loading…</p>`;
+    try {
+      cur = await api(`/api/pos/sales?id=${encodeURIComponent(id)}`);
+      renderDetail();
+      if (window.innerWidth < 1000) $("s-detail").scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (e: any) { $("s-detail").innerHTML = `<p class="muted">${esc(e.message)}</p>`; }
+  }
+  const cond = (it: any) => [data.compShort[it.variant?.completeness_code] || it.variant?.completeness_code, data.gradeShort[it.variant?.grade_code]].filter(Boolean).join(" · ");
+  function renderDetail() {
+    const t = cur.sale, lines: any[] = cur.lines;
+    const sell = lines.filter((l) => l.kind === "sale" || l.kind === "service");
+    const units = sell.reduce((a, l) => a + l.qty, 0);
+    const gross = sell.reduce((a, l) => a + l.unit_price_cents * l.qty, 0);
+    const lineDisc = sell.reduce((a, l) => a + l.discount_cents, 0);
+    // Small roll-ups: by stock pool and by category.
+    const roll = (key: (l: any) => string) => {
+      const m = new Map<string, { u: number; c: number }>();
+      for (const l of sell) { const k = key(l) || "—"; const r = m.get(k) ?? { u: 0, c: 0 }; r.u += l.qty; r.c += l.unit_price_cents * l.qty - l.discount_cents; m.set(k, r); }
+      return [...m.entries()].sort((a, b) => b[1].c - a[1].c).map(([k, r]) => `<span>${esc(k)} <b>${r.u}</b> · ${money(r.c)}</span>`).join("");
+    };
+    const payBits = [["Cash", t.cash_cents], ["Card", t.card_cents], ...(t.store_credit_cents ? [["Store credit", t.store_credit_cents]] : [])];
+    $("s-detail").innerHTML = `
+      <div class="sd-head"><h2>Sale #${t.human_id}</h2><span class="pill">${t.status === "completed" ? "completed" : "held"}</span></div>
+      <p class="sd-meta">${esc(when(t.completed_at || t.created_at))}${t.employee?.full_name ? ` · rung by ${esc(t.employee.full_name)}` : ""}${custName(t.customer) ? ` · customer <strong>${esc(custName(t.customer))}</strong>` : ""}</p>
+      <form class="sd-name" id="sd-name-form">
+        <input id="sd-name" maxlength="120" placeholder="Name this sale — e.g. PRGE Day 1" value="${esc(t.note || "")}" data-noscan="1" />
+        <button class="btn btn-ghost btn-sm" type="submit">Save name</button>
+      </form>
+      <div class="sd-totals">
+        <div class="sd-tot"><small>Items</small><strong>${units}</strong></div>
+        <div class="sd-tot"><small>At full price</small><strong>${money(gross)}</strong></div>
+        <div class="sd-tot"><small>Discounts</small><strong>−${money(t.status === "completed" ? Math.max(0, gross - t.total_cents) : t.discount_cents)}</strong></div>
+        <div class="sd-tot big"><small>Total</small><strong>${money(t.total_cents)}</strong></div>
+        ${t.status === "completed" ? payBits.map(([k, v]) => `<div class="sd-tot"><small>${k}</small><strong>${money(v as number)}</strong></div>`).join("") : ""}
+      </div>
+      ${t.status === "completed" && cur.canEditPayment ? `<div id="sd-pay-slot"></div>` : ""}
+      <div class="sd-actions">
+        ${t.status === "completed" && cur.canEditPayment ? `<button class="btn btn-ghost btn-sm" type="button" id="sd-pay-btn">✎ Fix cash / card</button>` : ""}
+        <button class="btn btn-ghost btn-sm" type="button" id="sd-csv">⬇ Download breakdown (CSV)</button>
+        ${t.status === "completed" ? `<a class="btn btn-ghost btn-sm" href="/returns?ticket=${t.human_id}">↩ Return items</a>` : `<a class="btn btn-primary btn-sm" href="/checkout?resume=${t.id}">▶ Open in Checkout</a>`}
+      </div>
+      <div class="sd-roll">${roll((l) => l.inventory_type ? l.inventory_type[0].toUpperCase() + l.inventory_type.slice(1) : (l.variant_id ? "" : "Custom / service"))}</div>
+      <div class="sd-roll">${roll((l) => l.category?.name || "")}</div>
+      <div class="sd-lines-wrap"><table class="sd-lines">
+        <thead><tr><th>Qty</th><th>Item</th><th class="n">Price</th><th class="n">Disc</th><th class="n">Net</th></tr></thead>
+        <tbody>${lines.map((l) => {
+          const sub = [l.variant?.product?.platform, cond(l), l.kind === "return" ? "RETURN" : l.kind === "service" ? "service" : (!l.variant_id ? "custom" : ""), l.region].filter(Boolean).join(" · ");
+          return `<tr><td class="n">${l.qty}</td><td>${esc(l.description)}${sub ? `<span class="sub">${esc(sub)}</span>` : ""}</td><td class="n">${money(l.unit_price_cents)}</td><td class="n">${l.discount_cents ? "−" + money(l.discount_cents) : ""}</td><td class="n">${money(l.unit_price_cents * l.qty - l.discount_cents)}</td></tr>`;
+        }).join("")}</tbody>
+      </table></div>`;
+
+    ($("sd-name-form") as HTMLFormElement).addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const btn = ($("sd-name-form") as HTMLFormElement).querySelector("button")!;
+      btn.disabled = true;
+      try {
+        const j = await api("/api/pos/sales", { action: "rename", id: t.id, note: ($("sd-name") as HTMLInputElement).value });
+        t.note = j.note;
+        const r = rows.find((x) => x.id === t.id); if (r) { r.note = j.note; renderList(); }
+        btn.textContent = "✓ Saved";
+        setTimeout(() => { btn.textContent = "Save name"; }, 1500);
+      } catch (err: any) { alert(err.message); }
+      finally { btn.disabled = false; }
+    });
+    $("sd-csv").addEventListener("click", () => {
+      const q = (v: any) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+      const out = [["Sale", "Name", "Date", "Qty", "Item", "Platform", "Condition", "Kind", "Stock pool", "Category", "Unit price", "Discount", "Net"].map(q).join(",")];
+      for (const l of lines) out.push([t.human_id, t.note || "", t.completed_at || t.created_at, l.qty, l.description, l.variant?.product?.platform || "", cond(l), l.kind, l.inventory_type || "", l.category?.name || "", (l.unit_price_cents / 100).toFixed(2), (l.discount_cents / 100).toFixed(2), ((l.unit_price_cents * l.qty - l.discount_cents) / 100).toFixed(2)].map(q).join(","));
+      out.push("", ["Totals", "", "", units, "", "", "", "", "", "", (gross / 100).toFixed(2), (lineDisc / 100).toFixed(2), (t.total_cents / 100).toFixed(2)].map(q).join(","));
+      out.push(["Paid", "", "", "", `cash ${(t.cash_cents / 100).toFixed(2)} · card ${(t.card_cents / 100).toFixed(2)}${t.store_credit_cents ? ` · credit ${(t.store_credit_cents / 100).toFixed(2)}` : ""}`].map(q).join(","));
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([out.join("\n")], { type: "text/csv" }));
+      a.download = `sale-${t.human_id}${t.note ? "-" + t.note.replace(/[^a-z0-9]+/gi, "-").toLowerCase() : ""}.csv`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 30_000);
+    });
+    document.getElementById("sd-pay-btn")?.addEventListener("click", () => {
+      const slot = $("sd-pay-slot");
+      if (slot.innerHTML) { slot.innerHTML = ""; return; }
+      const due = t.total_cents - (t.store_credit_cents || 0);
+      slot.innerHTML = `<form class="sd-pay" id="sd-pay-form">
+          <label>Cash $<input id="sd-cash" inputmode="decimal" value="${(t.cash_cents / 100).toFixed(2)}" data-noscan="1"></label>
+          <label>Card $<input id="sd-card" inputmode="decimal" value="${(t.card_cents / 100).toFixed(2)}" data-noscan="1"></label>
+          <span class="muted" id="sd-pay-sum"></span>
+          <button class="btn btn-primary btn-sm" type="submit">Save payment</button>
+        </form>`;
+      const sync = (from: "cash" | "card") => {
+        // Typing one fills the other so they always add up to the total.
+        const a = cents(($(from === "cash" ? "sd-cash" : "sd-card") as HTMLInputElement).value);
+        if (Number.isFinite(a) && a <= due) ($(from === "cash" ? "sd-card" : "sd-cash") as HTMLInputElement).value = ((due - a) / 100).toFixed(2);
+        const c = cents(($("sd-cash") as HTMLInputElement).value), d = cents(($("sd-card") as HTMLInputElement).value);
+        $("sd-pay-sum").textContent = Number.isFinite(c + d) ? `= ${money(c + d)} of ${money(due)}${c + d === due ? " ✓" : ""}` : "";
+      };
+      $("sd-cash").addEventListener("input", () => sync("cash"));
+      $("sd-card").addEventListener("input", () => sync("card"));
+      sync("cash");
+      ($("sd-pay-form") as HTMLFormElement).addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const c = cents(($("sd-cash") as HTMLInputElement).value), d = cents(($("sd-card") as HTMLInputElement).value);
+        if (!Number.isFinite(c + d) || c + d !== due) { alert(`Cash + card must add up to ${money(due)}.`); return; }
+        try {
+          const j = await api("/api/pos/sales", { action: "payment", id: t.id, cashCents: c, cardCents: d });
+          t.cash_cents = j.cashCents; t.card_cents = j.cardCents;
+          const r = rows.find((x) => x.id === t.id); if (r) { r.cash_cents = j.cashCents; r.card_cents = j.cardCents; renderList(); }
+          renderDetail();
+        } catch (err: any) { alert(err.message); }
+      });
+    });
+  }
+
+  loadList().then(() => { if (openId) openSale(openId); });
+</script>

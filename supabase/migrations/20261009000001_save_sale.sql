@@ -33,7 +33,7 @@ create or replace function public.save_sale(
   p_id        uuid,     -- the open sale being saved; null = a new one
   p_client_ref uuid,    -- the register's id for this cart (null = none)
   p_status    text,     -- 'open' | 'completed'
-  p_fields    jsonb,    -- customer_id, subtotal/discount/total/cash/card cents
+  p_fields    jsonb,    -- customer_id, note (the sale's name), subtotal/discount/total/cash/card cents
   p_items     jsonb,    -- lines exactly as stored
   p_expected  uuid[],   -- line ids the register last saw; null = don't check
   p_save_ref  uuid,     -- this save attempt's id
@@ -84,6 +84,7 @@ begin
     delete from transaction_items where transaction_id = v_id;
     update transactions set
       customer_id    = nullif(p_fields->>'customer_id', '')::uuid,
+      note           = nullif(p_fields->>'note', ''),
       status         = p_status,
       subtotal_cents = (p_fields->>'subtotal_cents')::int,
       discount_cents = (p_fields->>'discount_cents')::int,
@@ -98,9 +99,9 @@ begin
     where id = v_id;
     exit again;
   else
-    insert into transactions (customer_id, employee_id, type, status, subtotal_cents, discount_cents, total_cents, cash_cents, card_cents, completed_at, client_ref, last_save_ref)
+    insert into transactions (customer_id, note, employee_id, type, status, subtotal_cents, discount_cents, total_cents, cash_cents, card_cents, completed_at, client_ref, last_save_ref)
     values (
-      nullif(p_fields->>'customer_id', '')::uuid, auth.uid(), 'sale', p_status,
+      nullif(p_fields->>'customer_id', '')::uuid, nullif(p_fields->>'note', ''), auth.uid(), 'sale', p_status,
       (p_fields->>'subtotal_cents')::int, (p_fields->>'discount_cents')::int, (p_fields->>'total_cents')::int,
       (p_fields->>'cash_cents')::int, (p_fields->>'card_cents')::int,
       case when p_status = 'completed' then now() else null end, p_client_ref, p_save_ref)
