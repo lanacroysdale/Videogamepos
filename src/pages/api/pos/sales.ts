@@ -137,6 +137,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
       const msg = st === "past_midnight" ? `Sale #${n} was completed before today — it can only be undone the same day (before midnight). Use Returns instead.`
         : st === "store_credit" ? `Sale #${n} was partly paid with store credit — use Returns instead.`
         : st === "returned" ? `Items from sale #${n} were already returned — it can't be undone.`
+        : st === "no_stock_record" ? `Sale #${n} was completed before the undo update, so how much stock it took isn't recorded — it can't be undone safely. Use Returns (or fix it by hand).`
         : st === "open" ? `Sale #${n} is already held (open).`
         : st === "not_sale" ? "That isn't a retail sale."
         : st && st !== "missing" ? `Sale #${n} is ${st} — it can't be undone.`

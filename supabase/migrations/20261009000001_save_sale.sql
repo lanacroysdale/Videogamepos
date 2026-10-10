@@ -28,6 +28,11 @@ alter table public.transactions add column if not exists is_tab boolean not null
 -- order it was rung up (newest on top), and Sales lists it that way.
 alter table public.transaction_items add column if not exists line_no int;
 
+-- What completing the sale actually took out of stock, per listing
+-- ({variant_id: copies}) — stock never goes below 0, so an oversold line
+-- takes less than its qty. Undo puts back exactly this.
+alter table public.transactions add column if not exists stock_taken jsonb;
+
 alter table public.transactions add column if not exists client_ref uuid;
 alter table public.transactions add column if not exists last_save_ref uuid;
 create unique index if not exists transactions_client_ref_key
@@ -54,6 +59,8 @@ declare
   v_human bigint;
   cur_ids uuid[];
   exp_ids uuid[];
+  v_vars uuid[];
+  v_taken jsonb;
 begin
   if p_status not in ('open', 'completed') then
     raise exception 'save_sale: bad status %', p_status;
@@ -130,8 +137,19 @@ begin
          variant_id uuid, category_id uuid, kind text, description text, qty int,
          unit_price_cents int, discount_cents int, department text, inventory_type text, region text);
 
-  -- Sold copies leave stock in one statement (never below 0).
+  -- Sold copies leave stock (never below 0), and what was actually taken is
+  -- recorded for Undo. The listings are locked first (in id order, so two
+  -- registers can't deadlock), then read, then lowered.
   if p_status = 'completed' then
+    select coalesce(array_agg(distinct variant_id), '{}') into v_vars
+      from transaction_items where transaction_id = v_id and variant_id is not null;
+    perform 1 from product_variants where id = any(v_vars) order by id for update;
+    select coalesce(jsonb_object_agg(v.id, least(greatest(v.quantity, 0), s.q)), '{}'::jsonb) into v_taken
+      from product_variants v
+      join (select variant_id, sum(qty)::int as q
+              from transaction_items
+             where transaction_id = v_id and variant_id is not null
+             group by variant_id) s on s.variant_id = v.id;
     update product_variants v
        set quantity = greatest(0, v.quantity - s.q)
       from (select variant_id, sum(qty) as q
@@ -139,6 +157,7 @@ begin
              where transaction_id = v_id and variant_id is not null
              group by variant_id) s
      where v.id = s.variant_id;
+    update transactions set stock_taken = v_taken where id = v_id;
   end if;
 
   return jsonb_build_object(
@@ -162,7 +181,7 @@ as $$
 declare
   t record;
 begin
-  select id, human_id, type, status, is_tab, completed_at, store_credit_cents into t
+  select id, human_id, type, status, is_tab, completed_at, store_credit_cents, stock_taken into t
     from transactions where id = p_id for update;
   if not found then
     return jsonb_build_object('ok', false, 'state', 'missing');
@@ -182,17 +201,20 @@ begin
   if exists (select 1 from transactions r where r.original_transaction_id = p_id) then
     return jsonb_build_object('ok', false, 'state', 'returned', 'human_id', t.human_id);
   end if;
+  -- Completed before this update: what it took from stock isn't known, so
+  -- putting stock back could invent copies.
+  if t.stock_taken is null then
+    return jsonb_build_object('ok', false, 'state', 'no_stock_record', 'human_id', t.human_id);
+  end if;
 
+  -- Exactly what completing it took goes back.
   update product_variants v
-     set quantity = v.quantity + s.q
-    from (select variant_id, sum(qty) as q
-            from transaction_items
-           where transaction_id = p_id and variant_id is not null and kind = 'sale'
-           group by variant_id) s
-   where v.id = s.variant_id;
+     set quantity = v.quantity + (e.value)::int
+    from jsonb_each_text(t.stock_taken) e
+   where v.id = e.key::uuid and (e.value)::int > 0;
 
   update transactions
-     set status = 'open', completed_at = null, cash_cents = 0, card_cents = 0, last_save_ref = null
+     set status = 'open', completed_at = null, cash_cents = 0, card_cents = 0, last_save_ref = null, stock_taken = null
    where id = p_id;
 
   return jsonb_build_object('ok', true, 'id', t.id, 'human_id', t.human_id);

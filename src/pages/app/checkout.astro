@@ -583,6 +583,8 @@ const posData = { catalog, categories: categories ?? [], customer, regions, canM
     const nameIn = $("sale-name") as HTMLInputElement;
     let burst = "", last = 0, before = "";
     nameIn.addEventListener("keydown", (e) => {
+      if (e.isComposing || e.keyCode === 229) return; // Japanese / Chinese input confirming a word
+      if (e.key === "Shift" || e.key === "CapsLock") return; // a scanner presses Shift for each capital
       const now = performance.now();
       if (e.key === "Enter") {
         e.preventDefault();
@@ -1120,7 +1122,7 @@ const posData = { catalog, categories: categories ?? [], customer, regions, canM
         const sentSig = sig();
         const sentQty = new Map(cart.map((i) => [i.key, i.qty]));
         const sentName = ($("sale-name") as HTMLInputElement).value.trim();
-        const sendName = asNew || !heldId || sentName !== loadedName;
+        const sendName = asNew || !heldId || unanswered.length > 0 || sentName !== loadedName;
         const saveRef = crypto.randomUUID();
         let res: Response | null = null, j: any = null;
         try {
@@ -1238,16 +1240,30 @@ const posData = { catalog, categories: categories ?? [], customer, regions, canM
   async function undoSale(id: string, num: number) {
     if (busy) return;
     if (!confirm(`Undo sale #${num}?\n\nIt goes back to Held sales (and into this cart), its items go back into stock, and its payment is cleared — complete it again after any changes.`)) return;
+    // The register is locked while it runs (nothing gets completed meanwhile).
+    busy = true;
+    const ub = document.getElementById("rc-undo") as HTMLButtonElement | null;
+    const locked = [...lockables(), ...(ub ? [ub] : [])];
+    locked.forEach((b) => (b.disabled = true));
+    let done = false;
     try {
       const r = await fetch("/api/pos/sales", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "undo", id }) });
       const j = await r.json().catch(() => ({ error: `Server answered ${r.status}` }));
       if (r.status === 401) { ($("auth-warn") as HTMLElement).hidden = false; throw new Error("Your login has expired — log in again in a new tab, then try again."); }
       if (!r.ok || !j.ok) throw new Error(j.error || "Couldn't undo.");
+      done = true;
       $("receipt").hidden = true;
       await loadHeld();
-      const h = heldCache.find((x) => x.id === id);
-      if (h) resumeHeld(h); else alert(`Sale #${num} is back in Held sales.`);
     } catch (err: any) { alert(err.message); }
+    finally {
+      busy = false;
+      locked.forEach((b) => { if (b.isConnected) b.disabled = false; });
+      const rcBtn = document.getElementById("resume-cancel") as HTMLButtonElement | null;
+      if (rcBtn) rcBtn.disabled = false;
+    }
+    if (!done) return;
+    const h = heldCache.find((x) => x.id === id);
+    if (h) resumeHeld(h); else alert(`Sale #${num} is back in Held sales.`);
   }
   $("complete-btn").addEventListener("click", () => submit("completed"));
   $("save-btn").addEventListener("click", () => submit("open", { stay: true }));

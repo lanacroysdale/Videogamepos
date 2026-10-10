@@ -21,8 +21,10 @@ export const GET: APIRoute = async ({ locals, url }) => {
   for (const w of q.split(/\s+/).filter(Boolean).slice(0, 5)) {
     const like = `%${w}%`;
     const digits = w.replace(/\D/g, "");
-    const phone = digits.length >= 4 && /^[\d().+-]+$/.test(w) ? `%${digits.split("").join("%")}%` : like;
-    query = query.or(`first_name.ilike.${like},last_name.ilike.${like},email.ilike.${like},phone.ilike.${phone}`);
+    // (only punctuation / spaces may sit between the digits, so "0355" doesn't
+    // match every 503-55x number)
+    const phone = digits.length >= 4 && /^[\d().+-]+$/.test(w) ? `,phone.match.${digits.split("").join("[^0-9]*")}` : "";
+    query = query.or(`first_name.ilike.${like},last_name.ilike.${like},email.ilike.${like},phone.ilike.${like}${phone}`);
   }
   const { data, error } = await query.order("last_name", { ascending: true }).limit(8);
 
