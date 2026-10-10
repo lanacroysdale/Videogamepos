@@ -15,6 +15,7 @@
 --     (state 'changed') — unless the newest write is this register's own
 --     save whose answer was lost (p_prev_refs = its unanswered save ids).
 -- The app falls back to its old path until this is applied.
+-- undo_sale() (below) reopens a sale completed the same day.
 
 -- Columns the function writes (all shipped earlier; repeated so the
 -- function can never fail on a missing one).
@@ -22,6 +23,10 @@ alter table public.transaction_items add column if not exists department text;
 alter table public.transaction_items add column if not exists inventory_type text;
 alter table public.transaction_items add column if not exists region text;
 alter table public.transactions add column if not exists is_tab boolean not null default false;
+
+-- Each line's place in the cart (scan order) — a held sale reopens in the
+-- order it was rung up (newest on top), and Sales lists it that way.
+alter table public.transaction_items add column if not exists line_no int;
 
 alter table public.transactions add column if not exists client_ref uuid;
 alter table public.transactions add column if not exists last_save_ref uuid;
@@ -84,7 +89,8 @@ begin
     delete from transaction_items where transaction_id = v_id;
     update transactions set
       customer_id    = nullif(p_fields->>'customer_id', '')::uuid,
-      note           = nullif(p_fields->>'note', ''),
+      -- The name only when the register sent one (a name set in Sales stays).
+      note           = case when p_fields ? 'note' then nullif(p_fields->>'note', '') else note end,
       status         = p_status,
       subtotal_cents = (p_fields->>'subtotal_cents')::int,
       discount_cents = (p_fields->>'discount_cents')::int,
@@ -117,11 +123,12 @@ begin
   end if;
   end loop;
 
-  insert into transaction_items (transaction_id, variant_id, category_id, kind, description, qty, unit_price_cents, discount_cents, department, inventory_type, region)
-  select v_id, x.variant_id, x.category_id, x.kind, x.description, x.qty, x.unit_price_cents, x.discount_cents, x.department, x.inventory_type, x.region
-  from jsonb_to_recordset(p_items) as x(
-    variant_id uuid, category_id uuid, kind text, description text, qty int,
-    unit_price_cents int, discount_cents int, department text, inventory_type text, region text);
+  insert into transaction_items (transaction_id, line_no, variant_id, category_id, kind, description, qty, unit_price_cents, discount_cents, department, inventory_type, region)
+  select v_id, e.n, x.variant_id, x.category_id, x.kind, x.description, x.qty, x.unit_price_cents, x.discount_cents, x.department, x.inventory_type, x.region
+  from jsonb_array_elements(p_items) with ordinality as e(item, n),
+       jsonb_to_record(e.item) as x(
+         variant_id uuid, category_id uuid, kind text, description text, qty int,
+         unit_price_cents int, discount_cents int, department text, inventory_type text, region text);
 
   -- Sold copies leave stock in one statement (never below 0).
   if p_status = 'completed' then
@@ -141,3 +148,55 @@ end
 $$;
 
 grant execute on function public.save_sale(uuid, uuid, text, jsonb, jsonb, uuid[], uuid, uuid[]) to authenticated;
+
+-- Undo a completed sale the same day (before midnight, store time): it goes
+-- back to Held sales with its lines (re-complete it after changes), its items
+-- go back into stock, and its payment is cleared. Refused once the day has
+-- turned, when store credit paid part of it, or when a return points at it.
+create or replace function public.undo_sale(p_id uuid, p_tz text default 'America/Los_Angeles')
+returns jsonb
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+  t record;
+begin
+  select id, human_id, type, status, is_tab, completed_at, store_credit_cents into t
+    from transactions where id = p_id for update;
+  if not found then
+    return jsonb_build_object('ok', false, 'state', 'missing');
+  end if;
+  if t.type <> 'sale' or t.is_tab then
+    return jsonb_build_object('ok', false, 'state', 'not_sale', 'human_id', t.human_id);
+  end if;
+  if t.status <> 'completed' then
+    return jsonb_build_object('ok', false, 'state', t.status, 'human_id', t.human_id);
+  end if;
+  if t.completed_at is null or (t.completed_at at time zone p_tz)::date <> (now() at time zone p_tz)::date then
+    return jsonb_build_object('ok', false, 'state', 'past_midnight', 'human_id', t.human_id);
+  end if;
+  if coalesce(t.store_credit_cents, 0) > 0 then
+    return jsonb_build_object('ok', false, 'state', 'store_credit', 'human_id', t.human_id);
+  end if;
+  if exists (select 1 from transactions r where r.original_transaction_id = p_id) then
+    return jsonb_build_object('ok', false, 'state', 'returned', 'human_id', t.human_id);
+  end if;
+
+  update product_variants v
+     set quantity = v.quantity + s.q
+    from (select variant_id, sum(qty) as q
+            from transaction_items
+           where transaction_id = p_id and variant_id is not null and kind = 'sale'
+           group by variant_id) s
+   where v.id = s.variant_id;
+
+  update transactions
+     set status = 'open', completed_at = null, cash_cents = 0, card_cents = 0, last_save_ref = null
+   where id = p_id;
+
+  return jsonb_build_object('ok', true, 'id', t.id, 'human_id', t.human_id);
+end
+$$;
+
+grant execute on function public.undo_sale(uuid, text) to authenticated;

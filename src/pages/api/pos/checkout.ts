@@ -20,7 +20,7 @@ interface IncomingItem {
 // List held (open) sales for the resume tray — newest first, with their items.
 export const GET: APIRoute = async ({ locals }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
-  const { data, error } = await locals.supabase
+  const base = () => locals.supabase
     .from("transactions")
     .select(
       "id, human_id, total_cents, discount_cents, created_at, note, customer:customers(id, first_name, last_name, store_credit_cents), transaction_items(id, variant_id, category_id, kind, description, qty, unit_price_cents, discount_cents, department)",
@@ -29,6 +29,10 @@ export const GET: APIRoute = async ({ locals }) => {
     .eq("status", "open")
     .eq("is_tab", false) // keep bar tabs out of the retail held-sales tray
     .order("created_at", { ascending: false });
+  // Lines in cart order (line_no, migration 20261009000001 — until it's
+  // applied, the order they come in).
+  let { data, error } = await base().order("line_no", { referencedTable: "transaction_items" });
+  if (error && /line_no/.test(error.message || "")) ({ data, error } = await base());
   if (error) return json({ error: error.message }, 500);
   return json({ held: data ?? [] });
 };
@@ -193,10 +197,13 @@ export const POST: APIRoute = async ({ locals, request }) => {
   // The login that opened this screen (a different one can't see that
   // login's sales — not "deleted").
   const otherLogin = typeof body.pageUserId === "string" && body.pageUserId && body.pageUserId !== locals.user.id;
+  // The sale's name (e.g. "PRGE Day 1") — shown in Sales. Only written when
+  // the register sends it (a rename on the Sales page isn't undone by a save
+  // from a register that still shows the old name).
+  const hasNote = typeof body.note === "string";
   const fields = {
     customer_id: isUuid(body.customerId) ? body.customerId : null,
-    // The sale's name (e.g. "PRGE Day 1") — shown in Sales.
-    note: typeof body.note === "string" && body.note.trim() ? body.note.trim().slice(0, 120) : null,
+    ...(hasNote ? { note: body.note.trim().slice(0, 120) || null } : {}),
     status,
     subtotal_cents: subtotal,
     discount_cents: totalDiscount,
@@ -226,7 +233,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
     p_id: isUuid(resumeId) ? resumeId : null,
     p_client_ref: clientRef,
     p_status: status,
-    p_fields: { ...fields, customer_id: fields.customer_id ?? "", note: fields.note ?? "" },
+    p_fields: { ...fields, customer_id: fields.customer_id ?? "", ...(hasNote ? { note: fields.note ?? "" } : {}) },
     p_items: lines,
     p_expected: resumeId ? expected : null,
     p_save_ref: saveRef,

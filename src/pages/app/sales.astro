@@ -113,7 +113,9 @@ const pageData = { compShort, gradeShort, canEditPayment: Astro.locals.can("data
   async function loadList(more = false) {
     const q = ($("s-q") as HTMLInputElement).value.trim();
     const days = ($("s-days") as HTMLSelectElement).value;
-    const p = new URLSearchParams({ status, days, ...(q ? { q } : {}) });
+    // "Today" = since midnight here (not the last 24 hours).
+    const p = new URLSearchParams(days === "1" ? { status, since: new Date(new Date().setHours(0, 0, 0, 0)).toISOString() } : { status, days });
+    if (q) p.set("q", q);
     const col = status === "open" ? "created_at" : "completed_at";
     if (more && rows.length) p.set("before", rows[rows.length - 1][col]);
     try {
@@ -167,11 +169,25 @@ const pageData = { compShort, gradeShort, canEditPayment: Astro.locals.can("data
     const sell = lines.filter((l) => l.kind === "sale" || l.kind === "service");
     const units = sell.reduce((a, l) => a + l.qty, 0);
     const gross = sell.reduce((a, l) => a + l.unit_price_cents * l.qty, 0);
-    const lineDisc = sell.reduce((a, l) => a + l.discount_cents, 0);
+    // A discount on the whole sale (a held sale, or one completed before
+    // discounts were spread onto its lines) is shared across the lines by
+    // value here, so the lines, roll-ups and CSV add up to the sale's total.
+    const sellNet = sell.reduce((a, l) => a + l.unit_price_cents * l.qty - l.discount_cents, 0);
+    const extra = Math.max(0, sellNet - t.total_cents);
+    const share = new Map<any, number>();
+    if (extra && sellNet > 0) {
+      let given = 0;
+      const parts = sell.map((l) => { const exact = (extra * (l.unit_price_cents * l.qty - l.discount_cents)) / sellNet; const f = Math.floor(exact); given += f; return { l, f, r: exact - f }; });
+      parts.sort((a, b) => b.r - a.r);
+      for (let i = 0; given < extra && i < parts.length; i++, given++) parts[i].f++;
+      for (const x of parts) share.set(x.l, x.f);
+    }
+    const disc = (l: any) => l.discount_cents + (share.get(l) ?? 0);
+    const net = (l: any) => l.unit_price_cents * l.qty - disc(l);
     // Small roll-ups: by stock pool and by category.
     const roll = (key: (l: any) => string) => {
       const m = new Map<string, { u: number; c: number }>();
-      for (const l of sell) { const k = key(l) || "—"; const r = m.get(k) ?? { u: 0, c: 0 }; r.u += l.qty; r.c += l.unit_price_cents * l.qty - l.discount_cents; m.set(k, r); }
+      for (const l of sell) { const k = key(l) || "—"; const r = m.get(k) ?? { u: 0, c: 0 }; r.u += l.qty; r.c += net(l); m.set(k, r); }
       return [...m.entries()].sort((a, b) => b[1].c - a[1].c).map(([k, r]) => `<span>${esc(k)} <b>${r.u}</b> · ${money(r.c)}</span>`).join("");
     };
     const payBits = [["Cash", t.cash_cents], ["Card", t.card_cents], ...(t.store_credit_cents ? [["Store credit", t.store_credit_cents]] : [])];
@@ -185,13 +201,14 @@ const pageData = { compShort, gradeShort, canEditPayment: Astro.locals.can("data
       <div class="sd-totals">
         <div class="sd-tot"><small>Items</small><strong>${units}</strong></div>
         <div class="sd-tot"><small>At full price</small><strong>${money(gross)}</strong></div>
-        <div class="sd-tot"><small>Discounts</small><strong>−${money(t.status === "completed" ? Math.max(0, gross - t.total_cents) : t.discount_cents)}</strong></div>
+        <div class="sd-tot"><small>Discounts</small><strong>−${money(Math.max(0, gross - t.total_cents))}</strong></div>
         <div class="sd-tot big"><small>Total</small><strong>${money(t.total_cents)}</strong></div>
         ${t.status === "completed" ? payBits.map(([k, v]) => `<div class="sd-tot"><small>${k}</small><strong>${money(v as number)}</strong></div>`).join("") : ""}
       </div>
       ${t.status === "completed" && cur.canEditPayment ? `<div id="sd-pay-slot"></div>` : ""}
       <div class="sd-actions">
         ${t.status === "completed" && cur.canEditPayment ? `<button class="btn btn-ghost btn-sm" type="button" id="sd-pay-btn">✎ Fix cash / card</button>` : ""}
+        ${cur.undoable ? `<button class="btn btn-ghost btn-sm" type="button" id="sd-undo" title="Completed today — put it back in Held sales (items go back into stock)">↶ Undo sale (back to Held)</button>` : ""}
         <button class="btn btn-ghost btn-sm" type="button" id="sd-csv">⬇ Download breakdown (CSV)</button>
         ${t.status === "completed" ? `<a class="btn btn-ghost btn-sm" href="/returns?ticket=${t.human_id}">↩ Return items</a>` : `<a class="btn btn-primary btn-sm" href="/checkout?resume=${t.id}">▶ Open in Checkout</a>`}
       </div>
@@ -201,7 +218,7 @@ const pageData = { compShort, gradeShort, canEditPayment: Astro.locals.can("data
         <thead><tr><th>Qty</th><th>Item</th><th class="n">Price</th><th class="n">Disc</th><th class="n">Net</th></tr></thead>
         <tbody>${lines.map((l) => {
           const sub = [l.variant?.product?.platform, cond(l), l.kind === "return" ? "RETURN" : l.kind === "service" ? "service" : (!l.variant_id ? "custom" : ""), l.region].filter(Boolean).join(" · ");
-          return `<tr><td class="n">${l.qty}</td><td>${esc(l.description)}${sub ? `<span class="sub">${esc(sub)}</span>` : ""}</td><td class="n">${money(l.unit_price_cents)}</td><td class="n">${l.discount_cents ? "−" + money(l.discount_cents) : ""}</td><td class="n">${money(l.unit_price_cents * l.qty - l.discount_cents)}</td></tr>`;
+          return `<tr><td class="n">${l.qty}</td><td>${esc(l.description)}${sub ? `<span class="sub">${esc(sub)}</span>` : ""}</td><td class="n">${money(l.unit_price_cents)}</td><td class="n">${disc(l) ? "−" + money(disc(l)) : ""}</td><td class="n">${money(net(l))}</td></tr>`;
         }).join("")}</tbody>
       </table></div>`;
 
@@ -221,14 +238,25 @@ const pageData = { compShort, gradeShort, canEditPayment: Astro.locals.can("data
     $("sd-csv").addEventListener("click", () => {
       const q = (v: any) => `"${String(v ?? "").replace(/"/g, '""')}"`;
       const out = [["Sale", "Name", "Date", "Qty", "Item", "Platform", "Condition", "Kind", "Stock pool", "Category", "Unit price", "Discount", "Net"].map(q).join(",")];
-      for (const l of lines) out.push([t.human_id, t.note || "", t.completed_at || t.created_at, l.qty, l.description, l.variant?.product?.platform || "", cond(l), l.kind, l.inventory_type || "", l.category?.name || "", (l.unit_price_cents / 100).toFixed(2), (l.discount_cents / 100).toFixed(2), ((l.unit_price_cents * l.qty - l.discount_cents) / 100).toFixed(2)].map(q).join(","));
-      out.push("", ["Totals", "", "", units, "", "", "", "", "", "", (gross / 100).toFixed(2), (lineDisc / 100).toFixed(2), (t.total_cents / 100).toFixed(2)].map(q).join(","));
+      for (const l of lines) out.push([t.human_id, t.note || "", t.completed_at || t.created_at, l.qty, l.description, l.variant?.product?.platform || "", cond(l), l.kind, l.inventory_type || "", l.category?.name || "", (l.unit_price_cents / 100).toFixed(2), (disc(l) / 100).toFixed(2), (net(l) / 100).toFixed(2)].map(q).join(","));
+      out.push("", ["Totals", "", "", units, "", "", "", "", "", "", (gross / 100).toFixed(2), (Math.max(0, gross - t.total_cents) / 100).toFixed(2), (t.total_cents / 100).toFixed(2)].map(q).join(","));
       out.push(["Paid", "", "", "", `cash ${(t.cash_cents / 100).toFixed(2)} · card ${(t.card_cents / 100).toFixed(2)}${t.store_credit_cents ? ` · credit ${(t.store_credit_cents / 100).toFixed(2)}` : ""}`].map(q).join(","));
       const a = document.createElement("a");
       a.href = URL.createObjectURL(new Blob([out.join("\n")], { type: "text/csv" }));
       a.download = `sale-${t.human_id}${t.note ? "-" + t.note.replace(/[^a-z0-9]+/gi, "-").toLowerCase() : ""}.csv`;
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 30_000);
+    });
+    document.getElementById("sd-undo")?.addEventListener("click", async () => {
+      if (!confirm(`Undo sale #${t.human_id}?\n\nIt goes back to Held sales in Checkout, its ${units} item${units === 1 ? "" : "s"} go back into stock, and its payment (${money(t.total_cents)}) is cleared — complete it again after any changes.`)) return;
+      const btn = $("sd-undo") as HTMLButtonElement;
+      btn.disabled = true;
+      try {
+        await api("/api/pos/sales", { action: "undo", id: t.id });
+        if (confirm(`Sale #${t.human_id} is back in Held sales. Open it in Checkout now?`)) { location.href = `/checkout?resume=${encodeURIComponent(t.id)}`; return; }
+        rows = rows.filter((x) => x.id !== t.id); renderList();
+        await openSale(t.id);
+      } catch (err: any) { alert(err.message); btn.disabled = false; }
     });
     document.getElementById("sd-pay-btn")?.addEventListener("click", () => {
       const slot = $("sd-pay-slot");
