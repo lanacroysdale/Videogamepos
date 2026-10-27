@@ -1,5 +1,6 @@
 import type { APIRoute } from "astro";
 import { createSupabaseAdminClient } from "../../../lib/supabase";
+import { imageBucket } from "../../../lib/imageBucket";
 
 export const prerender = false;
 const json = (d: unknown, s = 200) =>
@@ -129,7 +130,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
     let photosDeleted = 0;
     if (b.deletePhotos) {
       const walk = async (prefix: string) => {
-        const { data, error } = await admin.storage.from("product-images").list(prefix, { limit: 1000 });
+        const { data, error } = await imageBucket(admin).list(prefix, { limit: 1000 });
         if (error) throw new Error(`storage list: ${error.message}`);
         const files: string[] = [];
         for (const item of data ?? []) {
@@ -139,7 +140,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
         }
         for (let i = 0; i < files.length; i += 100) {
           const batch = files.slice(i, i + 100);
-          const { error: rmErr } = await admin.storage.from("product-images").remove(batch);
+          const { error: rmErr } = await imageBucket(admin).remove(batch);
           if (rmErr) throw new Error(`storage remove: ${rmErr.message}`);
           photosDeleted += batch.length;
         }

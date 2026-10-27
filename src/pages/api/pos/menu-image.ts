@@ -1,11 +1,12 @@
 import type { APIRoute } from "astro";
 import { createSupabaseAdminClient } from "../../../lib/supabase";
+import { imageBucket } from "../../../lib/imageBucket";
 
 export const prerender = false;
 const json = (d: unknown, s = 200) => new Response(JSON.stringify(d), { status: s, headers: { "content-type": "application/json" } });
 const MAX_BYTES = 6 * 1024 * 1024;
 
-// Upload a menu-item photo into the public product-images bucket (under menu/),
+// Upload a menu-item photo into the image bucket (under menu/; lib/imageBucket),
 // return its public URL. Managers/owners only. The URL is stored on
 // menu_items.image_url via the item-save action.
 export const POST: APIRoute = async ({ locals, request }) => {
@@ -22,7 +23,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
   const ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
   const path = `menu/${crypto.randomUUID()}.${ext}`;
   const bytes = new Uint8Array(await file.arrayBuffer());
-  const { error } = await admin.storage.from("product-images").upload(path, bytes, { contentType: file.type, upsert: false });
+  const { error } = await imageBucket(admin).upload(path, bytes, { contentType: file.type, upsert: false });
   if (error) return json({ error: error.message }, 500);
-  return json({ ok: true, url: admin.storage.from("product-images").getPublicUrl(path).data.publicUrl });
+  return json({ ok: true, url: imageBucket(admin).getPublicUrl(path).data.publicUrl });
 };

@@ -4,6 +4,7 @@ import { attachUpcs, upcTablesReady } from "../../../lib/upcFinder";
 import { canonicalUpc, upcForms } from "../../../lib/upcMatch";
 import { norm } from "../../../lib/collectionImport";
 import { galleryFolder } from "../../../lib/storage";
+import { imageBucket, imagePathOf } from "../../../lib/imageBucket";
 import { createSupabaseAdminClient } from "../../../lib/supabase";
 import { aiSettings, aiStatus, callAI } from "../../../lib/ai";
 import { PLATFORM_ALIASES, resolveStaticPlatform } from "../../../lib/smartSearch";
@@ -370,7 +371,7 @@ export const POST: APIRoute = async ({ locals, request }) => {
       // The shop shows the gallery INSTEAD of the main photo once there is one:
       // an empty gallery first gets the listing's own photo as #00, so the
       // PriceCharting one is truly the second. (Can't copy it → no gallery add.)
-      const have = (await admin.storage.from("product-images").list(galleryFolder(productId), { limit: 100 })).data ?? [];
+      const have = (await imageBucket(admin).list(galleryFolder(productId), { limit: 100 })).data ?? [];
       const ready = have.length > 0 || !!(await copyIntoGallery(admin, imageUrl, productId, "00"));
       if (ready) {
         const next = await nextGalleryName(admin, productId);
@@ -486,9 +487,9 @@ async function copyExternalImage(admin: any, url: string, pathFor?: (ext: string
       if (!bytes.length || bytes.length > 8_000_000) return null;
       const type = ext === "jpg" ? "image/jpeg" : ct;
       const path = pathFor ? pathFor(ext) : `products/cover-${crypto.randomUUID()}.${ext}`;
-      const { error } = await admin.storage.from("product-images").upload(path, bytes, { contentType: type });
+      const { error } = await imageBucket(admin).upload(path, bytes, { contentType: type });
       if (error) return null;
-      return admin.storage.from("product-images").getPublicUrl(path).data.publicUrl;
+      return imageBucket(admin).getPublicUrl(path).data.publicUrl;
     }
     return null;
   } catch { return null; }
@@ -505,12 +506,10 @@ function isPriceChartingImage(u: string): boolean {
 // The listing's own main photo into its gallery as `name` — copied inside our
 // bucket when it's ours, else fetched (same checks as any image).
 async function copyIntoGallery(admin: any, imageUrl: string, productId: string, name: string): Promise<boolean> {
-  const marker = "/storage/v1/object/public/product-images/";
-  const i = imageUrl.indexOf(marker);
-  if (i >= 0) {
-    const from = decodeURIComponent(imageUrl.slice(i + marker.length).split("?")[0]);
+  const from = imagePathOf(imageUrl);
+  if (from) {
     const ext = (from.match(/\.(jpe?g|png|webp|gif)$/i)?.[1] || "jpg").toLowerCase();
-    const { error } = await admin.storage.from("product-images").copy(from, `${galleryFolder(productId)}/${name}.${ext}`);
+    const { error } = await imageBucket(admin).copy(from, `${galleryFolder(productId)}/${name}.${ext}`);
     if (!error) return true;
   }
   return !!(await copyExternalImage(admin, imageUrl, (ext) => `${galleryFolder(productId)}/${name}.${ext}`));
@@ -518,7 +517,7 @@ async function copyIntoGallery(admin: any, imageUrl: string, productId: string, 
 
 // The next gallery file name ("00", "01"…) — the shop lists the folder by name.
 async function nextGalleryName(admin: any, productId: string): Promise<string> {
-  const { data } = await admin.storage.from("product-images").list(galleryFolder(productId), { limit: 100 });
+  const { data } = await imageBucket(admin).list(galleryFolder(productId), { limit: 100 });
   const nums = ((data ?? []) as any[]).map((f) => parseInt(String(f.name), 10)).filter((n) => Number.isFinite(n));
   return String(nums.length ? Math.max(...nums) + 1 : 0).padStart(2, "0");
 }

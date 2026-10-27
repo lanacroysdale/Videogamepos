@@ -1,5 +1,6 @@
 import type { APIRoute } from "astro";
 import { createSupabaseAdminClient } from "../../../lib/supabase";
+import { imageBucket } from "../../../lib/imageBucket";
 
 export const prerender = false;
 const json = (d: unknown, s = 200) =>
@@ -7,7 +8,7 @@ const json = (d: unknown, s = 200) =>
 
 const MAX_BYTES = 6 * 1024 * 1024;
 
-// Staff uploads a product image -> stored in the public product-images bucket,
+// Staff uploads a product image -> stored in the image bucket (lib/imageBucket: R2 or Supabase),
 // returns the public URL (which the caller saves as products.image_url).
 export const POST: APIRoute = async ({ locals, request }) => {
   if (!locals.user) return json({ error: "unauthorized" }, 401);
@@ -23,11 +24,9 @@ export const POST: APIRoute = async ({ locals, request }) => {
   const admin = createSupabaseAdminClient();
   const bytes = new Uint8Array(await file.arrayBuffer());
 
-  const { error } = await admin.storage
-    .from("product-images")
-    .upload(path, bytes, { contentType: file.type, upsert: false });
+  const { error } = await imageBucket(admin).upload(path, bytes, { contentType: file.type, upsert: false });
   if (error) return json({ error: error.message }, 500);
 
-  const { data } = admin.storage.from("product-images").getPublicUrl(path);
+  const { data } = imageBucket(admin).getPublicUrl(path);
   return json({ ok: true, url: data.publicUrl });
 };

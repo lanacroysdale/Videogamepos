@@ -12,6 +12,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { r2, r2Configured } from "../src/lib/r2.ts";
 
 const url = process.env.PUBLIC_SUPABASE_URL;
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -20,6 +21,11 @@ if (!url || !key) {
   process.exit(1);
 }
 const sb = createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
+const r2cfg = {
+  accountId: process.env.R2_ACCOUNT_ID?.trim(), accessKeyId: process.env.R2_ACCESS_KEY_ID?.trim(),
+  secretAccessKey: process.env.R2_SECRET_ACCESS_KEY?.trim(), bucket: process.env.R2_BUCKET?.trim(),
+  publicUrl: process.env.R2_PUBLIC_URL?.trim(),
+};
 
 // Every application table (from supabase/migrations). Auth users are exported
 // separately below; storage objects with --with-images.
@@ -95,7 +101,20 @@ async function main() {
   await writeFile(path.join(outDir, "auth_users.json"), JSON.stringify(users, null, 2));
   console.log(`✓ ${"auth_users".padEnd(28)} ${users.length} users`);
 
-  if (process.argv.includes("--with-images")) {
+  if (process.argv.includes("--with-images") && r2Configured(r2cfg)) {
+    // Images live on Cloudflare R2 once the R2_* vars are set (src/lib/imageBucket.ts).
+    const imgDir = path.join(outDir, "product-images");
+    const bucket = r2(r2cfg);
+    const { keys } = await bucket.list("");
+    for (const { key: p } of keys) {
+      const res = await fetch(bucket.publicUrl(p));
+      if (!res.ok) throw new Error(`download ${p}: ${res.status}`);
+      const file = path.join(imgDir, p);
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, Buffer.from(await res.arrayBuffer()));
+    }
+    console.log(`✓ ${"product-images (R2)".padEnd(28)} ${keys.length} files`);
+  } else if (process.argv.includes("--with-images")) {
     const imgDir = path.join(outDir, "product-images");
     await mkdir(imgDir, { recursive: true });
     let count = 0;

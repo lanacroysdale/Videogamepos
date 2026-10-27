@@ -1,3 +1,4 @@
+import { imageBucket } from "./imageBucket";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const extFor = (ct: string) => (ct.includes("png") ? "png" : ct.includes("webp") ? "webp" : "jpg");
 
@@ -16,9 +17,9 @@ export async function copyImageToStorage(
       const ct = res.headers.get("content-type") || "image/jpeg";
       const bytes = new Uint8Array(await res.arrayBuffer());
       const path = `products/${prefix}-${crypto.randomUUID()}.${extFor(ct)}`;
-      const { error } = await admin.storage.from("product-images").upload(path, bytes, { contentType: ct });
+      const { error } = await imageBucket(admin).upload(path, bytes, { contentType: ct });
       if (error) { await sleep(600); continue; }
-      return admin.storage.from("product-images").getPublicUrl(path).data.publicUrl;
+      return imageBucket(admin).getPublicUrl(path).data.publicUrl;
     } catch {
       await sleep(700);
     }
@@ -33,11 +34,10 @@ export const galleryFolder = (productId: string) => `products/gallery/${productI
 // List a product's gallery image URLs (ordered). Returns [] if none.
 export async function listGallery(admin: any, productId: string): Promise<string[]> {
   const folder = galleryFolder(productId);
-  const { data } = await admin.storage.from("product-images")
-    .list(folder, { limit: 50, sortBy: { column: "name", order: "asc" } });
+  const { data } = await imageBucket(admin).list(folder, { limit: 50, sortBy: { column: "name", order: "asc" } });
   return (data || [])
     .filter((f: any) => f.name && !f.name.startsWith("."))
-    .map((f: any) => admin.storage.from("product-images").getPublicUrl(`${folder}/${f.name}`).data.publicUrl);
+    .map((f: any) => imageBucket(admin).getPublicUrl(`${folder}/${f.name}`).data.publicUrl);
 }
 
 // Copy up to `max` images into the product's gallery folder, named 00,01,…
@@ -62,7 +62,7 @@ export async function copyGallery(
           if (!res.ok) { await sleep(400); continue; }
           const ct = res.headers.get("content-type") || "image/jpeg";
           const bytes = new Uint8Array(await res.arrayBuffer());
-          const { error } = await admin.storage.from("product-images")
+          const { error } = await imageBucket(admin)
             .upload(`${folder}/${name}.${extFor(ct)}`, bytes, { contentType: ct, upsert: true });
           if (!error) { copied++; return; }
           await sleep(400);
