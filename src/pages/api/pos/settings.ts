@@ -3,6 +3,7 @@ import { createSupabaseAdminClient } from "../../../lib/supabase";
 import { THEME_KEYS, SIDEBAR_KEYS } from "../../../lib/themeSettings";
 import { AI_PROVIDERS, AI_QUALITIES } from "../../../lib/ai";
 import { sanitizeLabelTemplates } from "../../../lib/labels";
+import { currentImageUrl } from "../../../lib/imageBucket";
 
 export const prerender = false;
 const json = (d: unknown, s = 200) =>
@@ -35,7 +36,9 @@ export const POST: APIRoute = async ({ locals, request }) => {
   if (b.tabClosingTime !== undefined) settings.tabClosingTime = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(b.tabClosingTime)) ? String(b.tabClosingTime) : "";
   if (b.tabAutoGratuityEnabled !== undefined) settings.tabAutoGratuityEnabled = !!b.tabAutoGratuityEnabled;
   if (b.tabAutoGratuityPercent !== undefined) settings.tabAutoGratuityPercent = Math.max(0, Math.min(100, Math.round(Number(b.tabAutoGratuityPercent)) || 0));
-  if (b.labelTemplates !== undefined) settings.labelTemplates = sanitizeLabelTemplates(b.labelTemplates);
+  // (A Settings tab opened before the photo move still sends the old logo / font addresses.)
+  if (b.labelTemplates !== undefined) settings.labelTemplates = await Promise.all(sanitizeLabelTemplates(b.labelTemplates)
+    .map(async (t) => ({ ...t, logoUrl: await currentImageUrl(t.logoUrl), fontUrl: await currentImageUrl(t.fontUrl) })));
   if (b.ebayAutoSync !== undefined) settings.ebayAutoSync = !!b.ebayAutoSync;
   if (b.ebayShipZip !== undefined) settings.ebayShipZip = /^\d{5}$/.test(String(b.ebayShipZip).trim()) ? String(b.ebayShipZip).trim() : "";
   // 🔖 Send to TimeLag: yen → dollars for what you paid (+ proxy / shipping fees %).

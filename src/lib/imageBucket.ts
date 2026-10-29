@@ -21,7 +21,10 @@ const cfg: Partial<R2Config> = {
 const R2 = r2Configured(cfg) ? r2(cfg) : null;
 
 const SUPABASE_BUCKET = "product-images";
-const SUPABASE_MARKER = `/storage/v1/object/public/${SUPABASE_BUCKET}/`;
+// This project's public bucket address (another project's look-alike URL isn't ours).
+const SUPABASE_URL = String(import.meta.env.PUBLIC_SUPABASE_URL ?? process.env.PUBLIC_SUPABASE_URL ?? "").replace(/\/+$/, "");
+const SUPABASE_PREFIX = SUPABASE_URL ? `${SUPABASE_URL}/storage/v1/object/public/${SUPABASE_BUCKET}/` : "\0"; // "\0": matches nothing
+const EXISTS = { message: "The resource already exists" }; // Supabase's wording
 
 type Err = { message: string } | null;
 type Body = Uint8Array | ArrayBuffer | Blob;
@@ -42,6 +45,8 @@ export function imageBucket(admin: any) {
         const fresh = /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(path.split("/").pop()!.replace(/^[a-z]+-/, ""));
         const cache = opts.cacheControl ? `public, max-age=${opts.cacheControl}`
           : fresh && !opts.upsert ? "public, max-age=31536000, immutable" : "public, max-age=3600";
+        // Supabase refuses to overwrite unless upsert is set; so does this.
+        if (!opts.upsert && (await r.exists(path))) return { data: null, error: EXISTS };
         await r.put(path, await toBytes(body), opts.contentType || "application/octet-stream", cache);
         return { data: { path }, error: null };
       } catch (e) { return { data: null, error: errOf(e) }; }
@@ -51,18 +56,19 @@ export function imageBucket(admin: any) {
       return { data: { publicUrl: r.publicUrl(path) } };
     },
 
-    // One folder level, files and sub-folders together, by name — like
-    // Supabase's list (a sub-folder comes back with id: null).
-    async list(folder = "", opts: { limit?: number } = {}): Promise<{ data: ListItem[] | null; error: Err }> {
+    // One folder level, like Supabase's list: sub-folders first (id: null),
+    // then files, each by name; `limit` / `offset` apply to that whole list.
+    async list(folder = "", opts: { limit?: number; offset?: number } = {}): Promise<{ data: ListItem[] | null; error: Err }> {
       try {
         const prefix = folder ? folder.replace(/\/+$/, "") + "/" : "";
-        const { keys, prefixes } = await r.list(prefix, { delimiter: "/", max: opts.limit ?? 100 });
+        const byName = (a: ListItem, b: ListItem) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+        const { keys, prefixes } = await r.list(prefix, { delimiter: "/" });
         const items: ListItem[] = [
-          ...prefixes.map((p) => ({ name: p.slice(prefix.length).replace(/\/$/, ""), id: null })),
-          ...keys.map((k) => ({ name: k.key.slice(prefix.length), id: k.key, metadata: { size: k.size } })),
+          ...prefixes.map((p) => ({ name: p.slice(prefix.length).replace(/\/$/, ""), id: null })).sort(byName),
+          ...keys.map((k) => ({ name: k.key.slice(prefix.length), id: k.key, metadata: { size: k.size } })).sort(byName),
         ];
-        items.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-        return { data: items.slice(0, opts.limit ?? 100), error: null };
+        const from = opts.offset ?? 0;
+        return { data: items.slice(from, from + (opts.limit ?? 100)), error: null };
       } catch (e) { return { data: null, error: errOf(e) }; }
     },
 
@@ -74,16 +80,39 @@ export function imageBucket(admin: any) {
     },
 
     async copy(from: string, to: string): Promise<{ data: { path: string } | null; error: Err }> {
-      try { await r.copy(from, to); return { data: { path: to }, error: null }; }
+      try {
+        if (await r.exists(to)) return { data: null, error: EXISTS };
+        await r.copy(from, to);
+        return { data: { path: to }, error: null };
+      }
       catch (e) { return { data: null, error: errOf(e) }; }
     },
   };
 }
 
-/** The bucket path when `url` is one of our stored images (R2 or Supabase), else null. */
+// The bucket path inside one of this project's Supabase image URLs, else null.
+function supabasePathOf(url: string): string | null {
+  if (!url.startsWith(SUPABASE_PREFIX)) return null;
+  try { return decodeURIComponent(url.slice(SUPABASE_PREFIX.length).split(/[?#]/)[0]) || null; } catch { return null; }
+}
+
+/** The bucket path when `url` is one of our stored images, else null. (Once
+ * on R2, an old Supabase address maps to the same path — the move keeps paths.) */
 export function imagePathOf(url: string): string | null {
-  if (R2) return R2.keyOf(url);
-  const i = url.indexOf(SUPABASE_MARKER);
-  if (i < 0) return null;
-  try { return decodeURIComponent(url.slice(i + SUPABASE_MARKER.length).split(/[?#]/)[0]); } catch { return null; }
+  return R2 ? (R2.keyOf(url) ?? supabasePathOf(url)) : supabasePathOf(url);
+}
+
+/**
+ * A URL about to be saved, with an old Supabase image address swapped for its
+ * R2 one once R2 is on and R2 has that file. A POS tab opened before the move
+ * still holds the old addresses and sends them back on save; after the
+ * Supabase copies are deleted those would be broken for good. A file not
+ * copied yet (or an R2 hiccup) keeps its Supabase address, which still works
+ * and which the next images:to-r2 run moves. Anything else comes back unchanged.
+ */
+export async function currentImageUrl<T extends string | null | undefined>(url: T): Promise<T> {
+  if (!R2 || !url) return url;
+  const path = supabasePathOf(url);
+  if (!path) return url;
+  try { return ((await R2.exists(path)) ? R2.publicUrl(path) : url) as T; } catch { return url; }
 }

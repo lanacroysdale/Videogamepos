@@ -100,11 +100,16 @@ export function r2(cfg: R2Config) {
       if (!res.ok && res.status !== 404) throw await fail(`delete ${key}`, res);
     },
 
-    async exists(key: string): Promise<boolean> {
+    /** The object's size and ETag, or null when there's no such key. */
+    async head(key: string): Promise<{ size: number; etag: string } | null> {
       const res = await send("HEAD", key);
-      if (res.status === 404) return false;
+      if (res.status === 404) return null;
       if (!res.ok) throw await fail(`head ${key}`, res);
-      return true;
+      return { size: Number(res.headers.get("content-length") ?? -1), etag: res.headers.get("etag") ?? "" };
+    },
+
+    async exists(key: string): Promise<boolean> {
+      return (await this.head(key)) !== null;
     },
 
     /** Keys and sub-folders under `prefix` (one level when `delimiter` is "/"). */

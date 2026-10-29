@@ -1,5 +1,6 @@
 import type { APIRoute } from "astro";
 import { createSupabaseAdminClient } from "../../../lib/supabase";
+import { currentImageUrl } from "../../../lib/imageBucket";
 import { attachUpcs } from "../../../lib/upcFinder";
 import { canonicalUpc } from "../../../lib/upcMatch";
 import { DEPARTMENT_TAGS } from "../../../lib/shopFilters";
@@ -930,7 +931,8 @@ export const POST: APIRoute = async ({ locals, request }) => {
       if (b.genre !== undefined) patch.genre = b.genre || null;
       if (b.categoryId !== undefined) patch.category_id = b.categoryId || null;
       if (b.description !== undefined) patch.description = b.description || null;
-      if (b.imageUrl !== undefined) patch.image_url = b.imageUrl || null;
+      // (currentImageUrl: a tab opened before the photo move still sends the old address.)
+      if (b.imageUrl !== undefined) patch.image_url = await currentImageUrl(b.imageUrl || null);
       // Region: not sent = keep; unknown / empty = the home region.
       const regions = await getRegions();
       const rgOn = regionsOn(regions);

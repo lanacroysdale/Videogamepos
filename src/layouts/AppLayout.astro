@@ -315,7 +315,7 @@ const nav = [
         // alerts still arrive.
         var lastPoll = Date.now();
         function tick() {
-          var gap = document.visibilityState === "hidden" ? 120000 : 29000;
+          var gap = document.visibilityState === "hidden" ? 119000 : 29000;
           if (Date.now() - lastPoll < gap) return;
           lastPoll = Date.now();
           poll();

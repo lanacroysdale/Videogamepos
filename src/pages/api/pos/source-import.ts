@@ -371,10 +371,11 @@ export const POST: APIRoute = async ({ locals, request }) => {
       // The shop shows the gallery INSTEAD of the main photo once there is one:
       // an empty gallery first gets the listing's own photo as #00, so the
       // PriceCharting one is truly the second. (Can't copy it → no gallery add.)
-      const have = (await imageBucket(admin).list(galleryFolder(productId), { limit: 100 })).data ?? [];
-      const ready = have.length > 0 || !!(await copyIntoGallery(admin, imageUrl, productId, "00"));
-      if (ready) {
-        const next = await nextGalleryName(admin, productId);
+      // (A listing that fails isn't an empty gallery — #00 would land on a real photo.)
+      const { data: have, error: listErr } = await imageBucket(admin).list(galleryFolder(productId), { limit: 100 });
+      const ready = !listErr && ((have?.length ?? 0) > 0 || !!(await copyIntoGallery(admin, imageUrl, productId, "00")));
+      const next = ready ? await nextGalleryName(admin, productId) : null;
+      if (next) {
         galleryAdded = await copyExternalImage(admin, pcImg, (ext) => `${galleryFolder(productId)}/${next}.${ext}`);
         if (galleryAdded) {
           market.img = pcImg;
@@ -516,8 +517,10 @@ async function copyIntoGallery(admin: any, imageUrl: string, productId: string, 
 }
 
 // The next gallery file name ("00", "01"…) — the shop lists the folder by name.
-async function nextGalleryName(admin: any, productId: string): Promise<string> {
-  const { data } = await imageBucket(admin).list(galleryFolder(productId), { limit: 100 });
+// null when the folder can't be listed (don't guess a name that may be taken).
+async function nextGalleryName(admin: any, productId: string): Promise<string | null> {
+  const { data, error } = await imageBucket(admin).list(galleryFolder(productId), { limit: 100 });
+  if (error) return null;
   const nums = ((data ?? []) as any[]).map((f) => parseInt(String(f.name), 10)).filter((n) => Number.isFinite(n));
   return String(nums.length ? Math.max(...nums) + 1 : 0).padStart(2, "0");
 }
