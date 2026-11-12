@@ -1,12 +1,13 @@
 import type { APIRoute } from "astro";
 import { createSupabaseAdminClient } from "../../../lib/supabase";
+import { imageBucket } from "../../../lib/imageBucket";
 
 export const prerender = false;
 const json = (d: unknown, s = 200) =>
   new Response(JSON.stringify(d), { status: s, headers: { "content-type": "application/json" } });
 
-// Custom label-font upload (managers). Stored in the public product-images
-// bucket under fonts/ so the label renderer can @font-face it by URL.
+// Custom label-font upload (managers). Stored in the public image bucket
+// (lib/imageBucket) under fonts/ so the label renderer can @font-face it by URL.
 const EXT_OK = new Set(["woff2", "woff", "ttf", "otf"]);
 const MAX_BYTES = 3 * 1024 * 1024;
 
@@ -23,12 +24,12 @@ export const POST: APIRoute = async ({ locals, request }) => {
 
   const admin = createSupabaseAdminClient();
   const path = `fonts/${crypto.randomUUID()}.${ext}`;
-  const { error } = await admin.storage.from("product-images").upload(path, await file.arrayBuffer(), {
+  const { error } = await imageBucket(admin).upload(path, await file.arrayBuffer(), {
     contentType: ext === "ttf" ? "font/ttf" : ext === "otf" ? "font/otf" : `font/${ext}`,
     cacheControl: "31536000",
     upsert: false,
   });
   if (error) return json({ error: error.message }, 500);
-  const { data } = admin.storage.from("product-images").getPublicUrl(path);
+  const { data } = imageBucket(admin).getPublicUrl(path);
   return json({ ok: true, url: data.publicUrl });
 };

@@ -19,6 +19,7 @@
     "db:setup": "supabase db reset && node --env-file=.env scripts/seed.mjs",
     "db:types": "supabase gen types typescript --local > src/lib/database.types.ts",
     "db:export": "node --env-file=.env scripts/export-backup.mjs",
+    "images:to-r2": "node --env-file=.env scripts/move-images-to-r2.mjs",
     "db:reset-inventory": "node --env-file=.env scripts/reset-inventory.mjs"
   },
   "dependencies": {

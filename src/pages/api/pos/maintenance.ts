@@ -1,5 +1,6 @@
 import type { APIRoute } from "astro";
 import { createSupabaseAdminClient } from "../../../lib/supabase";
+import { imageBucket } from "../../../lib/imageBucket";
 
 export const prerender = false;
 const json = (d: unknown, s = 200) =>
@@ -128,20 +129,30 @@ export const POST: APIRoute = async ({ locals, request }) => {
 
     let photosDeleted = 0;
     if (b.deletePhotos) {
+      // A list call returns at most 1,000 entries, so each folder is listed,
+      // emptied and listed again until nothing is left (the old single pass
+      // stopped at 1,000 and left the rest behind).
       const walk = async (prefix: string) => {
-        const { data, error } = await admin.storage.from("product-images").list(prefix, { limit: 1000 });
-        if (error) throw new Error(`storage list: ${error.message}`);
-        const files: string[] = [];
-        for (const item of data ?? []) {
-          const p = prefix ? `${prefix}/${item.name}` : item.name;
-          if (item.id === null) await walk(p);
-          else files.push(p);
-        }
-        for (let i = 0; i < files.length; i += 100) {
-          const batch = files.slice(i, i + 100);
-          const { error: rmErr } = await admin.storage.from("product-images").remove(batch);
-          if (rmErr) throw new Error(`storage remove: ${rmErr.message}`);
-          photosDeleted += batch.length;
+        let last = "";
+        for (;;) {
+          const { data, error } = await imageBucket(admin).list(prefix, { limit: 1000 });
+          if (error) throw new Error(`storage list: ${error.message}`);
+          // Empty, or the same as last round (nothing went away) → done.
+          const seen = (data ?? []).map((item: any) => item.name).join("\n");
+          if (!seen || seen === last) return;
+          last = seen;
+          const files: string[] = [];
+          for (const item of data ?? []) {
+            const p = prefix ? `${prefix}/${item.name}` : item.name;
+            if (item.id === null) await walk(p);
+            else files.push(p);
+          }
+          for (let i = 0; i < files.length; i += 100) {
+            const batch = files.slice(i, i + 100);
+            const { error: rmErr } = await imageBucket(admin).remove(batch);
+            if (rmErr) throw new Error(`storage remove: ${rmErr.message}`);
+            photosDeleted += batch.length;
+          }
         }
       };
       await walk("");

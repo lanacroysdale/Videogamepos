@@ -1254,7 +1254,7 @@ const posData = {
 
   function cardHtml(p: any) {
     const cover = p.imageUrl
-      ? `<div class="inv-cover"><img src="${esc(p.imageUrl)}" alt=""></div>`
+      ? `<div class="inv-cover"><img src="${esc(p.imageUrl)}" alt="" loading="lazy" decoding="async"></div>`
       : `<div class="inv-cover" style="color:${esc(p.categoryColor)}">🎮</div>`;
     const tags = [p.platform, p.genre, p.franchise].filter(Boolean).map((t: string) => `<span class="inv-tag">${esc(t)}</span>`).join("");
     const skus = p.variants.map((v: any) => v.sku).filter(Boolean);

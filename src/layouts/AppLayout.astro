@@ -229,14 +229,26 @@ const nav = [
         var firstRun = seen() === 0; // don't replay the whole backlog as notifications
 
         var invBadge = document.getElementById("inv-badge");
+        // Shared by every tab in this browser: refreshed at most every 2 min, and
+        // only from a tab that's in front (each page load used to ask again).
+        var HKEY = "tl_inv_health";
+        function paintInv(count) {
+          if (count > 0) { invBadge.textContent = String(count); invBadge.hidden = false; }
+          else { invBadge.hidden = true; }
+        }
         function pollInventoryHealth() {
           if (!invBadge) return;
+          var cached = null;
+          try { cached = JSON.parse(localStorage.getItem(HKEY) || "null"); } catch (e) {}
+          if (cached) paintInv(cached.count);
+          if (document.visibilityState === "hidden") return;
+          if (cached && Date.now() - cached.at < 120000) return;
           fetch("/api/pos/inventory-health", { headers: { "x-requested-with": "fetch" } })
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (j) {
               if (!j || !j.ok) return;
-              if (j.count > 0) { invBadge.textContent = String(j.count); invBadge.hidden = false; }
-              else { invBadge.hidden = true; }
+              paintInv(j.count);
+              try { localStorage.setItem(HKEY, JSON.stringify({ count: j.count, at: Date.now() })); } catch (e) {}
             })
             .catch(function () {});
         }
@@ -297,8 +309,22 @@ const nav = [
           pollSops();
         }
 
+        // Every open POS tab polls all day (and all night, if left open), and
+        // each request counts against the Supabase plan. Every 30 s while the
+        // tab is in front; every 2 min behind other tabs, so lead and task
+        // alerts still arrive.
+        var lastPoll = Date.now();
+        function tick() {
+          var gap = document.visibilityState === "hidden" ? 119000 : 29000;
+          if (Date.now() - lastPoll < gap) return;
+          lastPoll = Date.now();
+          poll();
+        }
         poll();
-        setInterval(poll, 30000);
+        setInterval(tick, 30000);
+        document.addEventListener("visibilitychange", function () {
+          if (document.visibilityState === "visible") tick();
+        });
       })();
     </script>
   </body>
