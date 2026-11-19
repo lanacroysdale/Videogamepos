@@ -9,7 +9,7 @@ export type R2Config = {
   accessKeyId: string;
   secretAccessKey: string;
   bucket: string;
-  publicUrl: string; // where the bucket is served, e.g. https://img.timelag.co
+  publicUrl: string; // where the bucket is served, e.g. https://images.timelag.co
 };
 
 type Send = { query?: Record<string, string>; body?: Uint8Array; headers?: Record<string, string> };
