@@ -8,7 +8,8 @@
 //                                              that R2 has byte-for-byte
 //
 // The order that keeps every photo working:
-//   1. Cloudflare: bucket, its img. custom domain, CORS (see .env.example).
+//   1. Cloudflare: bucket, its custom domain (images.timelag.co), CORS (see
+//      .env.example).
 //      R2_* vars in the local .env only.
 //   2. --dry-run, then a plain run. The live app still uploads to Supabase
 //      meanwhile; those old addresses keep working.
@@ -120,6 +121,8 @@ async function corsOk(path) {
     await res.arrayBuffer();
     const acao = res.headers.get("access-control-allow-origin");
     if (res.ok && (acao === "*" || acao === ORIGIN)) return { ok: true };
+    // Just copied, yet not there: the domain serves another bucket (or none).
+    if (res.status === 404) return { ok: false, notServed: true, why: `${u} is 404 — R2_PUBLIC_URL isn't serving bucket "${cfg.bucket}"` };
     return { ok: false, why: res.ok ? `no Access-Control-Allow-Origin for ${ORIGIN}` : `HTTP ${res.status}` };
   } catch (e) { return { ok: false, why: e.message }; }
 }
@@ -188,6 +191,11 @@ async function main() {
     if (r.failed) { console.error("\nSome files didn't copy — re-run to retry them. No URLs were changed."); process.exit(1); }
     const sample = files.find((f) => !r.conflicts.includes(f.path))?.path;
     const c = sample ? await corsOk(sample) : { ok: true };
+    if (c.notServed) {
+      console.error(`\nA file just copied to bucket "${cfg.bucket}" isn't at ${NEW}: that domain is connected to another`);
+      console.error("bucket (or none). Check R2_BUCKET and R2_PUBLIC_URL; no URLs were changed (copies are kept).");
+      process.exit(1);
+    }
     if (!c.ok) {
       console.error(`\nThe R2 domain doesn't allow ${ORIGIN} (${c.why}). Label logos and fonts would stop printing,`);
       console.error("so no URLs were changed. Add the CORS rule from .env.example, then re-run (copies are kept).");
